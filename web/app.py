@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED # Import concurrent futures
 import threading
+from flask import Response
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for, abort, flash, current_app
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -244,7 +245,16 @@ def get_integrations():
                     logger.error(f"Error processing integration {name}: {e}")
                     continue
         else:
-            logger.info("No integrations currently loaded in Application instance.") # Changed from warning
+            # Check if integrations are still loading by examining the config
+            integrations_config = config.get_section("integrations")
+            enabled_integrations = [name for name, cfg in integrations_config.items() 
+                                   if cfg.get("enabled", False)]
+            
+            if enabled_integrations:
+                logger.info(f"Integrations defined in config but not loaded yet: {enabled_integrations}")
+                return jsonify({"message": "Integrations are still loading. Please try again later."}), 202
+            else:
+                logger.info("No integrations are enabled in the configuration.")
 
         logger.info(f"Returning {len(integrations)} integrations")
         return jsonify(integrations)
@@ -339,6 +349,16 @@ def get_devices():
 def get_config():
     """Get the current configuration."""
     try:
+        # Check if raw format is requested
+        format_raw = request.args.get('format') == 'raw'
+        
+        if format_raw:
+            # Return raw YAML content
+            with open(config.config_file, "r") as f:
+                raw_yaml = f.read()
+            return Response(raw_yaml, mimetype='text/plain')
+            
+        # Otherwise return JSON as before
         with open(config.config_file, "r") as f:
             config_data = yaml.safe_load(f)
             
@@ -653,7 +673,18 @@ def start_web_server(passed_app_instance):
         logger.error("Passed application instance exists but has no _integrations attribute")
     else:
         integrations_count = len(passed_app_instance._integrations)
-        logger.info(f"Web server received application instance with {integrations_count} integrations.")
+        if integrations_count > 0:
+            integration_names = list(passed_app_instance._integrations.keys())
+            logger.info(f"Web server received application instance with {integrations_count} integrations: {integration_names}")
+        else:
+            # Check if integrations should be loaded based on config
+            integrations_config = config.get_section("integrations")
+            enabled_integrations = [name for name, cfg in integrations_config.items() 
+                                   if cfg.get("enabled", False)]
+            if enabled_integrations:
+                logger.info(f"Web server started but integrations not loaded yet. Expected integrations: {enabled_integrations}")
+            else:
+                logger.info("Web server started with no integrations (none enabled in config)")
 
     # Store the instance for endpoint use (using Flask's app context)
     app.config['APPLICATION_INSTANCE'] = passed_app_instance

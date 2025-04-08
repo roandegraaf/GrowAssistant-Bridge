@@ -7,7 +7,7 @@ api:
   retry_max_backoff: 60
   retry_min_backoff: 1
   transmission_interval: 60
-  url: https://api.growassistant.app/prod
+  url: https://afd1-92-65-74-196.ngrok-free.app
 general:
   api_logs_dir: logs/api
   collection_interval: 60

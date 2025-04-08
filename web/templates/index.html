@@ -248,6 +248,10 @@
         let commandModal;
         let connectionStatusModal;
         let connectionStatus = null;
+        let modalIsOpen = false;
+        let lastModalUpdateTime = null;
+        let modalRefreshInterval = null;
+        let isRefreshing = false;
 
         // Load data when page loads
         document.addEventListener('DOMContentLoaded', function() {
@@ -342,6 +346,11 @@
                             setupBanner.remove();
                         }
                     }
+                    
+                    // Auto-update the modal content if it's open
+                    if (modalIsOpen) {
+                        updateConnectionStatusModal();
+                    }
                 });
             }, 10000); // Refresh every 10 seconds
             
@@ -366,6 +375,12 @@
         // Fetch connection status
         async function loadConnectionStatus() {
             try {
+                // Set refreshing flag if modal is open
+                if (modalIsOpen) {
+                    isRefreshing = true;
+                    updateRefreshIndicator();
+                }
+                
                 const response = await fetch('/api/connection-status');
                 if (!response.ok) {
                     throw new Error(`HTTP error ${response.status}`);
@@ -378,6 +393,12 @@
                 const alertBanner = document.getElementById('registration-alert');
                 alertBanner.classList.add('d-none');
                 
+                // Reset refreshing flag and update indicator
+                if (modalIsOpen) {
+                    isRefreshing = false;
+                    updateRefreshIndicator();
+                }
+                
                 return connectionStatus;
             } catch (error) {
                 console.error('Error fetching connection status:', error);
@@ -387,6 +408,12 @@
                 // Hide the registration alert banner since we're using the status banner now
                 const alertBanner = document.getElementById('registration-alert');
                 alertBanner.classList.add('d-none');
+                
+                // Reset refreshing flag and update indicator
+                if (modalIsOpen) {
+                    isRefreshing = false;
+                    updateRefreshIndicator();
+                }
                 
                 return connectionStatus;
             }
@@ -547,11 +574,45 @@
         function showConnectionStatusModal() {
             updateConnectionStatusModal();
             connectionStatusModal.show();
+            modalIsOpen = true;
+            
+            // Set up a more frequent refresh interval while the modal is open
+            clearInterval(modalRefreshInterval); // Clear any existing interval first
+            modalRefreshInterval = setInterval(function() {
+                loadConnectionStatus().then(() => {
+                    if (modalIsOpen) {
+                        updateConnectionStatusModal();
+                    } else {
+                        // If modal is closed but interval is still running, clear it
+                        clearInterval(modalRefreshInterval);
+                        modalRefreshInterval = null;
+                    }
+                });
+            }, 3000); // Refresh every 3 seconds when modal is open
+        }
+
+        // Update the refresh indicator in the modal
+        function updateRefreshIndicator() {
+            const indicator = document.getElementById('refresh-indicator');
+            if (!indicator) return;
+            
+            if (isRefreshing) {
+                indicator.innerHTML = `
+                    <div class="spinner-border spinner-border-sm text-success me-2" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    Refreshing...
+                `;
+            } else {
+                indicator.innerHTML = `Last updated: ${lastModalUpdateTime.toLocaleTimeString()}
+                <span class="ms-2">(Auto-refreshes every 3 seconds)</span>`;
+            }
         }
 
         // Update connection status modal content
         function updateConnectionStatusModal() {
             const modalContent = document.getElementById('connection-status-content');
+            lastModalUpdateTime = new Date();
             
             if (!connectionStatus) {
                 modalContent.innerHTML = `
@@ -731,7 +792,18 @@
                     `;
             }
             
+            // Add last updated info at the bottom of the modal content
+            content += `
+                <div class="text-center mt-3">
+                    <small class="text-muted" id="refresh-indicator">
+                        Last updated: ${lastModalUpdateTime.toLocaleTimeString()}
+                        <span class="ms-2">(Auto-refreshes every 3 seconds)</span>
+                    </small>
+                </div>
+            `;
+            
             modalContent.innerHTML = content;
+            updateRefreshIndicator(); // Update the refresh indicator after content is loaded
         }
 
         // Fetch queue information
@@ -1106,6 +1178,22 @@
                 }, 500);
             });
         }
+
+        // Add event listener for modal close to update our tracking flag
+        document.addEventListener('DOMContentLoaded', function() {
+            const connectionStatusModalElement = document.getElementById('connectionStatusModal');
+            if (connectionStatusModalElement) {
+                connectionStatusModalElement.addEventListener('hidden.bs.modal', function () {
+                    modalIsOpen = false; // Set flag that modal is now closed
+                    
+                    // Clear the modal-specific refresh interval when modal is closed
+                    if (modalRefreshInterval) {
+                        clearInterval(modalRefreshInterval);
+                        modalRefreshInterval = null;
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html> 

@@ -129,7 +129,7 @@ class Application:
         # Start the auth manager first
         await auth_manager.start()
         
-        # Start the web server immediately if enabled - moved up from main function
+        # Start the web server immediately if enabled, so it's available during setup
         if config.get("web.enabled", True):
             logger.info("Starting web server...")
             # Import here to avoid circular imports
@@ -145,7 +145,7 @@ class Application:
             web_thread.start()
             logger.info("Web server started in background thread")
             
-            # Give the web server a moment to initialize before proceeding with authentication
+            # Give the web server a moment to initialize
             await asyncio.sleep(1)
         
         # Check authentication and handle registration if needed

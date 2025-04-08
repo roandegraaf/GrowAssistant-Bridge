@@ -42,6 +42,10 @@
             text-align: center;
             padding: 2rem;
         }
+        .CodeMirror-line.line-420,
+        .CodeMirror pre.line-420 {
+            background-color: rgba(13, 232, 64, 0.2) !important;
+        }
     </style>
 </head>
 <body>
@@ -213,25 +217,30 @@
 
         // Load the configuration from the API
         function loadConfig() {
-            fetch('/api/config')
+            fetch('/api/config?format=raw')
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP error! Status: ${response.status}`);
                     }
-                    return response.json();
+                    return response.text();
                 })
-                .then(data => {
-                    originalConfig = data;
-                    const yamlStr = formatYaml(data);
+                .then(yamlText => {
+                    // Parse the YAML for originalConfig to use in resetConfig
+                    try {
+                        originalConfig = jsyaml.load(yamlText, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
+                    } catch (error) {
+                        console.error('Error parsing YAML:', error);
+                        // Continue even if parsing fails
+                    }
                     
                     // Clean up existing editor if it exists
                     if (editor) {
                         editor.toTextArea();
                     }
                     
-                    // Set up CodeMirror editor
+                    // Set up CodeMirror editor with the raw YAML text
                     const textArea = document.getElementById('config-editor');
-                    textArea.value = yamlStr;
+                    textArea.value = yamlText;
                     textArea.style.display = 'block';
                     
                     editor = CodeMirror.fromTextArea(textArea, {
@@ -241,6 +250,11 @@
                         indentUnit: 2,
                         tabSize: 2
                     });
+                    
+                    const line420 = editor.getLineHandle(419);
+                    if (line420) {
+                        editor.addLineClass(419, 'wrap', 'line-420');
+                    }
                     
                     // Hide loading indicator
                     document.getElementById('loading-indicator').style.display = 'none';
@@ -252,44 +266,6 @@
                 });
         }
 
-        // Convert JSON to YAML-like string for display
-        function formatYaml(json, indent = 0) {
-            const indentStr = ' '.repeat(indent);
-            let yamlStr = '';
-            
-            // Add a header comment
-            if (indent === 0) {
-                yamlStr += '# GrowAssistant Bridge - Configuration\n\n';
-            }
-            
-            for (const key in json) {
-                const value = json[key];
-                
-                if (typeof value === 'object' && value !== null) {
-                    yamlStr += `${indentStr}${key}:\n`;
-                    yamlStr += formatYaml(value, indent + 2);
-                } else {
-                    let strValue = value;
-                    
-                    // Format string values
-                    if (typeof value === 'string') {
-                        if (value.includes('\n')) {
-                            // Multiline string
-                            strValue = `|\n${value.split('\n').map(line => `${indentStr}  ${line}`).join('\n')}`;
-                        } else if (value === '') {
-                            strValue = '""';
-                        } else if (value === '**********' || value.includes('*')) {
-                            // Quote asterisk strings to prevent YAML alias interpretation
-                            strValue = `"${value}"`;
-                        }
-                    }
-                    
-                    yamlStr += `${indentStr}${key}: ${strValue}\n`;
-                }
-            }
-            
-            return yamlStr;
-        }
 
         // Save the configuration
         function saveConfig() {
@@ -326,12 +302,8 @@
                         showResult(`Error: ${data.error}`, 'danger');
                     } else {
                         showResult(data.message, 'success');
-                        // Update the originalConfig instead of reloading
-                        try {
-                            originalConfig = parsedConfig;
-                        } catch (e) {
-                            console.error('Error updating originalConfig:', e);
-                        }
+                        // Update originalConfig with the new parsed config
+                        originalConfig = parsedConfig;
                     }
                 })
                 .catch(error => {
@@ -345,9 +317,22 @@
 
         // Reset the configuration to the original
         function resetConfig() {
-            const yamlStr = formatYaml(originalConfig);
-            editor.setValue(yamlStr);
-            showResult('Configuration reset to last saved state', 'info');
+            // Fetch the raw YAML again to reset
+            fetch('/api/config?format=raw')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.text();
+                })
+                .then(yamlText => {
+                    editor.setValue(yamlText);
+                    showResult('Configuration reset to last saved state', 'info');
+                })
+                .catch(error => {
+                    console.error('Error resetting configuration:', error);
+                    showResult(`Error resetting configuration: ${error.message}`, 'danger');
+                });
         }
 
         // Restart the server
