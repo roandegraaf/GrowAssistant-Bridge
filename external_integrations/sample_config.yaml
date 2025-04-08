@@ -1,0 +1,25 @@
+# Sample Integration Configuration
+# 
+# This is an example configuration for the sample integration.
+# To use it, add this section to your config.yaml file under the integrations section.
+
+integrations:
+  sample:  # This name should match the module name (without the .py extension)
+    enabled: true
+    update_interval: 60  # How often to update device values (in seconds)
+    devices:
+      '0':
+        name: sample_temperature
+        type: temperature
+      '1':
+        name: sample_humidity
+        type: humidity
+      '2':
+        name: sample_light
+        type: light
+      '3':
+        name: sample_pump
+        type: pump
+      '4':
+        name: sample_light_switch
+        type: light_switch

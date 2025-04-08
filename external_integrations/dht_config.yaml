@@ -1,0 +1,20 @@
+# DHT Sensor Integration Configuration
+# 
+# This is an example configuration for the DHT temperature/humidity sensor integration.
+# To use it, add this section to your config.yaml file under the integrations section.
+
+integrations:
+  dht:  # This name should match the module name (without the .py extension)
+    enabled: true
+    update_interval: 60  # How often to read sensors (in seconds)
+    devices:
+      '0':
+        name: greenhouse_climate
+        type: temperature  # Primary type - device will report both temp & humidity
+        sensor_type: DHT22  # DHT22 or DHT11
+        pin: 4  # GPIO pin number
+      '1':
+        name: bedroom_climate
+        type: temperature
+        sensor_type: DHT11
+        pin: 17 

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration - GrowAssistant Bridge</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/theme/monokai.min.css">
+    <style>
+        body {
+            padding-top: 2rem;
+            background-color: #f8f9fa;
+        }
+        .header {
+            margin-bottom: 2rem;
+            border-bottom: 1px solid #e5e5e5;
+            padding-bottom: 1rem;
+        }
+        .card {
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
+        }
+        .card-header {
+            background-color: #28a745;
+            color: white;
+            font-weight: bold;
+            border-top-left-radius: 0.5rem !important;
+            border-top-right-radius: 0.5rem !important;
+        }
+        .CodeMirror {
+            height: 600px;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+        }
+        .btn-toolbar {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Configuration</h1>
+            <p class="lead">Edit the configuration for your GrowAssistant Bridge</p>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="/">Home</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Configuration</li>
+                </ol>
+            </nav>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">Edit Configuration</div>
+                    <div class="card-body">
+                        <div class="alert alert-warning" role="alert">
+                            <h4 class="alert-heading">Warning!</h4>
+                            <p>Editing the configuration directly can break your system if done incorrectly. Make sure you understand what you're changing.</p>
+                            <p>Changes to the configuration require restarting the application to take effect.</p>
+                        </div>
+                        
+                        <div id="editor-container">
+                            <div class="loading" id="loading-indicator">
+                                <div class="spinner-border text-success" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p>Loading configuration...</p>
+                            </div>
+                            <textarea id="config-editor" style="display: none;"></textarea>
+                        </div>
+                        
+                        <div class="btn-toolbar">
+                            <button type="button" class="btn btn-success me-2" id="save-btn">Save Configuration</button>
+                            <button type="button" class="btn btn-secondary me-2" id="reset-btn">Reset Changes</button>
+                            <button type="button" class="btn btn-warning me-2" id="restart-btn">Restart Server</button>
+                            <a href="/" class="btn btn-outline-secondary">Cancel</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">Configuration Sections</div>
+                    <div class="card-body">
+                        <div class="accordion" id="configSections">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingGeneral">
+                                    <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGeneral" aria-expanded="true" aria-controls="collapseGeneral">
+                                        General Configuration
+                                    </button>
+                                </h2>
+                                <div id="collapseGeneral" class="accordion-collapse collapse show" aria-labelledby="headingGeneral" data-bs-parent="#configSections">
+                                    <div class="accordion-body">
+                                        <p>The general section contains basic settings for the application.</p>
+                                        <ul>
+                                            <li><strong>log_level</strong>: Controls the verbosity of logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)</li>
+                                            <li><strong>log_file</strong>: Path where log files will be stored</li>
+                                            <li><strong>data_dir</strong>: Directory for storing application data</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingApi">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseApi" aria-expanded="false" aria-controls="collapseApi">
+                                        API Configuration
+                                    </button>
+                                </h2>
+                                <div id="collapseApi" class="accordion-collapse collapse" aria-labelledby="headingApi" data-bs-parent="#configSections">
+                                    <div class="accordion-body">
+                                        <p>The API section configures communication with the Spring backend.</p>
+                                        <ul>
+                                            <li><strong>url</strong>: URL of the Spring API</li>
+                                            <li><strong>auth_token</strong>: Authentication token for the API</li>
+                                            <li><strong>batch_size</strong>: Number of data points to send in one batch</li>
+                                            <li><strong>retry_max_attempts</strong>: Maximum number of retry attempts</li>
+                                            <li><strong>retry_min_backoff</strong>: Minimum backoff time in seconds</li>
+                                            <li><strong>retry_max_backoff</strong>: Maximum backoff time in seconds</li>
+                                            <li><strong>poll_interval</strong>: Interval in seconds to poll for commands</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingIntegrations">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseIntegrations" aria-expanded="false" aria-controls="collapseIntegrations">
+                                        Integrations Configuration
+                                    </button>
+                                </h2>
+                                <div id="collapseIntegrations" class="accordion-collapse collapse" aria-labelledby="headingIntegrations" data-bs-parent="#configSections">
+                                    <div class="accordion-body">
+                                        <p>The integrations section configures all available device integrations.</p>
+                                        <p>Each integration has its own configuration section:</p>
+                                        <ul>
+                                            <li><strong>gpio</strong>: Configuration for GPIO pins</li>
+                                            <li><strong>mqtt</strong>: Configuration for MQTT broker connections</li>
+                                            <li><strong>http</strong>: Configuration for HTTP endpoints</li>
+                                            <li><strong>serial</strong>: Configuration for serial port connections</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-5 text-muted text-center">
+            <p>&copy; 2025 GrowAssistant Bridge</p>
+        </footer>
+    </div>
+
+    <!-- Result Modal -->
+    <div class="modal fade" id="resultModal" tabindex="-1" aria-labelledby="resultModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="resultModalLabel">Operation Result</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="result-message">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/mode/yaml/yaml.min.js"></script>
+    <!-- JS-YAML for parsing YAML -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <script>
+        let editor;
+        let originalConfig;
+        let resultModal;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check if jsyaml is loaded
+            if (typeof jsyaml === 'undefined') {
+                console.error('js-yaml library is not loaded properly');
+                document.getElementById('loading-indicator').innerHTML = 
+                    `<div class="alert alert-danger">Error: Required YAML library not available. Please refresh the page.</div>`;
+                return;
+            }
+
+            // Initialize the modal
+            resultModal = new bootstrap.Modal(document.getElementById('resultModal'));
+            
+            // Load the configuration
+            loadConfig();
+            
+            // Set up event listeners
+            document.getElementById('save-btn').addEventListener('click', saveConfig);
+            document.getElementById('reset-btn').addEventListener('click', resetConfig);
+            document.getElementById('restart-btn').addEventListener('click', restartServer);
+        });
+
+        // Load the configuration from the API
+        function loadConfig() {
+            fetch('/api/config')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    originalConfig = data;
+                    const yamlStr = formatYaml(data);
+                    
+                    // Clean up existing editor if it exists
+                    if (editor) {
+                        editor.toTextArea();
+                    }
+                    
+                    // Set up CodeMirror editor
+                    const textArea = document.getElementById('config-editor');
+                    textArea.value = yamlStr;
+                    textArea.style.display = 'block';
+                    
+                    editor = CodeMirror.fromTextArea(textArea, {
+                        mode: 'yaml',
+                        theme: 'monokai',
+                        lineNumbers: true,
+                        indentUnit: 2,
+                        tabSize: 2
+                    });
+                    
+                    // Hide loading indicator
+                    document.getElementById('loading-indicator').style.display = 'none';
+                })
+                .catch(error => {
+                    console.error('Error loading configuration:', error);
+                    document.getElementById('loading-indicator').innerHTML = 
+                        `<div class="alert alert-danger">Error loading configuration: ${error.message}</div>`;
+                });
+        }
+
+        // Convert JSON to YAML-like string for display
+        function formatYaml(json, indent = 0) {
+            const indentStr = ' '.repeat(indent);
+            let yamlStr = '';
+            
+            // Add a header comment
+            if (indent === 0) {
+                yamlStr += '# GrowAssistant Bridge - Configuration\n\n';
+            }
+            
+            for (const key in json) {
+                const value = json[key];
+                
+                if (typeof value === 'object' && value !== null) {
+                    yamlStr += `${indentStr}${key}:\n`;
+                    yamlStr += formatYaml(value, indent + 2);
+                } else {
+                    let strValue = value;
+                    
+                    // Format string values
+                    if (typeof value === 'string') {
+                        if (value.includes('\n')) {
+                            // Multiline string
+                            strValue = `|\n${value.split('\n').map(line => `${indentStr}  ${line}`).join('\n')}`;
+                        } else if (value === '') {
+                            strValue = '""';
+                        } else if (value === '**********' || value.includes('*')) {
+                            // Quote asterisk strings to prevent YAML alias interpretation
+                            strValue = `"${value}"`;
+                        }
+                    }
+                    
+                    yamlStr += `${indentStr}${key}: ${strValue}\n`;
+                }
+            }
+            
+            return yamlStr;
+        }
+
+        // Save the configuration
+        function saveConfig() {
+            try {
+                // Make sure jsyaml is available
+                if (typeof jsyaml === 'undefined') {
+                    showResult('Error: YAML parsing library not available. Please refresh the page.', 'danger');
+                    return;
+                }
+                
+                const yamlStr = editor.getValue();
+                let parsedConfig;
+                
+                // Try to parse the YAML
+                try {
+                    parsedConfig = jsyaml.load(yamlStr, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
+                } catch (yamlError) {
+                    console.error('YAML parsing error:', yamlError);
+                    showResult(`Error parsing YAML: ${yamlError.message}`, 'danger');
+                    return;
+                }
+                
+                // Send the configuration to the API
+                fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(parsedConfig)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        showResult(`Error: ${data.error}`, 'danger');
+                    } else {
+                        showResult(data.message, 'success');
+                        // Update the originalConfig instead of reloading
+                        try {
+                            originalConfig = parsedConfig;
+                        } catch (e) {
+                            console.error('Error updating originalConfig:', e);
+                        }
+                    }
+                })
+                .catch(error => {
+                    showResult(`Error saving configuration: ${error.message}`, 'danger');
+                });
+            } catch (error) {
+                console.error('Unexpected error in saveConfig:', error);
+                showResult(`Unexpected error: ${error.message}`, 'danger');
+            }
+        }
+
+        // Reset the configuration to the original
+        function resetConfig() {
+            const yamlStr = formatYaml(originalConfig);
+            editor.setValue(yamlStr);
+            showResult('Configuration reset to last saved state', 'info');
+        }
+
+        // Restart the server
+        function restartServer() {
+            if (confirm('Are you sure you want to restart the server? This will temporarily interrupt the service.')) {
+                fetch('/api/restart', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        showResult(`Error restarting server: ${data.error}`, 'danger');
+                    } else {
+                        showResult(data.message || 'Server restart initiated successfully.', 'success');
+                        // Optionally, you could redirect or disable buttons after restart
+                    }
+                })
+                .catch(error => {
+                    showResult(`Error sending restart request: ${error.message}`, 'danger');
+                });
+            }
+        }
+
+        // Show a result message
+        function showResult(message, type) {
+            const resultElement = document.getElementById('result-message');
+            resultElement.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+            resultModal.show();
+        }
+    </script>
+</body>
+</html> 

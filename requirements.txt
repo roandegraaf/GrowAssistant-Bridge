@@ -1,0 +1,27 @@
+# Core requirements
+httpx>=0.28.1
+pyyaml>=6.0.2
+tenacity>=9.1.2
+
+# Queue persistence
+sqlite3-api>=2.0.4
+
+# Web interface
+flask>=3.1.0
+flask-wtf>=1.2.2
+
+# MQTT integration
+paho-mqtt>=2.1.0
+
+# Serial integration
+pyserial>=3.5
+
+# GPIO (Raspberry Pi specific)
+# Uncomment if running on Raspberry Pi
+# RPi.GPIO>=0.7.1
+# gpiozero>=2.0.1
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.20.0
+pytest-mock>=3.8.0 

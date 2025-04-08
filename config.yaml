@@ -1,0 +1,118 @@
+api:
+  batch_size: 100
+  connection_timeout: 300
+  log_values: true
+  poll_interval: 30
+  retry_max_attempts: 5
+  retry_max_backoff: 60
+  retry_min_backoff: 1
+  transmission_interval: 60
+  url: https://api.growassistant.app/prod
+general:
+  api_logs_dir: logs/api
+  collection_interval: 60
+  data_dir: data
+  external_integrations_dir: external_integrations
+  log_file: logs/app.log
+  log_level: INFO
+integrations:
+  gpio:
+    enabled: false
+    pins:
+      '0':
+        direction: OUT
+        initial: LOW
+        name: pump_relay
+        pin: 17
+      '1':
+        direction: OUT
+        initial: LOW
+        name: light_relay
+        pin: 18
+      '2':
+        direction: IN
+        name: temperature_sensor
+        pin: 4
+        pull_up_down: UP
+  http:
+    enabled: true
+    endpoints:
+      '0':
+        headers: null
+        interval: 300
+        method: GET
+        name: catfact
+        url: https://catfact.ninja/fact
+      '1':
+        headers:
+          Content-Type: application/json
+        method: POST
+        name: control_api
+        url: https://api.example.com/control
+  mqtt:
+    broker: localhost
+    client_id: growassistant
+    enabled: true
+    password: ''
+    port: 1883
+    topics:
+      '0':
+        name: sensors/temperature
+        type: temperature
+      '1':
+        name: sensors/humidity
+        type: humidity
+      '2':
+        name: sensors/water_level
+        type: water_level
+      '3':
+        name: controls/pump
+        type: pump
+      '4':
+        name: controls/light
+        type: light
+    username: ''
+  sample:
+    devices:
+      '0':
+        name: sample_temperature
+        type: temperature
+      '1':
+        name: sample_humidity
+        type: humidity
+      '2':
+        name: sample_light
+        type: light
+      '3':
+        name: sample_pump
+        type: pump
+      '4':
+        name: sample_light_switch
+        type: light_switch
+    enabled: true
+    update_interval: 60
+  serial:
+    baudrate: 9600
+    bytesize: 8
+    enabled: false
+    parity: N
+    port: /dev/ttyUSB0
+    stopbits: 1
+    timeout: 1
+queue:
+  flush_interval: 300
+  max_queue_size: 10000
+  persistence_enabled: true
+  persistence_file: data/queue.db
+web:
+  auth_enabled: true
+  debug: false
+  enabled: true
+  host: 0.0.0.0
+  password_hash: scrypt:32768:8:1$VmJk1Fxnjl9cuZ5b$765fc42508f06b4dfcb14a8cd4422e57ae288254fc35da977fbe0d6f11432d3f9c4d56934243dfe39d8edae9974bfb5ac0ce49fd3f6d3c0558ca33abfee56623
+  port: 5010
+  secret_key: change-this-in-production
+  ssl_cert: ''
+  ssl_enabled: false
+  ssl_key: ''
+  username: admin
