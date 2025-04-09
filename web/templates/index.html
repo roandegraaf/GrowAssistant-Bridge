@@ -62,7 +62,6 @@
     </style>
 </head>
 <body>
-    <!-- Registration Alert Banner - Only shown when needed -->
     <div id="registration-alert" class="alert alert-warning text-center mb-0 rounded-0 d-none" role="alert">
         <strong>Registration Required!</strong> This device needs to be connected to your GrowAssistant account.
         <button type="button" class="btn btn-sm btn-primary ms-3" onclick="showConnectionStatusModal()">
@@ -85,7 +84,6 @@
             </div>
         </div>
 
-        <!-- Status Banner - Shows current connection state -->
         <div id="status-banner" class="alert mb-4 d-none">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
@@ -98,7 +96,6 @@
         </div>
 
         <div class="row">
-            <!-- Status Information -->
             <div class="col-md-4">
                 <div class="card">
                     <div class="card-header">System Status</div>
@@ -115,7 +112,6 @@
                 </div>
             </div>
 
-            <!-- Integrations -->
             <div class="col-md-8">
                 <div class="card">
                     <div class="card-header">Integrations</div>
@@ -132,7 +128,6 @@
         </div>
 
         <div class="row mt-4">
-            <!-- Device Data -->
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">Device Data</div>
@@ -149,7 +144,6 @@
         </div>
 
         <div class="row mt-4">
-            <!-- Device Types -->
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">Device Types</div>
@@ -166,7 +160,6 @@
         </div>
 
         <div class="row mt-4">
-            <!-- Controls -->
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">Manual Control</div>
@@ -200,7 +193,6 @@
         </footer>
     </div>
 
-    <!-- Command Result Modal -->
     <div class="modal fade" id="commandModal" tabindex="-1" aria-labelledby="commandModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -217,7 +209,6 @@
         </div>
     </div>
 
-    <!-- Connection Status Modal -->
     <div class="modal fade" id="connectionStatusModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="connectionStatusModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
@@ -243,7 +234,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Device types and actions
         let deviceTypes = {};
         let commandModal;
         let connectionStatusModal;
@@ -253,13 +243,10 @@
         let modalRefreshInterval = null;
         let isRefreshing = false;
 
-        // Load data when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            // Initialize the modals
             commandModal = new bootstrap.Modal(document.getElementById('commandModal'));
             connectionStatusModal = new bootstrap.Modal(document.getElementById('connectionStatusModal'));
             
-            // Show setup banner to indicate we're starting up
             const setupBanner = document.createElement('div');
             setupBanner.id = 'setup-banner';
             setupBanner.className = 'alert alert-info text-center mb-3';
@@ -273,10 +260,7 @@
             `;
             document.querySelector('.container').prepend(setupBanner);
             
-            // Check if we have a server-provided auth code
-            if (serverAuthCode) {
-                // Pre-populate the connectionStatus with the auth code
-                // This ensures we have something to show even before the API response
+            if (serverAuthCode && serverAuthCode.trim() !== '') {
                 connectionStatus = {
                     status: 'registration',
                     auth_code: serverAuthCode,
@@ -285,25 +269,13 @@
                     ready: false
                 };
                 
-                // Update UI with this initial status
                 updateConnectionState();
-                
-                // Show the status banner
                 updateStatusBanner();
-                
-                // Show the registration banner
                 const alertBanner = document.getElementById('registration-alert');
-                alertBanner.classList.add('d-none'); // Hide this since we now have the status banner
-                
-                // Show the registration modal after a short delay
-                setTimeout(function() {
-                    showConnectionStatusModal();
-                }, 500);
+                alertBanner.classList.add('d-none');
             }
             
-            // Load connection status first
             loadConnectionStatus().then(status => {
-                // Remove setup banner if we're past initialization
                 if (status && status.status !== 'initializing' && status.status !== 'busy') {
                     const setupBanner = document.getElementById('setup-banner');
                     if (setupBanner) {
@@ -311,35 +283,32 @@
                     }
                 }
                 
-                // Auto-show onboarding if we're in registration mode
-                if (status && status.status === 'registration' && status.auth_code) {
-                    showConnectionStatusModal();
+                console.log(status);
+                if (status && status.status !== 'ready') {
+                    console.log('showConnectionStatusModal');
+                    if ((status.status === 'registration' && status.auth_code) || 
+                        (serverAuthCode && serverAuthCode.trim() !== '')) {
+                        showConnectionStatusModal();
+                    }
                 }
                 
-                // Then load other data
                 loadQueueInfo();
                 loadIntegrations();
                 loadDeviceTypes();
-                
-                // Load device data initially and then periodically
                 loadDeviceData();
             })
             .catch(error => {
                 console.error('Error loading initial connection status:', error);
-                // Still try to load other data even if connection status fails
                 loadQueueInfo();
                 loadIntegrations();
                 loadDeviceTypes();
                 loadDeviceData();
             });
             
-            // Use a variable to track if we have an active request
             window.deviceDataRequestActive = false;
             
-            // Set interval for connection status refresh
             setInterval(function() {
                 loadConnectionStatus().then(status => {
-                    // Remove setup banner if we're past initialization
                     if (status && status.status !== 'initializing' && status.status !== 'busy') {
                         const setupBanner = document.getElementById('setup-banner');
                         if (setupBanner) {
@@ -347,21 +316,18 @@
                         }
                     }
                     
-                    // Auto-update the modal content if it's open
                     if (modalIsOpen) {
                         updateConnectionStatusModal();
                     }
                 });
-            }, 10000); // Refresh every 10 seconds
+            }, 10000);
             
-            // Set interval for device data refresh with guard against overlapping requests
             setInterval(function() {
                 if (!window.deviceDataRequestActive) {
                     loadDeviceData();
                 }
-            }, 5000); // Refresh every 5 seconds
+            }, 5000);
             
-            // Set up event listeners
             document.getElementById('control-form').addEventListener('submit', sendCommand);
             document.getElementById('control-target').addEventListener('change', updateActionOptions);
             document.getElementById('show-connection-details').addEventListener('click', showConnectionStatusModal);
@@ -372,10 +338,8 @@
             });
         });
 
-        // Fetch connection status
         async function loadConnectionStatus() {
             try {
-                // Set refreshing flag if modal is open
                 if (modalIsOpen) {
                     isRefreshing = true;
                     updateRefreshIndicator();
@@ -388,12 +352,9 @@
                 
                 connectionStatus = await response.json();
                 updateConnectionState();
-                
-                // Hide the registration alert banner since we're using the status banner now
                 const alertBanner = document.getElementById('registration-alert');
                 alertBanner.classList.add('d-none');
                 
-                // Reset refreshing flag and update indicator
                 if (modalIsOpen) {
                     isRefreshing = false;
                     updateRefreshIndicator();
@@ -404,12 +365,9 @@
                 console.error('Error fetching connection status:', error);
                 connectionStatus = { status: 'error', error: error.message };
                 updateConnectionState();
-                
-                // Hide the registration alert banner since we're using the status banner now
                 const alertBanner = document.getElementById('registration-alert');
                 alertBanner.classList.add('d-none');
                 
-                // Reset refreshing flag and update indicator
                 if (modalIsOpen) {
                     isRefreshing = false;
                     updateRefreshIndicator();
@@ -419,7 +377,6 @@
             }
         }
 
-        // Update connection state in UI
         function updateConnectionState() {
             const stateElement = document.getElementById('connection-state');
             if (!connectionStatus) {
@@ -470,12 +427,9 @@
             
             stateElement.textContent = stateText;
             stateElement.className = stateClass;
-            
-            // Update the status banner as well
             updateStatusBanner();
         }
         
-        // Update status banner to reflect current connection state
         function updateStatusBanner() {
             const banner = document.getElementById('status-banner');
             const message = document.getElementById('status-banner-message');
@@ -486,14 +440,11 @@
                 return;
             }
             
-            // Reset classes
             banner.className = 'alert mb-4';
             actionButton.className = 'btn btn-sm';
             
-            // Configure banner based on status
             switch (connectionStatus.status) {
                 case 'ready':
-                    // No need to show banner when everything is ready
                     banner.classList.add('d-none');
                     break;
                     
@@ -570,28 +521,23 @@
             }
         }
 
-        // Show connection status modal
         function showConnectionStatusModal() {
             updateConnectionStatusModal();
             connectionStatusModal.show();
             modalIsOpen = true;
-            
-            // Set up a more frequent refresh interval while the modal is open
-            clearInterval(modalRefreshInterval); // Clear any existing interval first
+            clearInterval(modalRefreshInterval);
             modalRefreshInterval = setInterval(function() {
                 loadConnectionStatus().then(() => {
                     if (modalIsOpen) {
                         updateConnectionStatusModal();
                     } else {
-                        // If modal is closed but interval is still running, clear it
                         clearInterval(modalRefreshInterval);
                         modalRefreshInterval = null;
                     }
                 });
-            }, 3000); // Refresh every 3 seconds when modal is open
+            }, 3000);
         }
 
-        // Update the refresh indicator in the modal
         function updateRefreshIndicator() {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
@@ -609,7 +555,6 @@
             }
         }
 
-        // Update connection status modal content
         function updateConnectionStatusModal() {
             const modalContent = document.getElementById('connection-status-content');
             lastModalUpdateTime = new Date();
@@ -626,12 +571,10 @@
                 return;
             }
             
-            // Different content based on status
             let content = '';
             
             switch (connectionStatus.status) {
                 case 'initializing':
-                    // Show initializing state
                     content = `
                         <div class="text-center">
                             <div class="alert alert-info">
@@ -650,7 +593,6 @@
                     break;
                     
                 case 'busy':
-                    // Show busy state
                     content = `
                         <div class="text-center">
                             <div class="alert alert-info">
@@ -668,10 +610,7 @@
                     break;
                     
                 case 'registration':
-                    // Use auth_code from either API response or server variables
                     const authCode = connectionStatus.auth_code || serverAuthCode;
-                    
-                    // Only show registration if we have an auth code
                     if (authCode) {
                         content = `
                             <div class="text-center">
@@ -686,7 +625,6 @@
                             </div>
                         `;
                     } else {
-                        // No auth code available
                         content = `
                             <div class="text-center">
                                 <div class="alert alert-warning">
@@ -700,7 +638,6 @@
                     break;
                     
                 case 'connected':
-                    // Show waiting for space creation
                     content = `
                         <div class="text-center">
                             <div class="alert alert-warning">
@@ -719,7 +656,6 @@
                     break;
                     
                 case 'ready':
-                    // Show ready status
                     content = `
                         <div class="text-center">
                             <div class="alert alert-success">
@@ -739,7 +675,6 @@
                     
                 case 'not_connected':
                 case 'not_registered':
-                    // For 404 errors, use the server-side auth code if available
                     if (serverAuthCode) {
                         content = `
                             <div class="text-center">
@@ -754,7 +689,6 @@
                             </div>
                         `;
                     } else {
-                        // No auth code available
                         content = `
                             <div class="text-center">
                                 <div class="alert alert-danger">
@@ -768,7 +702,6 @@
                     break;
                     
                 case 'error':
-                    // Show error status
                     content = `
                         <div class="text-center">
                             <div class="alert alert-danger">
@@ -792,7 +725,6 @@
                     `;
             }
             
-            // Add last updated info at the bottom of the modal content
             content += `
                 <div class="text-center mt-3">
                     <small class="text-muted" id="refresh-indicator">
@@ -803,10 +735,9 @@
             `;
             
             modalContent.innerHTML = content;
-            updateRefreshIndicator(); // Update the refresh indicator after content is loaded
+            updateRefreshIndicator();
         }
 
-        // Fetch queue information
         function loadQueueInfo() {
             fetch('/api/queue')
                 .then(response => response.json())
@@ -821,9 +752,7 @@
                 });
         }
 
-        // Check API status
         function checkApiStatus() {
-            // Use connection status if available
             if (connectionStatus) {
                 if (connectionStatus.ready) {
                     document.getElementById('api-status').innerHTML = '<span class="badge bg-success">Online</span>';
@@ -833,12 +762,10 @@
                     document.getElementById('api-status').innerHTML = '<span class="badge bg-danger">Offline</span>';
                 }
             } else {
-            // Simple check - if we got queue info, API is online
-            document.getElementById('api-status').innerHTML = '<span class="badge bg-success">Online</span>';
+                document.getElementById('api-status').innerHTML = '<span class="badge bg-success">Online</span>';
             }
         }
 
-        // Fetch integrations
         function loadIntegrations() {
             fetch('/api/integrations')
                 .then(response => {
@@ -855,8 +782,6 @@
                         console.log("No integrations found, will retry shortly");
                         container.innerHTML = '<p>No integrations loaded. Checking again shortly...</p>';
                         document.getElementById('integrations-count').textContent = '0';
-                        
-                        // Retry again sooner if no integrations found
                         setTimeout(loadIntegrations, 3000);
                         return;
                     }
@@ -886,13 +811,10 @@
                     document.getElementById('integrations-container').innerHTML = 
                         '<p class="text-danger">Error loading integrations. Retrying...</p>';
                     document.getElementById('integrations-count').textContent = 'Error';
-                    
-                    // Retry on error after a delay
                     setTimeout(loadIntegrations, 5000);
                 });
         }
 
-        // Fetch device types
         function loadDeviceTypes() {
             fetch('/api/device-types')
                 .then(response => response.json())
@@ -910,7 +832,6 @@
                     targetSelect.innerHTML = '<option value="" selected disabled>Select a device</option>';
                     
                     for (const [deviceType, actions] of Object.entries(data)) {
-                        // Add to devices container
                         const card = document.createElement('div');
                         card.className = 'card mb-3';
                         
@@ -924,7 +845,6 @@
                         const actionsList = document.createElement('div');
                         actionsList.className = 'd-flex flex-wrap';
                         
-                        // Check if actions is an array before using forEach
                         if (Array.isArray(actions)) {
                             actions.forEach(action => {
                                 const badge = document.createElement('span');
@@ -933,7 +853,6 @@
                                 actionsList.appendChild(badge);
                             });
                         } else {
-                            // If it's not an array, display a message
                             const badge = document.createElement('span');
                             badge.className = 'badge bg-secondary device-action';
                             badge.textContent = "No actions available";
@@ -945,7 +864,6 @@
                         card.appendChild(cardBody);
                         container.appendChild(card);
                         
-                        // Add to control form
                         const option = document.createElement('option');
                         option.value = deviceType;
                         option.textContent = deviceType;
@@ -958,7 +876,6 @@
                 });
         }
 
-        // Update action options based on selected device
         function updateActionOptions() {
             const targetSelect = document.getElementById('control-target');
             const actionSelect = document.getElementById('control-action');
@@ -970,7 +887,6 @@
             if (targetSelect.value) {
                 const actions = deviceTypes[targetSelect.value] || [];
                 
-                // Check if actions is an array
                 if (Array.isArray(actions)) {
                     actions.forEach(action => {
                         const option = document.createElement('option');
@@ -979,7 +895,6 @@
                         actionSelect.appendChild(option);
                     });
                     
-                    // Show payload if there are actions
                     if (actions.length > 0) {
                         payloadContainer.style.display = 'block';
                     }
@@ -987,7 +902,6 @@
             }
         }
 
-        // Send command
         function sendCommand(event) {
             event.preventDefault();
             
@@ -1038,14 +952,11 @@
             });
         }
 
-        // Fetch device data
         function loadDeviceData() {
-            // Mark that we have an active request
             window.deviceDataRequestActive = true;
             
             fetch('/api/devices', {
                 method: 'GET',
-                // Add cache control to prevent browser caching
                 headers: {
                     'Cache-Control': 'no-cache'
                 }
@@ -1058,9 +969,8 @@
                 })
                 .then(data => {
                     const container = document.getElementById('device-data-container');
-                    container.innerHTML = ''; // Clear previous data or loading indicator
+                    container.innerHTML = '';
 
-                    // Check if there's an error in the response
                     if (data.error) {
                         container.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
                         return;
@@ -1072,7 +982,7 @@
                     }
 
                     const list = document.createElement('dl');
-                    list.className = 'row'; // Use Bootstrap grid for layout
+                    list.className = 'row';
 
                     for (const deviceName in data) {
                         const deviceInfo = data[deviceName];
@@ -1085,21 +995,16 @@
                         dd.className = 'col-sm-9';
                         
                         if (deviceInfo.error) {
-                            // Display error message for this device
                             dd.innerHTML = `<span class="text-danger">Error: ${deviceInfo.error}</span>`;
                         } else {
-                            // Format and display the device data
                             let valueDisplay = '';
                             
-                            // Check for the most common fields
                             if (deviceInfo.value !== undefined) {
                                 valueDisplay = `<strong>Value:</strong> ${deviceInfo.value}`;
                             } else {
-                                // If no specific value field, show the whole object
                                 valueDisplay = `<pre><code>${escapeHtml(JSON.stringify(deviceInfo, null, 2))}</code></pre>`;
                             }
                             
-                            // Display device type if available
                             if (deviceInfo.type) {
                                 valueDisplay = `<strong>Type:</strong> ${deviceInfo.type}<br>${valueDisplay}`;
                             }
@@ -1107,7 +1012,6 @@
                             dd.innerHTML = valueDisplay;
                         }
                         
-                        // Add timestamp if available
                         if (deviceInfo.timestamp) {
                             const timestampSpan = document.createElement('span');
                             timestampSpan.className = 'text-muted small ms-2';
@@ -1125,18 +1029,14 @@
                     console.error('Error fetching device data:', error);
                     const container = document.getElementById('device-data-container');
                     container.innerHTML = '<p class="text-danger">Error loading device data.</p>';
-                    // No automatic retry here, relies on the interval
                 })
                 .finally(() => {
-                    // Mark that the request is complete
                     window.deviceDataRequestActive = false;
                 });
         }
 
-        // Helper function to escape HTML for safe display
         function escapeHtml(unsafe) {
             if (!unsafe) return '';
-            // Handle objects/arrays by stringifying them first
             if (typeof unsafe !== 'string') {
                 unsafe = JSON.stringify(unsafe);
             }
@@ -1148,45 +1048,27 @@
                  .replace(/'/g, "&#039;");
          }
 
-        // Helper function to format timestamp
         function formatTimestamp(unixTimestamp) {
             if (!unixTimestamp) return '';
-            
-            // If timestamp is in seconds (Unix timestamp), convert to milliseconds
             if (unixTimestamp < 10000000000) {
                 unixTimestamp = unixTimestamp * 1000;
             }
-            
             const date = new Date(unixTimestamp);
-            return date.toLocaleString(); // Format: MM/DD/YYYY, HH:MM:SS AM/PM
+            return date.toLocaleString();
         }
 
-        // Server-side variables for client script
         const showOnboarding = "{{ 'true' if show_onboarding else 'false' }}" === "true";
-        const serverAuthCode = "{{ auth_code|default('') }}";
+        const rawAuthCode = "{{ auth_code|default('') }}";
         const serverIsAuthenticated = "{{ 'true' if is_authenticated else 'false' }}" === "true";
+        const serverAuthCode = serverIsAuthenticated ? '' : rawAuthCode;
     </script>
 
-    <!-- Auto-show onboarding modal if needed -->
     <script>
-        // Auto-show onboarding modal if server indicates we should
-        if (showOnboarding || serverAuthCode) {
-            document.addEventListener('DOMContentLoaded', function() {
-                // Wait a moment before showing to ensure everything is loaded
-                setTimeout(function() {
-                    showConnectionStatusModal();
-                }, 500);
-            });
-        }
-
-        // Add event listener for modal close to update our tracking flag
         document.addEventListener('DOMContentLoaded', function() {
             const connectionStatusModalElement = document.getElementById('connectionStatusModal');
             if (connectionStatusModalElement) {
                 connectionStatusModalElement.addEventListener('hidden.bs.modal', function () {
-                    modalIsOpen = false; // Set flag that modal is now closed
-                    
-                    // Clear the modal-specific refresh interval when modal is closed
+                    modalIsOpen = false;
                     if (modalRefreshInterval) {
                         clearInterval(modalRefreshInterval);
                         modalRefreshInterval = null;
