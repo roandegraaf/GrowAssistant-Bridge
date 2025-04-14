@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import httpx
 from tenacity import (
@@ -23,13 +23,18 @@ from tenacity import (
 
 from app.auth import auth_manager
 from app.config import config
+# Import api_types for the new data format
+from app.api_types import (
+    ActionType, LogType, ProblemType, ProblemStatus,
+    create_data_log, create_problem, create_action_response, parse_api_response
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 class ApiClient:
-    """Client for interacting with the GrowAssistant Spring API.
+    """Client for interacting with the GrowAssistant API.
     
     This class provides methods for sending data to the API and receiving commands.
     It handles authentication, error handling, and retry logic.
@@ -70,6 +75,15 @@ class ApiClient:
         # Create log directory if value logging is enabled
         log_dir = config.get("general.log_dir", "logs")
         self._api_log_dir = os.path.join(log_dir, "api_values")
+        
+        # Initialize data storage for new API format
+        self._data_logs = []
+        self._problems = []
+        self._actions = []
+        
+        # Action handling
+        self._pending_actions = {}  # Actions waiting for resolution
+        self._action_handlers = {}  # Callbacks for handling actions
         
         self._initialized = True
         
@@ -180,21 +194,71 @@ class ApiClient:
         
         return value_logger
     
-    async def send_data(self, data_points: List[Dict[str, Any]]) -> Tuple[bool, str]:
-        """Send data points to the API.
+    # New methods for API data format
+    def add_data_log(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date: Optional[datetime] = None):
+        """Add a data log entry.
         
         Args:
-            data_points: List of data points to send.
+            log_type: Type of log (can be string or LogType enum)
+            value: Value to log
+            log_date: Timestamp (defaults to now)
+        """
+        self._data_logs.append(create_data_log(log_type, value, log_date))
+        
+    def add_problem(self, problem_type: Union[ProblemType, str], status: Union[ProblemStatus, str], 
+                    description: str, priority: int = 0, user_can_resolve: bool = True, 
+                    resolved: bool = False, problem_id: Optional[str] = None):
+        """Add a problem report.
+        
+        Args:
+            problem_type: Type of problem
+            status: Problem status category
+            description: Description of the problem
+            priority: Priority level (0-100)
+            user_can_resolve: Whether user can resolve
+            resolved: Whether already resolved
+            problem_id: Optional ID (generated if not provided)
+        """
+        self._problems.append(create_problem(
+            problem_type, status, description, priority,
+            user_can_resolve, resolved, problem_id
+        ))
+        
+    def acknowledge_action(self, action_id: str, received: bool = True, resolved: bool = False):
+        """Acknowledge an action from the API.
+        
+        Args:
+            action_id: ID of the action
+            received: Whether action was received
+            resolved: Whether action was completed
+        """
+        self._actions.append(create_action_response(action_id, received, resolved))
+        
+    def register_action_handler(self, action_type: Union[ActionType, str], handler: Callable):
+        """Register a handler for a specific action type.
+        
+        Args:
+            action_type: Type of action to handle
+            handler: Callback function(action_data) -> bool
+        """
+        # Convert enum to string if needed
+        if isinstance(action_type, ActionType):
+            action_type = action_type.value
+            
+        self._action_handlers[action_type] = handler
+    
+    async def send_data(self, data_points: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, str]:
+        """Send data to the API.
+        
+        Args:
+            data_points: Optional legacy data points (for backward compatibility)
             
         Returns:
             Tuple[bool, str]: (success, message) tuple.
         """
-        if not data_points:
-            return True, "No data points to send"
-            
         if not self._client:
             return False, "API client not started"
-        
+            
         # Ensure we're authenticated
         if not auth_manager.is_authenticated():
             return False, "Not authenticated with API"
@@ -215,6 +279,27 @@ class ApiClient:
             
         url = f"{self._base_url}/client/{client_id}"
         
+        # Process legacy data points if provided (backward compatibility)
+        if data_points:
+            for point in data_points:
+                # Convert legacy data points to new format
+                log_type = point.get("type", "SYSTEM")
+                value = point.get("value", "")
+                timestamp = point.get("timestamp")
+                if timestamp:
+                    log_date = datetime.fromtimestamp(timestamp)
+                else:
+                    log_date = None
+                
+                self.add_data_log(log_type, value, log_date)
+                
+        # Prepare payload in the new format
+        payload = {
+            "dataLogs": self._data_logs,
+            "problems": self._problems,
+            "actions": self._actions
+        }
+        
         try:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
@@ -225,63 +310,155 @@ class ApiClient:
                 ),
             ):
                 with attempt:
-                    logger.debug(f"Sending {len(data_points)} data points to API")
-                    response = await self._client.post(url, json={"data": data_points}, headers=self._get_headers())
+                    logger.debug(f"Sending data to API: {len(self._data_logs)} logs, "
+                                f"{len(self._problems)} problems, {len(self._actions)} actions")
+                    response = await self._client.post(url, json=payload, headers=self._get_headers())
                     response.raise_for_status()
+                    
+                    # Process response to extract actions
+                    response_data = response.json()
+                    await self._process_response(response_data)
             
             # Log each data point individually to its own file
             if self._log_values:
-                for data_point in data_points:
-                    value_logger = self._get_api_value_logger(data_point)
-                    value_logger.info(f"Data sent to API: {json.dumps(data_point)}")
-                    
-                    # Log additional metadata
+                # Log data logs
+                for data_log in self._data_logs:
+                    value_logger = self._get_api_value_logger({
+                        "type": data_log.get("logType"),
+                        "value": data_log.get("value"),
+                        "timestamp": data_log.get("logDate")
+                    })
+                    value_logger.info(f"Data log sent to API: {json.dumps(data_log)}")
                     value_logger.info(f"API URL: {url}")
                     value_logger.info(f"Client ID: {client_id}")
                     value_logger.info(f"Status: Success")
                 
-            logger.info(f"Successfully sent {len(data_points)} data points to API")
+                # Log problems
+                for problem in self._problems:
+                    value_logger = self._get_api_value_logger({
+                        "type": problem.get("type"),
+                        "status": problem.get("status"),
+                        "description": problem.get("description")
+                    })
+                    value_logger.info(f"Problem sent to API: {json.dumps(problem)}")
+                    value_logger.info(f"API URL: {url}")
+                    value_logger.info(f"Client ID: {client_id}")
+                    value_logger.info(f"Status: Success")
+                
+                # Log actions
+                for action in self._actions:
+                    value_logger = self._get_api_value_logger({
+                        "action": action.get("id"),
+                        "received": action.get("received"),
+                        "resolved": action.get("resolved")
+                    })
+                    value_logger.info(f"Action response sent to API: {json.dumps(action)}")
+                    value_logger.info(f"API URL: {url}")
+                    value_logger.info(f"Client ID: {client_id}")
+                    value_logger.info(f"Status: Success")
+                
+            # Clear sent data
+            data_logs_count = len(self._data_logs)
+            problems_count = len(self._problems)
+            actions_count = len(self._actions)
+            
+            self._data_logs = []
+            self._problems = []
+            self._actions = []
+            
+            logger.info(f"Successfully sent {data_logs_count} data logs, {problems_count} problems, and {actions_count} actions to API")
             return True, "Data sent successfully"
             
         except httpx.HTTPStatusError as e:
-            # Log error for each data point
+            # Log error for each data type
             if self._log_values:
-                for data_point in data_points:
-                    value_logger = self._get_api_value_logger(data_point)
-                    value_logger.error(f"HTTP error sending data: {e.response.status_code} - {e.response.text}")
+                # Log data logs errors
+                for data_log in self._data_logs:
+                    value_logger = self._get_api_value_logger({
+                        "type": data_log.get("logType"),
+                        "value": data_log.get("value")
+                    })
+                    value_logger.error(f"HTTP error sending data log: {e.response.status_code} - {e.response.text}")
                     value_logger.info(f"API URL: {url}")
                     value_logger.info(f"Client ID: {client_id}")
                     value_logger.info(f"Status: Failed")
+                
+                # Similar logging for problems and actions
+                for problem in self._problems:
+                    value_logger = self._get_api_value_logger({
+                        "type": problem.get("type"),
+                        "status": problem.get("status"),
+                        "description": problem.get("description")
+                    })
+                    value_logger.error(f"HTTP error sending problem: {e.response.status_code} - {e.response.text}")
+                    value_logger.info(f"API URL: {url}")
+                    value_logger.info(f"Client ID: {client_id}")
+                    value_logger.info(f"Status: Failed")
+                for action in self._actions:
+                    value_logger = self._get_api_value_logger({
+                        "action": action.get("id"),
+                        "received": action.get("received"),
+                        "resolved": action.get("resolved")
+                    })
+                    value_logger.error(f"HTTP error sending action: {e.response.status_code} - {e.response.text}")
+                    value_logger.info(f"API URL: {url}")
+                    value_logger.info(f"Client ID: {client_id}")
+                    value_logger.info(f"Status: Failed")
+                    
+                    
                 
             logger.error(f"HTTP error sending data: {e.response.status_code} - {e.response.text}")
             return False, f"HTTP error: {e.response.status_code}"
             
         except (httpx.RequestError, asyncio.TimeoutError) as e:
-            # Log error for each data point
-            if self._log_values:
-                for data_point in data_points:
-                    value_logger = self._get_api_value_logger(data_point)
-                    value_logger.error(f"Error sending data: {str(e)}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Failed")
-                
+            # Similar error handling to current implementation
             logger.error(f"Error sending data: {str(e)}")
             return False, f"Request error: {str(e)}"
             
         except Exception as e:
-            # Log error for each data point
-            if self._log_values:
-                for data_point in data_points:
-                    value_logger = self._get_api_value_logger(data_point)
-                    value_logger.error(f"Unexpected error sending data: {str(e)}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Failed")
-                
+            # Similar error handling to current implementation
             logger.exception(f"Unexpected error sending data: {str(e)}")
             return False, f"Unexpected error: {str(e)}"
     
+    async def _process_response(self, response_data: Dict[str, Any]):
+        """Process API response data.
+        
+        Args:
+            response_data: Raw response data from API
+        """
+        # Parse the response
+        parsed = parse_api_response(response_data)
+        
+        # Process actions
+        for action in parsed.get("actions", []):
+            action_id = action.get("id")
+            action_type = action.get("type")
+            
+            if not action_id or not action_type:
+                logger.warning(f"Received action with missing id or type: {action}")
+                continue
+                
+            # Mark as received
+            self.acknowledge_action(action_id, received=True, resolved=False)
+            
+            # Try to handle the action with registered handler
+            if action_type in self._action_handlers:
+                try:
+                    handler = self._action_handlers[action_type]
+                    # Call the handler asynchronously
+                    success = await handler(action)
+                    
+                    # If handler was successful, mark as resolved
+                    if success:
+                        self.acknowledge_action(action_id, received=True, resolved=True)
+                    
+                    logger.info(f"Handled action {action_id} of type {action_type}, success: {success}")
+                        
+                except Exception as e:
+                    logger.error(f"Error handling action {action_id} of type {action_type}: {e}")
+            else:
+                logger.warning(f"No handler registered for action type: {action_type}")
+                
     async def poll_commands(self) -> Optional[List[Dict[str, Any]]]:
         """Poll for commands from the API.
         

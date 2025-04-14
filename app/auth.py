@@ -316,7 +316,7 @@ class AuthManager:
         
         try:
             response = await self._client.get(url)
-            
+
             # 204 means client is connected but no space is created yet
             if response.status_code == 204:
                 logger.info("Client is connected to the API but no space is created yet")
@@ -329,7 +329,7 @@ class AuthManager:
                 return True, "connected"
                 
             # 200 means client is connected and space is created (ready to send data)
-            elif response.status_code == 200:
+            elif response.status_code == 200 and self._auth_code is not None:
                 logger.info("Client is connected to an environment and space is created")
                 
                 # Update credentials with connected status and ready flag

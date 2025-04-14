@@ -20,10 +20,14 @@ import asyncio
 import json
 import logging
 import time
+import random
 from typing import Any, Dict, Generator
 
 # Import the Integration base class and register_integration decorator
 from app.integrations import Integration, register_integration
+
+# Import API types
+from app.api_types import ActionType, LogType, ProblemType, ProblemStatus
 
 # Set up logging - always use this to provide diagnostic information
 logger = logging.getLogger(__name__)
@@ -98,6 +102,12 @@ class SampleIntegration(Integration):
             # PATTERN: Simulate connection or connect to real hardware/service
             logger.info("Sample Integration connected")
             
+            # Register action handlers for different action types
+            self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
+            self.register_action_handler(ActionType.HUMIDITY, self.handle_humidity_action)
+            self.register_action_handler(ActionType.LIGHT, self.handle_light_action)
+            self.register_action_handler(ActionType.FAN, self.handle_fan_action)
+            
             # PATTERN: Start a background task to update device values
             # This is a common pattern for devices that need polling
             self.update_task = asyncio.create_task(self._update_device_values())
@@ -160,6 +170,37 @@ class SampleIntegration(Integration):
         # PATTERN: Return current values for all devices
         # This method is called periodically by the main application
         for name, device in self.devices.items():
+            # Convert to the new data log format based on device type
+            if device["type"] == "temperature":
+                self.log_data(LogType.TEMPERATURE, device["value"])
+                
+                # Check if temperature is out of range and report a problem if needed
+                if device["value"] < 18.0 or device["value"] > 30.0:
+                    self.report_problem(
+                        ProblemType.RANGE,
+                        ProblemStatus.TEMPERATURE,
+                        f"Temperature out of range: {device['value']}°C",
+                        priority=50,
+                        user_can_resolve=True
+                    )
+                    
+            elif device["type"] == "humidity":
+                self.log_data(LogType.HUMIDITY, device["value"])
+                
+                # Check if humidity is out of range and report a problem if needed
+                if device["value"] < 30.0 or device["value"] > 70.0:
+                    self.report_problem(
+                        ProblemType.RANGE,
+                        ProblemStatus.HUMIDITY,
+                        f"Humidity out of range: {device['value']}%",
+                        priority=40,
+                        user_can_resolve=True
+                    )
+                    
+            elif device["type"] == "light":
+                self.log_data(LogType.LIGHT, device["value"])
+            
+            # For compatibility with existing code, still yield the legacy format
             yield {
                 "device": name,
                 "type": device["type"],
@@ -187,8 +228,6 @@ class SampleIntegration(Integration):
         
         This simulates device activity. In a real integration, this would read from hardware.
         """
-        import random
-        
         # Get configuration parameter
         update_interval = self.config.get("update_interval", 60)  # seconds
         
@@ -218,6 +257,190 @@ class SampleIntegration(Integration):
                 # Handle other exceptions
                 logger.error(f"Error in device update task: {e}")
                 await asyncio.sleep(5)  # Wait a bit before retrying
+    
+    # Implement handlers for each action type
+    async def handle_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle an action from the API.
+        
+        This method dispatches to the appropriate handler based on action type.
+        
+        Args:
+            action_data: Action data from the API
+            
+        Returns:
+            bool: True if action was handled successfully
+        """
+        action_type = action_data.get("type")
+        
+        # Map action type to handler
+        handlers = {
+            ActionType.TEMPERATURE.value: self.handle_temperature_action,
+            ActionType.HUMIDITY.value: self.handle_humidity_action,
+            ActionType.LIGHT.value: self.handle_light_action,
+            ActionType.FAN.value: self.handle_fan_action,
+        }
+        
+        if action_type in handlers:
+            return await handlers[action_type](action_data)
+        else:
+            logger.warning(f"No handler for action type: {action_type}")
+            return False
+    
+    async def handle_temperature_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle temperature action.
+        
+        Args:
+            action_data: Action data from API
+            
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            # Extract action details
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            
+            # Find temperature controller device
+            temp_controller = None
+            for name, device in self.devices.items():
+                if device["type"] == "temperature":
+                    temp_controller = name
+                    break
+                    
+            if temp_controller:
+                # Send command to device
+                await self.send_data({
+                    "device": temp_controller,
+                    "value": value
+                })
+                
+                # Log success
+                logger.info(f"Set temperature to {value}")
+                return True
+            else:
+                logger.warning("No temperature controller found")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error handling temperature action: {e}")
+            return False
+    
+    async def handle_humidity_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle humidity action.
+        
+        Args:
+            action_data: Action data from API
+            
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            # Extract action details
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            
+            # Find humidity controller device
+            humidity_controller = None
+            for name, device in self.devices.items():
+                if device["type"] == "humidity":
+                    humidity_controller = name
+                    break
+                    
+            if humidity_controller:
+                # Send command to device
+                await self.send_data({
+                    "device": humidity_controller,
+                    "value": value
+                })
+                
+                # Log success
+                logger.info(f"Set humidity to {value}")
+                return True
+            else:
+                logger.warning("No humidity controller found")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error handling humidity action: {e}")
+            return False
+            
+    async def handle_light_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle light action.
+        
+        Args:
+            action_data: Action data from API
+            
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            # Extract action details
+            action_id = action_data.get("id")
+            value = action_data.get("value")
+            
+            # Find light controller device
+            light_controller = None
+            for name, device in self.devices.items():
+                if device["type"] == "light":
+                    light_controller = name
+                    break
+                    
+            if light_controller:
+                # Send command to device
+                await self.send_data({
+                    "device": light_controller,
+                    "value": value
+                })
+                
+                # Log success
+                logger.info(f"Set light to {value}")
+                return True
+            else:
+                logger.warning("No light controller found")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error handling light action: {e}")
+            return False
+            
+    async def handle_fan_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle fan action.
+        
+        Args:
+            action_data: Action data from API
+            
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            # Extract action details
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            
+            # Find fan controller device
+            fan_controller = None
+            for name, device in self.devices.items():
+                if device["type"] == "fan":
+                    fan_controller = name
+                    break
+                    
+            if fan_controller:
+                # Send command to device
+                await self.send_data({
+                    "device": fan_controller,
+                    "value": value
+                })
+                
+                # Log success
+                logger.info(f"Set fan to {value}")
+                return True
+            else:
+                logger.warning("No fan controller found")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error handling fan action: {e}")
+            return False
     
     async def disconnect(self):
         """Disconnect from the devices/service and clean up resources.

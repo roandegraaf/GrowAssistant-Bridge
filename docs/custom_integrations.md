@@ -8,10 +8,11 @@ This guide will help you develop custom integrations for the GrowAssistant Bridg
 2. [Integration Basics](#integration-basics)
 3. [Creating Your First Integration](#creating-your-first-integration)
 4. [Integration Structure](#integration-structure)
-5. [Configuration](#configuration)
-6. [Testing Your Integration](#testing-your-integration)
-7. [Best Practices](#best-practices)
-8. [Troubleshooting](#troubleshooting)
+5. [API Data Format](#api-data-format)
+6. [Configuration](#configuration)
+7. [Testing Your Integration](#testing-your-integration)
+8. [Best Practices](#best-practices)
+9. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -97,6 +98,105 @@ Every integration must implement these methods:
 - Cancels any background tasks
 - Closes connections to hardware/services
 
+## API Data Format
+
+GrowAssistant Bridge communicates with the GrowAssistant API using a specific data format that includes three main components:
+
+### Data Format Overview
+
+1. **Data Logs**: Sensor readings and other data points
+2. **Problems**: Issues that need attention
+3. **Actions**: Responses to commands sent from the API
+
+### Data Logs
+
+Data logs represent sensor readings or other data points collected by your integration. Each log entry includes:
+
+- `logDate`: ISO-formatted timestamp
+- `logType`: Type of data (e.g., TEMPERATURE, HUMIDITY)
+- `value`: The actual value
+
+Example of sending a data log:
+
+```python
+# In your integration class:
+self.log_data(LogType.TEMPERATURE, 25.5)
+self.log_data(LogType.HUMIDITY, 65)
+```
+
+### Problems
+
+Problems represent issues that require attention, such as sensor readings outside expected ranges or hardware failures. Each problem includes:
+
+- `id`: Unique identifier
+- `priority`: Importance level (0-100)
+- `description`: Human-readable description
+- `type`: Problem category (CONNECTION, SENSOR, RANGE, etc.)
+- `status`: System affected (TEMPERATURE, HUMIDITY, etc.)
+- `userCanResolve`: Whether the user can fix this
+- `resolved`: Whether the problem is already resolved
+
+Example of reporting a problem:
+
+```python
+# In your integration class:
+self.report_problem(
+    ProblemType.RANGE,
+    ProblemStatus.TEMPERATURE,
+    "Temperature out of range: 35.2°C",
+    priority=70,
+    user_can_resolve=True
+)
+```
+
+### Actions
+
+Actions represent commands from the API that your integration should execute. Each action includes:
+
+- `id`: Unique identifier
+- `type`: Action type (TEMPERATURE, HUMIDITY, etc.)
+- `value`: Target value
+- `pumpNumber`: Pump number (for water/nutrient actions)
+
+Your integration should handle actions by implementing the `handle_action` method and registering handlers for specific action types.
+
+Example of handling actions:
+
+```python
+# In your integration class:
+async def connect(self):
+    # Register handlers during initialization
+    self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
+    # ... other initialization code
+
+async def handle_temperature_action(self, action_data):
+    # Extract values from action_data
+    value = float(action_data.get("value", 0))
+    action_id = action_data.get("id")
+    
+    # Perform the action (e.g., set temperature)
+    success = await self._set_temperature(value)
+    
+    # Acknowledge completion
+    if success:
+        self.acknowledge_action(action_id, received=True, resolved=True)
+        
+    return success
+```
+
+### Action Types
+
+The following action types are supported:
+
+- `TEMPERATURE`: Temperature control
+- `HUMIDITY`: Humidity control
+- `LIGHT`: Light control
+- `FAN`: Fan speed control
+- `TANK_ML`: Water tank volume
+- `PH_VALUE`: pH value control
+- `PH_ML`: pH adjustment volume
+- `SUPPLEMENT_ML`: Nutrient supplement volume
+
 ## Configuration
 
 Your integration's configuration should be defined in the main `config.yaml` file under the `integrations` section:
@@ -132,6 +232,16 @@ The system will pass this configuration to your integration's `__init__` method.
 
 7. **Standards**: Follow the data format standards used by the system for consistent behavior.
 
+8. **Log Appropriate Data**: Send data logs for all relevant sensor readings.
+
+9. **Report Problems Promptly**: Use the problem reporting system to alert users of issues.
+
+10. **Handle Actions Robustly**: Implement error handling in action handlers.
+
+11. **Acknowledge Receipt**: Always acknowledge actions even if you can't complete them.
+
+12. **Provide Clear Descriptions**: Use clear, actionable descriptions for problems.
+
 ## Troubleshooting
 
 ### Integration Not Loading
@@ -151,6 +261,12 @@ The system will pass this configuration to your integration's `__init__` method.
 1. Verify your `send_data` method implementation
 2. Check that device names match between configuration and code
 3. Ensure that your device is properly registered as an actuator
+
+### Actions Not Being Processed
+
+1. Check that you've registered action handlers in your `connect` method
+2. Verify that your action handler function returns the correct result
+3. Look for errors in the action handler logs
 
 ## Example Integrations
 
