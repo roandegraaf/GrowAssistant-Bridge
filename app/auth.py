@@ -329,23 +329,20 @@ class AuthManager:
                 return True, "connected"
                 
             # 200 means client is connected and space is created (ready to send data)
-            elif response.status_code == 200 and self._auth_code is not None:
+            elif response.status_code == 200:
                 logger.info("Client is connected to an environment and space is created")
-                
+
                 # Update credentials with connected status and ready flag
                 self._credentials["connected"] = True
                 self._credentials["ready"] = True
                 self._auth_code = None  # Clear the code as it's no longer needed
                 self._save_credentials()
-                
+
                 # Process response data if needed
                 data = response.json()
-                
-                # Check if the client has been connected to an environment
-                # (code is set to null after connecting)
-                connected = data.get("code") is None
-                
-                return connected, "ready"
+
+                # Space exists with valid data, so we're ready
+                return True, "ready"
                 
             else:
                 logger.warning(f"Error checking connection status: {response.status_code}")

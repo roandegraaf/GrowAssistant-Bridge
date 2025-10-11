@@ -7,7 +7,7 @@ api:
   retry_max_backoff: 60
   retry_min_backoff: 1
   transmission_interval: 60
-  url: https://2b39-92-65-74-196.ngrok-free.app
+  url: http://localhost:8080
 general:
   api_logs_dir: logs/api
   collection_interval: 60
@@ -109,7 +109,7 @@ web:
   debug: false
   enabled: true
   host: 0.0.0.0
-  password_hash: scrypt:32768:8:1$VmJk1Fxnjl9cuZ5b$765fc42508f06b4dfcb14a8cd4422e57ae288254fc35da977fbe0d6f11432d3f9c4d56934243dfe39d8edae9974bfb5ac0ce49fd3f6d3c0558ca33abfee56623
+  password_hash: scrypt:32768:8:1$MYD1TlOc3yNFx3v3$1b8c51b8fad7032147973a8d2aea6b3327467076f1ca92deccb8439b5873c280e49926841d7b6f0f70a1c7f64c337095ce4dae65dd81c0b56cf63aec882b2417
   port: 5010
   secret_key: change-this-in-production
   ssl_cert: ''

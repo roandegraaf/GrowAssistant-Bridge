@@ -468,7 +468,9 @@
                     
                 case 'not_registered':
                 case 'not_connected':
-                    if (serverAuthCode) {
+                    // Check both serverAuthCode and connectionStatus.auth_code
+                    const authCodeAvailable = serverAuthCode || (connectionStatus && connectionStatus.auth_code);
+                    if (authCodeAvailable) {
                         banner.classList.add('alert-info');
                         message.innerHTML = '<strong>Registration Required!</strong> This device needs to be connected to your GrowAssistant account.';
                         actionButton.textContent = 'View Code';
@@ -675,7 +677,9 @@
                     
                 case 'not_connected':
                 case 'not_registered':
-                    if (serverAuthCode) {
+                    // Check both serverAuthCode and connectionStatus.auth_code
+                    const modalAuthCode = serverAuthCode || (connectionStatus && connectionStatus.auth_code);
+                    if (modalAuthCode) {
                         content = `
                             <div class="text-center">
                                 <div class="alert alert-info">
@@ -683,7 +687,7 @@
                                     <p>Please enter this code in the GrowAssistant app to connect this device to your environment:</p>
                                 </div>
                                 <div class="auth-code-display p-4 mb-3 bg-light rounded">
-                                    <h2 class="display-4 user-select-all">${serverAuthCode}</h2>
+                                    <h2 class="display-4 user-select-all">${modalAuthCode}</h2>
                                 </div>
                                 <p>Status: Device not connected to API. Enter this code to connect.</p>
                             </div>
