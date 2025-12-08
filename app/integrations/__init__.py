@@ -80,15 +80,16 @@ class Integration(abc.ABC):
         pass
         
     # New methods for API data format
-    def log_data(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date=None):
+    def log_data(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date=None, pump_num=None):
         """Log data to the API.
-        
+
         Args:
             log_type: Type of data being logged
             value: Value to log
             log_date: Optional timestamp (defaults to now)
+            pump_num: Optional pump number (only for pump-related logs)
         """
-        api_client.add_data_log(log_type, value, log_date)
+        api_client.add_data_log(log_type, value, log_date, pump_num)
         
     def report_problem(self, problem_type: Union[ProblemType, str], status: Union[ProblemStatus, str], 
                      description: str, priority: int = 0, user_can_resolve: bool = True, 
@@ -130,23 +131,47 @@ class Integration(abc.ABC):
         
     async def handle_action(self, action_data: Dict[str, Any]) -> bool:
         """Handle an action requested by the API.
-        
+
         This method should be implemented by integrations to handle
         actions requested by the API.
-        
+
         Args:
             action_data: Action data from the API
-            
+
         Returns:
             bool: True if action was handled successfully
         """
         # Default implementation returns False
         logger.warning(f"Integration {self.name} does not implement handle_action")
         return False
-        
+
+    async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+        """Apply settings received from the API.
+
+        This method can be implemented by integrations to handle
+        settings updates from the API (light schedules, climate settings, etc.).
+
+        Args:
+            settings: Settings dictionary containing:
+                - rdh_mode: bool
+                - status: str
+                - light: dict with 'day' and 'night' settings
+                - climate: dict with 'temperature', 'humidity', 'baseFanSpeed'
+                - tank: dict with 'waters', 'ph', 'amountML'
+
+        Returns:
+            bool: True if settings were applied successfully
+
+        Raises:
+            NotImplementedError: If integration doesn't support settings
+        """
+        # Default implementation raises NotImplementedError to signal
+        # that this integration doesn't support settings
+        raise NotImplementedError(f"Integration {self.name} does not support settings")
+
     async def disconnect(self):
         """Disconnect from the device/service and clean up resources.
-        
+
         This method should be implemented by integrations to properly clean up
         resources when shutting down.
         """

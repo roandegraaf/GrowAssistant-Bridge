@@ -128,6 +128,10 @@ The `Integration` base class provides the following methods and attributes:
 | `connect()` | Establish a connection to the underlying hardware or service. |
 | `send_data(data)` | Send data to the device or service. |
 | `receive_data()` | Asynchronous generator that yields data from the device or service. |
+| `get_device_data()` | Return the current state of all devices managed by this integration. |
+| `apply_settings(settings)` | (Optional) Apply settings received from the API. Raises NotImplementedError by default. |
+| `handle_action(action_data)` | (Optional) Handle actions requested by the API. Returns False by default. |
+| `disconnect()` | Clean up resources when shutting down. |
 
 ### Available Attributes and Methods
 
@@ -136,6 +140,39 @@ The `Integration` base class provides the following methods and attributes:
 | `self.config` | Access to the application configuration. |
 | `self.logger` | Logger for the integration. |
 | `self.name` | Name of the integration (derived from class name). |
+
+### Helper Methods for API Communication
+
+The Integration base class provides convenient methods for communicating with the GrowAssistant API:
+
+| Method | Description |
+|--------|-------------|
+| `log_data(log_type, value, log_date=None, pump_num=None)` | Send a data log to the API. |
+| `report_problem(problem_type, status, description, priority, ...)` | Report a problem to the API. |
+| `register_action_handler(action_type, handler)` | Register a handler for a specific action type. |
+| `acknowledge_action(action_id, received, resolved)` | Acknowledge an action from the API. |
+
+Example usage:
+
+```python
+from app.api_types import LogType, ProblemType, ProblemStatus, ActionType
+
+# Log data
+self.log_data(LogType.TEMPERATURE, 25.5)
+self.log_data(LogType.TANK_ML, 500, pump_num=1)  # 500ml from pump 1
+
+# Report a problem
+self.report_problem(
+    ProblemType.TEMPERATURE,
+    ProblemStatus.CONNECTION,
+    "Temperature sensor not responding",
+    priority=80,
+    user_can_resolve=False
+)
+
+# Register action handlers (typically in connect method)
+self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
+```
 
 ## Testing Your Integration
 
@@ -183,16 +220,53 @@ async def test_my_custom_integration(mock_config):
 You can implement these optional methods to handle lifecycle events:
 
 ```python
-async def start(self):
-    """Called when the application starts."""
-    pass
-
-async def stop(self):
+async def disconnect(self):
     """Called when the application stops."""
     # Clean up resources
     if self.connection:
         await self.connection.close()
+
+async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+    """Called when settings are received from the API.
+
+    The settings dict contains:
+    - rdh_mode: bool
+    - status: str
+    - light: dict with 'day' and 'night' schedules
+    - climate: dict with 'temperature', 'humidity', 'baseFanSpeed'
+    - tank: dict with 'waters', 'ph', 'amountML'
+    """
+    try:
+        # Apply climate settings
+        climate = settings.get("climate", {})
+        if climate:
+            temp = climate.get("temperature")
+            if temp is not None:
+                await self._set_target_temperature(temp)
+
+        # Apply light settings
+        light = settings.get("light", {})
+        if light:
+            day_schedule = light.get("day")
+            night_schedule = light.get("night")
+            # Configure light schedules
+
+        # Apply tank/pump settings
+        tank = settings.get("tank", {})
+        if tank:
+            waters = tank.get("waters", [])
+            for water in waters:
+                pump_num = water.get("pumpNum")
+                schedules = water.get("waterSchedules", [])
+                # Configure pump schedules
+
+        return True
+    except Exception as e:
+        logger.error(f"Error applying settings: {e}")
+        return False
 ```
+
+If your integration doesn't need to respond to settings updates, don't implement this method (it will raise NotImplementedError by default, which is handled gracefully by the system).
 
 ### Error Handling and Retries
 
@@ -211,8 +285,12 @@ class MyCustomIntegration(Integration):
 ## Best Practices
 
 1. **Error Handling**: Always wrap I/O operations in try-except blocks with appropriate logging.
-2. **Resource Management**: Properly clean up resources in `stop()` method.
+2. **Resource Management**: Properly clean up resources in `disconnect()` method.
 3. **Configuration**: Make your integration configurable via the `config.yaml` file.
 4. **Logging**: Use the provided logger (`self.logger`) for all messages.
 5. **Documentation**: Document your integration's capabilities and configuration options.
-6. **Testing**: Write comprehensive tests for your integration. 
+6. **Testing**: Write comprehensive tests for your integration.
+7. **Data Logging**: Use `log_data()` method for all sensor readings. Include `pump_num` parameter for water/nutrient-related data.
+8. **Problem Reporting**: While the system automatically detects common issues (out-of-range values, sensor failures), you can report integration-specific problems using `report_problem()`.
+9. **Settings Support**: If your integration controls devices that can be remotely configured, implement `apply_settings()` to respond to API configuration updates.
+10. **Action Handling**: Register action handlers in your `connect()` method and implement proper error handling in handler functions. 

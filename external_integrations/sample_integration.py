@@ -102,11 +102,15 @@ class SampleIntegration(Integration):
             # PATTERN: Simulate connection or connect to real hardware/service
             logger.info("Sample Integration connected")
             
-            # Register action handlers for different action types
+            # Register action handlers for different action types supported by the API
             self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
             self.register_action_handler(ActionType.HUMIDITY, self.handle_humidity_action)
             self.register_action_handler(ActionType.LIGHT, self.handle_light_action)
             self.register_action_handler(ActionType.FAN, self.handle_fan_action)
+            self.register_action_handler(ActionType.TANK_ML, self.handle_tank_action)
+            self.register_action_handler(ActionType.PH_VALUE, self.handle_ph_value_action)
+            self.register_action_handler(ActionType.PH_ML, self.handle_ph_ml_action)
+            self.register_action_handler(ActionType.SUPPLEMENT_ML, self.handle_supplement_action)
             
             # PATTERN: Start a background task to update device values
             # This is a common pattern for devices that need polling
@@ -177,8 +181,8 @@ class SampleIntegration(Integration):
                 # Check if temperature is out of range and report a problem if needed
                 if device["value"] < 18.0 or device["value"] > 30.0:
                     self.report_problem(
-                        ProblemType.RANGE,
-                        ProblemStatus.TEMPERATURE,
+                        ProblemType.TEMPERATURE,
+                        ProblemStatus.RANGE,
                         f"Temperature out of range: {device['value']}°C",
                         priority=50,
                         user_can_resolve=True
@@ -190,8 +194,8 @@ class SampleIntegration(Integration):
                 # Check if humidity is out of range and report a problem if needed
                 if device["value"] < 30.0 or device["value"] > 70.0:
                     self.report_problem(
-                        ProblemType.RANGE,
-                        ProblemStatus.HUMIDITY,
+                        ProblemType.HUMIDITY,
+                        ProblemStatus.RANGE,
                         f"Humidity out of range: {device['value']}%",
                         priority=40,
                         user_can_resolve=True
@@ -278,6 +282,10 @@ class SampleIntegration(Integration):
             ActionType.HUMIDITY.value: self.handle_humidity_action,
             ActionType.LIGHT.value: self.handle_light_action,
             ActionType.FAN.value: self.handle_fan_action,
+            ActionType.TANK_ML.value: self.handle_tank_action,
+            ActionType.PH_VALUE.value: self.handle_ph_value_action,
+            ActionType.PH_ML.value: self.handle_ph_ml_action,
+            ActionType.SUPPLEMENT_ML.value: self.handle_supplement_action,
         }
         
         if action_type in handlers:
@@ -366,49 +374,61 @@ class SampleIntegration(Integration):
             
     async def handle_light_action(self, action_data: Dict[str, Any]) -> bool:
         """Handle light action.
-        
+
+        The API sends simple light on/off commands via actions.
+        Light schedules (day/night) are configured via settings, not actions.
+
         Args:
-            action_data: Action data from API
-            
+            action_data: Action data from API with 'value' (on/off state)
+
         Returns:
             bool: True if handled successfully
         """
         try:
             # Extract action details
             action_id = action_data.get("id")
-            value = action_data.get("value")
-            
+            value = action_data.get("value")  # Typically "on" or "off", or a state string
+
             # Find light controller device
             light_controller = None
             for name, device in self.devices.items():
-                if device["type"] == "light":
+                if device["type"] == "light" or device["type"] == "light_switch":
                     light_controller = name
                     break
-                    
+
             if light_controller:
+                # Convert value to appropriate format for your hardware
+                # For example, "on" -> 1, "off" -> 0
+                hardware_value = value
+                if isinstance(value, str):
+                    if value.lower() == "on":
+                        hardware_value = 1
+                    elif value.lower() == "off":
+                        hardware_value = 0
+
                 # Send command to device
                 await self.send_data({
                     "device": light_controller,
-                    "value": value
+                    "value": hardware_value
                 })
-                
+
                 # Log success
                 logger.info(f"Set light to {value}")
                 return True
             else:
                 logger.warning("No light controller found")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error handling light action: {e}")
             return False
             
     async def handle_fan_action(self, action_data: Dict[str, Any]) -> bool:
         """Handle fan action.
-        
+
         Args:
             action_data: Action data from API
-            
+
         Returns:
             bool: True if handled successfully
         """
@@ -416,32 +436,268 @@ class SampleIntegration(Integration):
             # Extract action details
             action_id = action_data.get("id")
             value = float(action_data.get("value", 0))
-            
+
             # Find fan controller device
             fan_controller = None
             for name, device in self.devices.items():
                 if device["type"] == "fan":
                     fan_controller = name
                     break
-                    
+
             if fan_controller:
                 # Send command to device
                 await self.send_data({
                     "device": fan_controller,
                     "value": value
                 })
-                
+
                 # Log success
                 logger.info(f"Set fan to {value}")
                 return True
             else:
                 logger.warning("No fan controller found")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error handling fan action: {e}")
             return False
-    
+
+    async def handle_tank_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle tank water amount action.
+
+        Args:
+            action_data: Action data from API with 'value' (amount in ML)
+
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            pump_number = action_data.get("pumpNumber")
+
+            logger.info(f"Setting tank water amount to {value}ML")
+
+            # In a real implementation, you would:
+            # - Update your tank monitoring system
+            # - Possibly trigger water level alerts
+            # - Log the new tank capacity
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling tank action: {e}")
+            return False
+
+    async def handle_ph_value_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle pH value target action.
+
+        Args:
+            action_data: Action data from API with 'value' (target pH)
+
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            pump_number = action_data.get("pumpNumber")
+
+            logger.info(f"Setting target pH to {value} for pump {pump_number}")
+
+            # In a real implementation, you would:
+            # - Update your pH controller with the new target
+            # - Enable automatic pH adjustment
+            # - Configure the dosing pump
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling pH value action: {e}")
+            return False
+
+    async def handle_ph_ml_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle pH adjustment volume action.
+
+        Args:
+            action_data: Action data from API with 'value' (volume in ML)
+                        and 'pumpNumber' (which pump to use)
+
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            pump_number = action_data.get("pumpNumber")
+
+            logger.info(f"Dosing {value}ML of pH adjuster from pump {pump_number}")
+
+            # In a real implementation, you would:
+            # - Activate the specified dosing pump
+            # - Dispense the specified volume
+            # - Log the dosing event for tracking
+            # - Monitor pH changes
+
+            # Log the pump action with pump number
+            self.log_data(LogType.PH_ML, value, pump_num=pump_number)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling pH ML action: {e}")
+            return False
+
+    async def handle_supplement_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle nutrient supplement volume action.
+
+        Args:
+            action_data: Action data from API with 'value' (volume in ML)
+                        and 'pumpNumber' (which pump to use)
+
+        Returns:
+            bool: True if handled successfully
+        """
+        try:
+            action_id = action_data.get("id")
+            value = float(action_data.get("value", 0))
+            pump_number = action_data.get("pumpNumber")
+
+            logger.info(f"Dosing {value}ML of nutrients from pump {pump_number}")
+
+            # In a real implementation, you would:
+            # - Activate the specified nutrient pump
+            # - Dispense the specified volume
+            # - Log the feeding event
+            # - Update nutrient tracking
+
+            # Log the supplement action with pump number
+            self.log_data(LogType.SUPPLEMENT_ML, value, pump_num=pump_number)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling supplement action: {e}")
+            return False
+
+    async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+        """Apply settings received from the API.
+
+        This demonstrates how to handle settings updates from the API.
+        Integrations can implement this to apply light schedules, climate
+        settings, pump schedules, etc.
+
+        Args:
+            settings: Settings dictionary containing:
+                - rdh_mode: bool
+                - status: str
+                - light: dict with 'day' and 'night' settings
+                - climate: dict with 'temperature', 'humidity', 'baseFanSpeed'
+                - tank: dict with 'waters', 'ph', 'amountML'
+
+        Returns:
+            bool: True if settings were applied successfully
+        """
+        try:
+            logger.info(f"Applying settings from API: {settings}")
+
+            # Apply light settings
+            # The API sends light schedules as strings (e.g., "06:00-18:00" or "auto")
+            light_settings = settings.get("light", {})
+            if light_settings:
+                day_setting = light_settings.get("day")   # e.g., "06:00-18:00" or schedule string
+                night_setting = light_settings.get("night")  # e.g., "off" or night schedule
+
+                logger.info(f"Light settings - Day: {day_setting}, Night: {night_setting}")
+
+                # In a real implementation, you would:
+                # - Parse the schedule strings
+                # - Set up timers or cron jobs for light control
+                # - Update your light controller with the new schedule
+                # Example: Parse "06:00-18:00" to turn lights on at 6am and off at 6pm
+
+                for name, device in self.devices.items():
+                    if device["type"] == "light" or device["type"] == "light_switch":
+                        logger.info(f"Configuring light schedule for {name}: Day={day_setting}, Night={night_setting}")
+                        # Here you would implement actual scheduling logic
+
+            # Apply climate settings
+            climate_settings = settings.get("climate", {})
+            if climate_settings:
+                target_temp = climate_settings.get("temperature")
+                target_humidity = climate_settings.get("humidity")
+                fan_speed = climate_settings.get("baseFanSpeed")
+
+                logger.info(f"Climate settings - Temp: {target_temp}, Humidity: {target_humidity}, Fan: {fan_speed}")
+
+                # Apply temperature setting
+                if target_temp is not None:
+                    for name, device in self.devices.items():
+                        if device["type"] == "temperature":
+                            await self.send_data({"device": name, "value": target_temp})
+
+                # Apply humidity setting
+                if target_humidity is not None:
+                    for name, device in self.devices.items():
+                        if device["type"] == "humidity":
+                            await self.send_data({"device": name, "value": target_humidity})
+
+                # Apply fan speed
+                if fan_speed is not None:
+                    for name, device in self.devices.items():
+                        if device["type"] == "fan":
+                            await self.send_data({"device": name, "value": fan_speed})
+
+            # Apply tank/water settings
+            tank_settings = settings.get("tank", {})
+            if tank_settings:
+                waters = tank_settings.get("waters", [])  # Array of pump configurations
+                ph_setting = tank_settings.get("ph", {})  # pH target and pump number
+                tank_amount = tank_settings.get("amountML")  # Total tank capacity
+
+                logger.info(f"Tank settings - {len(waters)} pump(s) configured, pH: {ph_setting}, Tank capacity: {tank_amount}ML")
+
+                # Process water schedules for each pump
+                for water in waters:
+                    pump_num = water.get("pumpNum")
+                    schedules = water.get("waterSchedules", [])
+
+                    logger.info(f"Configuring pump {pump_num} with {len(schedules)} schedule(s)")
+
+                    # Each schedule contains:
+                    # - waterAmountML: Amount to dispense
+                    # - startTime: When to start (time string)
+                    # - endTime: When to end (time string)
+                    # - scheduleType: Type of schedule
+                    for schedule in schedules:
+                        amount = schedule.get("waterAmountML")
+                        start = schedule.get("startTime")
+                        end = schedule.get("endTime")
+                        schedule_type = schedule.get("scheduleType")
+
+                        logger.info(f"  Pump {pump_num}: {amount}ML from {start} to {end} ({schedule_type})")
+
+                        # In a real implementation, you would:
+                        # - Parse the time strings
+                        # - Set up timers or cron jobs for watering
+                        # - Configure the pump controller
+                        # - Track water usage
+
+                # Apply pH settings
+                if ph_setting:
+                    target_ph = ph_setting.get("ph")
+                    ph_pump_num = ph_setting.get("pumpNum")
+                    if target_ph and ph_pump_num:
+                        logger.info(f"Setting pH target to {target_ph} using pump {ph_pump_num}")
+                        # Configure pH controller with target and pump number
+
+            logger.info("Settings applied successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error applying settings: {e}")
+            return False
+
     async def disconnect(self):
         """Disconnect from the devices/service and clean up resources.
         

@@ -10,6 +10,9 @@ A bridge application to connect various sensors and controllers for cannabis gro
   - HTTP endpoints
   - Serial communication
 - Data collection with persistence
+- Regular API communication with automatic data transmission
+- Automatic problem detection (sensor failures, out-of-range values)
+- Bidirectional communication with API for receiving settings and commands
 - Command handling for device control
 - Web interface for monitoring and manual control
 - Extensible architecture for adding new device types and integrations

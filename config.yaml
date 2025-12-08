@@ -2,15 +2,15 @@ api:
   batch_size: 100
   connection_timeout: 300
   log_values: true
-  poll_interval: 30
+  poll_interval: 5
   retry_max_attempts: 5
   retry_max_backoff: 60
   retry_min_backoff: 1
-  transmission_interval: 60
-  url: http://localhost:8080
+  transmission_interval: 10
+  url: http://192.168.1.231:8080
 general:
   api_logs_dir: logs/api
-  collection_interval: 60
+  collection_interval: 10
   data_dir: data
   external_integrations_dir: external_integrations
   log_file: logs/app.log
@@ -90,7 +90,7 @@ integrations:
         name: sample_light_switch
         type: light_switch
     enabled: true
-    update_interval: 60
+    update_interval: 10
   serial:
     baudrate: 9600
     bytesize: 8

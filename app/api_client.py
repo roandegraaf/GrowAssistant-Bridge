@@ -84,7 +84,10 @@ class ApiClient:
         # Action handling
         self._pending_actions = {}  # Actions waiting for resolution
         self._action_handlers = {}  # Callbacks for handling actions
-        
+
+        # Settings handling
+        self._settings_callback = None  # Callback for when settings are received
+
         self._initialized = True
         
         logger.info("API client initialized")
@@ -195,15 +198,19 @@ class ApiClient:
         return value_logger
     
     # New methods for API data format
-    def add_data_log(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date: Optional[datetime] = None):
+    def add_data_log(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date: Optional[datetime] = None, pump_num: Optional[int] = None):
         """Add a data log entry.
-        
+
         Args:
             log_type: Type of log (can be string or LogType enum)
             value: Value to log
             log_date: Timestamp (defaults to now)
+            pump_num: Optional pump number (only for pump-related logs)
         """
-        self._data_logs.append(create_data_log(log_type, value, log_date))
+        data_log = create_data_log(log_type, value, log_date)
+        if pump_num is not None:
+            data_log["pumpNum"] = pump_num
+        self._data_logs.append(data_log)
         
     def add_problem(self, problem_type: Union[ProblemType, str], status: Union[ProblemStatus, str], 
                     description: str, priority: int = 0, user_can_resolve: bool = True, 
@@ -236,7 +243,7 @@ class ApiClient:
         
     def register_action_handler(self, action_type: Union[ActionType, str], handler: Callable):
         """Register a handler for a specific action type.
-        
+
         Args:
             action_type: Type of action to handle
             handler: Callback function(action_data) -> bool
@@ -244,8 +251,97 @@ class ApiClient:
         # Convert enum to string if needed
         if isinstance(action_type, ActionType):
             action_type = action_type.value
-            
+
         self._action_handlers[action_type] = handler
+
+    def register_settings_callback(self, callback: Callable):
+        """Register a callback for when settings are received from the API.
+
+        Args:
+            callback: Async callback function(settings: Dict) -> None
+        """
+        self._settings_callback = callback
+
+    def _detect_problems_from_data(self, data_points: List[Dict[str, Any]]):
+        """Detect problems from data points.
+
+        This method analyzes data points for potential issues like:
+        - Out of range values
+        - Sensor failures
+        - Connection issues
+
+        Args:
+            data_points: List of data points to analyze
+        """
+        # Define acceptable ranges for different sensor types
+        # Maps data type -> problem type for that sensor
+        type_mapping = {
+            "TEMPERATURE": ProblemType.TEMPERATURE,
+            "HUMIDITY": ProblemType.HUMIDITY,
+            "PH": ProblemType.PH,
+            "PH_VALUE": ProblemType.PH,
+            "TANK_ML": ProblemType.TANK,
+            "SUPPLEMENT_ML": ProblemType.SUPPLEMENT,
+            "LIGHT": ProblemType.LIGHT,
+            "FAN": ProblemType.FAN,
+        }
+
+        ranges = {
+            "TEMPERATURE": {"min": -10, "max": 50},
+            "HUMIDITY": {"min": 0, "max": 100},
+            "PH": {"min": 0, "max": 14},
+            "PH_VALUE": {"min": 0, "max": 14},
+            "TANK_ML": {"min": 0, "max": None},
+        }
+
+        for point in data_points:
+            data_type = point.get("type", "").upper()
+            value = point.get("value")
+            integration = point.get("integration", "Unknown")
+
+            # Skip if no value or type
+            if value is None or not data_type:
+                continue
+
+            # Get the problem type for this data type
+            problem_type = type_mapping.get(data_type, ProblemType.CLIENT)
+
+            # Check if value indicates a sensor failure (null, error, etc.)
+            if isinstance(value, str) and value.lower() in ["error", "failed", "null", "none", "unavailable"]:
+                self.add_problem(
+                    problem_type=problem_type,
+                    status=ProblemStatus.CONNECTION,  # Sensor failure is a connection issue
+                    description=f"Sensor failure detected for {data_type} from {integration}",
+                    priority=70,
+                    user_can_resolve=False,
+                    resolved=False
+                )
+                continue
+
+            # Try to convert value to float for range checking
+            try:
+                numeric_value = float(value)
+
+                # Check if value is out of acceptable range
+                if data_type in ranges:
+                    range_config = ranges[data_type]
+                    min_val = range_config.get("min")
+                    max_val = range_config.get("max")
+
+                    if (min_val is not None and numeric_value < min_val) or \
+                       (max_val is not None and numeric_value > max_val):
+                        self.add_problem(
+                            problem_type=problem_type,
+                            status=ProblemStatus.RANGE,
+                            description=f"{data_type} value {numeric_value} is out of range from {integration}",
+                            priority=50,
+                            user_can_resolve=True,
+                            resolved=False
+                        )
+
+            except (ValueError, TypeError):
+                # Value is not numeric, which might be okay for some types
+                pass
     
     async def send_data(self, data_points: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, str]:
         """Send data to the API.
@@ -281,18 +377,24 @@ class ApiClient:
         
         # Process legacy data points if provided (backward compatibility)
         if data_points:
+            # Detect problems from the data points first
+            self._detect_problems_from_data(data_points)
+
             for point in data_points:
                 # Convert legacy data points to new format
                 log_type = point.get("type", "SYSTEM")
                 value = point.get("value", "")
                 timestamp = point.get("timestamp")
                 if timestamp:
-                    log_date = datetime.fromtimestamp(timestamp)
+                    log_date = datetime.fromtimestamp(timestamp / 1000)  # Convert from milliseconds
                 else:
                     log_date = None
-                
-                self.add_data_log(log_type, value, log_date)
-                
+
+                # Extract pumpNum if present (only for pump-related data)
+                pump_num = point.get("pumpNum") or point.get("pump_num")
+
+                self.add_data_log(log_type, value, log_date, pump_num)
+
         # Prepare payload in the new format
         payload = {
             "dataLogs": self._data_logs,
@@ -422,38 +524,55 @@ class ApiClient:
     
     async def _process_response(self, response_data: Dict[str, Any]):
         """Process API response data.
-        
+
         Args:
             response_data: Raw response data from API
         """
         # Parse the response
         parsed = parse_api_response(response_data)
-        
+
+        # Extract and process settings from response
+        settings = {
+            "rdh_mode": parsed.get("rdh_mode", False),
+            "status": parsed.get("status", ""),
+            "light": parsed.get("light", {}),
+            "climate": parsed.get("climate", {}),
+            "tank": parsed.get("tank", {})
+        }
+
+        # Call settings callback if registered
+        if self._settings_callback:
+            try:
+                await self._settings_callback(settings)
+                logger.debug("Settings callback executed successfully")
+            except Exception as e:
+                logger.error(f"Error in settings callback: {e}")
+
         # Process actions
         for action in parsed.get("actions", []):
             action_id = action.get("id")
             action_type = action.get("type")
-            
+
             if not action_id or not action_type:
                 logger.warning(f"Received action with missing id or type: {action}")
                 continue
-                
+
             # Mark as received
             self.acknowledge_action(action_id, received=True, resolved=False)
-            
+
             # Try to handle the action with registered handler
             if action_type in self._action_handlers:
                 try:
                     handler = self._action_handlers[action_type]
                     # Call the handler asynchronously
                     success = await handler(action)
-                    
+
                     # If handler was successful, mark as resolved
                     if success:
                         self.acknowledge_action(action_id, received=True, resolved=True)
-                    
+
                     logger.info(f"Handled action {action_id} of type {action_type}, success: {success}")
-                        
+
                 except Exception as e:
                     logger.error(f"Error handling action {action_id} of type {action_type}: {e}")
             else:

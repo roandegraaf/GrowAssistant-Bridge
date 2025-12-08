@@ -157,7 +157,10 @@ class Application:
         # Start the API client
         await api_client.start()
         await api_client.start_command_polling()
-        
+
+        # Register settings callback with API client
+        api_client.register_settings_callback(self._apply_settings)
+
         # Load integrations
         await self._load_integrations()
         
@@ -273,6 +276,25 @@ class Application:
         
         logger.info("Application stopped")
         
+    async def _apply_settings(self, settings: Dict[str, Any]):
+        """Apply settings received from the API to integrations.
+
+        Args:
+            settings: Settings dictionary containing light, climate, tank, etc.
+        """
+        logger.info(f"Applying settings from API: {settings}")
+
+        # Apply settings to all integrations
+        for name, integration in self._integrations.items():
+            try:
+                await integration.apply_settings(settings)
+                logger.debug(f"Applied settings to integration: {name}")
+            except NotImplementedError:
+                # Integration doesn't support settings, skip
+                logger.debug(f"Integration {name} does not support settings")
+            except Exception as e:
+                logger.error(f"Error applying settings to integration {name}: {e}")
+
     async def _load_integrations(self):
         """Load and initialize integrations."""
         logger.info("Loading integrations")

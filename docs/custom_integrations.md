@@ -98,6 +98,14 @@ Every integration must implement these methods:
 - Cancels any background tasks
 - Closes connections to hardware/services
 
+### `apply_settings(settings) -> bool` (Optional)
+
+- Receives and applies settings from the API
+- Called automatically when the API returns configuration updates
+- Allows integrations to respond to remote settings changes
+- Should return True if successful, False otherwise
+- Raises NotImplementedError if the integration doesn't support settings (default behavior)
+
 ## API Data Format
 
 GrowAssistant Bridge communicates with the GrowAssistant API using a specific data format that includes three main components:
@@ -113,8 +121,9 @@ GrowAssistant Bridge communicates with the GrowAssistant API using a specific da
 Data logs represent sensor readings or other data points collected by your integration. Each log entry includes:
 
 - `logDate`: ISO-formatted timestamp
-- `logType`: Type of data (e.g., TEMPERATURE, HUMIDITY)
+- `logType`: Type of data (e.g., TEMPERATURE, HUMIDITY, WATER)
 - `value`: The actual value
+- `pumpNum`: (Optional) Pump number for water/nutrient-related logs
 
 Example of sending a data log:
 
@@ -122,7 +131,17 @@ Example of sending a data log:
 # In your integration class:
 self.log_data(LogType.TEMPERATURE, 25.5)
 self.log_data(LogType.HUMIDITY, 65)
+
+# For pump-related data, include the pump number
+self.log_data(LogType.TANK_ML, 500, pump_num=1)  # 500ml from pump 1
 ```
+
+**Automatic Problem Detection**: The system automatically analyzes data logs and detects potential issues such as:
+- Sensor failures (error values, null readings)
+- Out-of-range values (temperature, humidity, pH)
+- Connection issues
+
+When problems are detected, they're automatically reported to the API.
 
 ### Problems
 
@@ -141,8 +160,8 @@ Example of reporting a problem:
 ```python
 # In your integration class:
 self.report_problem(
-    ProblemType.RANGE,
-    ProblemStatus.TEMPERATURE,
+    ProblemType.TEMPERATURE,
+    ProblemStatus.RANGE,
     "Temperature out of range: 35.2°C",
     priority=70,
     user_can_resolve=True
@@ -167,35 +186,147 @@ Example of handling actions:
 async def connect(self):
     # Register handlers during initialization
     self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
-    # ... other initialization code
+    self.register_action_handler(ActionType.LIGHT, self.handle_light_action)
+    self.register_action_handler(ActionType.SUPPLEMENT_ML, self.handle_supplement_action)
+    # ... other handlers
 
 async def handle_temperature_action(self, action_data):
     # Extract values from action_data
     value = float(action_data.get("value", 0))
     action_id = action_data.get("id")
-    
+
     # Perform the action (e.g., set temperature)
     success = await self._set_temperature(value)
-    
+
     # Acknowledge completion
     if success:
         self.acknowledge_action(action_id, received=True, resolved=True)
-        
+
+    return success
+
+async def handle_light_action(self, action_data):
+    # Light control is typically on/off, not dimming
+    value = action_data.get("value")  # "on" or "off"
+    action_id = action_data.get("id")
+
+    # Convert to hardware format
+    if value == "on":
+        await self._turn_light_on()
+    elif value == "off":
+        await self._turn_light_off()
+
+    return True
+
+async def handle_supplement_action(self, action_data):
+    # Pump actions include pumpNumber
+    value = float(action_data.get("value", 0))  # ML to dispense
+    pump_number = action_data.get("pumpNumber")  # Which pump to use
+    action_id = action_data.get("id")
+
+    # Dispense nutrients from the specified pump
+    success = await self._dispense_supplement(pump_number, value)
+
+    # Log the action with pump number for tracking
+    if success:
+        self.log_data(LogType.NUTRITION, value, pump_num=pump_number)
+
     return success
 ```
 
 ### Action Types
 
-The following action types are supported:
+The following action types are supported by the API:
 
-- `TEMPERATURE`: Temperature control
-- `HUMIDITY`: Humidity control
-- `LIGHT`: Light control
-- `FAN`: Fan speed control
-- `TANK_ML`: Water tank volume
-- `PH_VALUE`: pH value control
-- `PH_ML`: pH adjustment volume
-- `SUPPLEMENT_ML`: Nutrient supplement volume
+- `TEMPERATURE`: Set target temperature (value in °C)
+- `HUMIDITY`: Set target humidity (value in %)
+- `LIGHT`: Light on/off control (value typically "on" or "off")
+- `FAN`: Fan speed control (value as percentage or speed level)
+- `TANK_ML`: Set tank water capacity (value in milliliters)
+- `PH_VALUE`: Set target pH value (value as pH level, includes pumpNumber)
+- `PH_ML`: Dispense pH adjuster (value in milliliters, includes pumpNumber)
+- `SUPPLEMENT_ML`: Dispense nutrient supplement (value in milliliters, includes pumpNumber)
+
+**Note about pump actions**: Actions for pH and supplements include a `pumpNumber` field to specify which dosing pump to use. Your integration should extract this from `action_data.get("pumpNumber")` and use it to control the correct pump.
+
+### Settings Updates
+
+The API sends configuration updates with each response, including:
+
+- `rdhMode`: Current RDH (Run Dry Harvest) mode status (boolean)
+- `status`: Current environment status (string)
+- `light`: Light schedules with day/night settings (strings, e.g., "06:00-18:00" or "auto")
+- `climate`: Target temperature (°C), humidity (%), and fan speed (baseFanSpeed)
+- `tank`: Water schedules for pumps (with pumpNum, waterAmountML, startTime, endTime), pH settings (pH value and pumpNum), and tank capacity (amountML)
+
+Your integration can receive and apply these settings by implementing the `apply_settings` method:
+
+```python
+async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+    """Apply settings received from the API."""
+    try:
+        # Apply climate settings
+        climate = settings.get("climate", {})
+        if climate:
+            temp = climate.get("temperature")
+            humidity = climate.get("humidity")
+            fan_speed = climate.get("baseFanSpeed")
+
+            # Update your devices with new settings
+            if temp is not None:
+                await self._set_target_temperature(temp)
+            if humidity is not None:
+                await self._set_target_humidity(humidity)
+
+        # Apply light settings
+        # Light schedules are strings like "06:00-18:00" or "auto"
+        light = settings.get("light", {})
+        if light:
+            day_schedule = light.get("day")    # e.g., "06:00-18:00"
+            night_schedule = light.get("night")  # e.g., "off"
+
+            # Parse the schedule strings and set up timers
+            # Example: "06:00-18:00" means lights on at 6am, off at 6pm
+            if day_schedule:
+                # Parse and apply day schedule
+                logger.info(f"Configuring day light schedule: {day_schedule}")
+                # You would implement timer/cron logic here
+
+        # Apply tank/water settings
+        tank = settings.get("tank", {})
+        if tank:
+            waters = tank.get("waters", [])  # Array of pump configurations
+            ph_setting = tank.get("ph", {})  # pH target and pump
+            tank_capacity = tank.get("amountML")  # Tank capacity
+
+            # Configure each pump with its schedules
+            for water in waters:
+                pump_num = water.get("pumpNum")
+                schedules = water.get("waterSchedules", [])
+
+                # Each schedule defines when and how much to water
+                for schedule in schedules:
+                    amount_ml = schedule.get("waterAmountML")
+                    start_time = schedule.get("startTime")
+                    end_time = schedule.get("endTime")
+                    schedule_type = schedule.get("scheduleType")
+
+                    # Set up timer for this watering schedule
+                    logger.info(f"Pump {pump_num}: {amount_ml}ML from {start_time} to {end_time}")
+                    # You would implement timer/cron logic here
+
+            # Configure pH controller
+            if ph_setting:
+                target_ph = ph_setting.get("ph")
+                ph_pump = ph_setting.get("pumpNum")
+                logger.info(f"pH target: {target_ph} using pump {ph_pump}")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error applying settings: {e}")
+        return False
+```
+
+If your integration doesn't need to respond to settings (e.g., read-only sensors), you don't need to implement this method.
 
 ## Configuration
 
@@ -232,15 +363,19 @@ The system will pass this configuration to your integration's `__init__` method.
 
 7. **Standards**: Follow the data format standards used by the system for consistent behavior.
 
-8. **Log Appropriate Data**: Send data logs for all relevant sensor readings.
+8. **Log Appropriate Data**: Send data logs for all relevant sensor readings. Include `pump_num` when logging water/nutrient data.
 
-9. **Report Problems Promptly**: Use the problem reporting system to alert users of issues.
+9. **Report Problems Promptly**: Use the problem reporting system to alert users of issues. Note that common problems (out-of-range values, sensor failures) are automatically detected.
 
 10. **Handle Actions Robustly**: Implement error handling in action handlers.
 
 11. **Acknowledge Receipt**: Always acknowledge actions even if you can't complete them.
 
 12. **Provide Clear Descriptions**: Use clear, actionable descriptions for problems.
+
+13. **Implement Settings When Needed**: If your integration controls devices that can be configured remotely (lights, climate, pumps), implement the `apply_settings` method to respond to configuration updates from the API.
+
+14. **Handle Settings Gracefully**: If implementing `apply_settings`, handle partial or missing settings data gracefully - apply what's available and log any issues.
 
 ## Troubleshooting
 
@@ -267,6 +402,13 @@ The system will pass this configuration to your integration's `__init__` method.
 1. Check that you've registered action handlers in your `connect` method
 2. Verify that your action handler function returns the correct result
 3. Look for errors in the action handler logs
+
+### Settings Not Being Applied
+
+1. Verify that you've implemented the `apply_settings` method in your integration
+2. Check the logs for errors in the settings callback
+3. Ensure your integration doesn't raise NotImplementedError from `apply_settings`
+4. Verify that the API is sending settings data in the response
 
 ## Example Integrations
 

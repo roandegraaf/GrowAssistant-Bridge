@@ -2,6 +2,7 @@
 API Types Module.
 
 This module defines the data types and constants used for API communication.
+These types MUST match the API (ValueType, ProblemType, ProblemStatus enums).
 """
 
 from enum import Enum
@@ -10,9 +11,10 @@ from datetime import datetime
 import uuid
 
 
-# Action Types
+# Action Types (maps to API ValueType enum)
 class ActionType(str, Enum):
-    """Types of actions that can be performed or requested."""
+    """Types of actions that can be performed or requested.
+    Maps to API's ValueType enum."""
     TEMPERATURE = "TEMPERATURE"
     HUMIDITY = "HUMIDITY"
     LIGHT = "LIGHT"
@@ -23,37 +25,45 @@ class ActionType(str, Enum):
     SUPPLEMENT_ML = "SUPPLEMENT_ML"
 
 
-# Problem Types
-class ProblemType(str, Enum):
-    """Types of problems that can occur."""
-    CONNECTION = "CONNECTION"  # Connection issues
-    SENSOR = "SENSOR"          # Sensor failures
-    ACTUATOR = "ACTUATOR"      # Actuator failures
-    RANGE = "RANGE"            # Value out of expected range
-    SYSTEM = "SYSTEM"          # System errors
-
-
-# Problem Status
+# Problem Status (matches API ProblemStatus enum)
 class ProblemStatus(str, Enum):
-    """Status types for problems."""
+    """Status categories for problems.
+    MUST match API's ProblemStatus enum exactly."""
+    CONNECTION = "CONNECTION"
+    EMPTY = "EMPTY"
+    RANGE = "RANGE"
+    OTHER = "OTHER"
+
+
+# Problem Types (matches API ProblemType enum)
+class ProblemType(str, Enum):
+    """Types of problems that can occur.
+    MUST match API's ProblemType enum exactly."""
     TEMPERATURE = "TEMPERATURE"
     HUMIDITY = "HUMIDITY"
     LIGHT = "LIGHT"
-    WATER = "WATER"
+    FAN = "FAN"
+    TANK = "TANK"
+    SUPPLEMENT = "SUPPLEMENT"
     PH = "PH"
-    NUTRITION = "NUTRITION"
+    CLIENT = "CLIENT"
+    PLANT = "PLANT"
+    SPACE = "SPACE"
 
 
-# Data Log Types
+# Data Log Types (maps to API ValueType enum)
 class LogType(str, Enum):
-    """Types of data logs."""
+    """Types of data logs.
+    Maps to API's ValueType enum - use these for sending sensor data."""
     TEMPERATURE = "TEMPERATURE"
     HUMIDITY = "HUMIDITY"
     LIGHT = "LIGHT"
-    WATER = "WATER"
-    PH = "PH"
-    NUTRITION = "NUTRITION"
-    SYSTEM = "SYSTEM"
+    FAN = "FAN"
+    TANK_ML = "TANK_ML"
+    PH_VALUE = "PH_VALUE"
+    PH_ML = "PH_ML"
+    SUPPLEMENT_ML = "SUPPLEMENT_ML"
+    PLANT_WATER = "PLANT_WATER"
 
 
 # Helper functions for creating API data structures

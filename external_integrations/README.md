@@ -16,6 +16,9 @@ This directory is where you can add your own custom integrations for the GrowAss
      - `receive_data()`: Receive data from your device/service
      - `get_device_data()`: Get current state for all devices
      - `disconnect()`: Clean up resources when integration is stopped
+   - Optional methods you can implement:
+     - `apply_settings(settings)`: Receive and apply settings from the API
+     - `handle_action(action_data)`: Handle actions requested by the API
    - Decorate your class with `@register_integration`
 
 3. **Create configuration for your integration**:
@@ -35,6 +38,12 @@ This directory is where you can add your own custom integrations for the GrowAss
 - **Error Handling**: Add proper error handling for robustness.
 - **Dependencies**: If your integration requires external libraries, make sure to include them in your requirements.
 - **Testing**: Test your integration thoroughly before deploying to production.
+- **API Communication**: Use the helper methods provided by the Integration base class:
+  - `self.log_data(LogType, value, pump_num=None)`: Send sensor readings to the API
+  - `self.report_problem(ProblemType, status, description, ...)`: Report issues to the API
+  - `self.register_action_handler(ActionType, handler)`: Register handlers for API actions
+  - `self.acknowledge_action(action_id, received, resolved)`: Acknowledge actions from the API
+- **Automatic Problem Detection**: The system automatically detects common problems (out-of-range values, sensor failures) from your data logs.
 
 ## Example Integration Structure
 
@@ -62,7 +71,15 @@ class MyIntegration(Integration):
     async def get_device_data(self):
         # Return current state of all devices
         return {"my_device": {"value": 123}}
-        
+
+    async def apply_settings(self, settings):
+        # Optional: Apply settings from API
+        # Implement only if your integration needs to respond to settings
+        climate = settings.get("climate", {})
+        if climate.get("temperature"):
+            await self._set_target_temperature(climate["temperature"])
+        return True
+
     async def disconnect(self):
         # Clean up resources
         pass
@@ -84,4 +101,10 @@ integrations:
 ## Additional Resources
 
 - Check the existing built-in integrations in the `app/integrations/` directory for more examples.
-- If you're creating a new sensor type, you may need to update the registry to handle it correctly. 
+- See `sample_integration.py` in this directory for a complete, documented example.
+- Read the [Custom Integrations Guide](../docs/custom_integrations.md) for detailed documentation on:
+  - API data format (dataLogs, problems, actions, settings)
+  - Problem detection and reporting
+  - Action handling
+  - Settings application
+  - Best practices and troubleshooting 

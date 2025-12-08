@@ -51,10 +51,10 @@ class DeviceRegistry:
         self._actuators: Dict[str, str] = {}
         
         # Maps device types to common actions they support
-        # Example: {"pump": ["on", "off"], "light": ["on", "off", "dim"]}
+        # These actions should match what the GrowAssistant API actually supports
         self._device_type_actions: Dict[str, List[str]] = {
             "pump": ["on", "off"],
-            "light": ["on", "off", "dim"],
+            "light": ["on", "off"],  # API only supports on/off, not dimming
             "fan": ["on", "off", "speed"],
             "heater": ["on", "off", "temperature"],
             "humidity": ["on", "off", "level"],
