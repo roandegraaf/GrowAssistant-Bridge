@@ -5,14 +5,14 @@ This module provides shared HTTP utility functions for building
 headers and handling common HTTP operations across the application.
 """
 
-from typing import Dict, Optional
+from typing import Optional
 
 
 def build_headers(
     content_type: str = "application/json",
     accept: str = "application/json",
-    extra_headers: Optional[Dict[str, str]] = None,
-) -> Dict[str, str]:
+    extra_headers: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
     """Build standard HTTP headers for API requests.
 
     Args:
@@ -39,7 +39,7 @@ def build_auth_headers(
     token: Optional[str] = None,
     content_type: str = "application/json",
     accept: str = "application/json",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build HTTP headers with authentication.
 
     Args:
@@ -64,7 +64,7 @@ def build_auth_headers(
 
 def get_client_headers(
     auth_manager, include_client_id: bool = True, include_token: bool = False
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build headers using auth manager credentials.
 
     This is a convenience function that integrates with the AuthManager.

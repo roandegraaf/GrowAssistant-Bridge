@@ -18,7 +18,7 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
 
 from app.api_client import api_client
 from app.auth import auth_manager
@@ -77,9 +77,9 @@ class Application:
         if self._initialized:
             return
 
-        self._integrations: Dict[str, Integration] = {}
+        self._integrations: dict[str, Integration] = {}
         self._running = False
-        self._tasks: Set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task] = set()
         self._initialized = True
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # Store the loop
 
@@ -286,7 +286,7 @@ class Application:
 
         logger.info("Application stopped")
 
-    async def _apply_settings(self, settings: Dict[str, Any]):
+    async def _apply_settings(self, settings: dict[str, Any]):
         """Apply settings received from the API to integrations.
 
         Args:
@@ -541,7 +541,7 @@ class Application:
 
         logger.info("Command execution task stopped")
 
-    async def _process_command(self, command: Dict[str, Any]):
+    async def _process_command(self, command: dict[str, Any]):
         """Process a command from the API.
 
         Args:

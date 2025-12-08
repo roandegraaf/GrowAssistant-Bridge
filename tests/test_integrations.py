@@ -5,7 +5,8 @@ This module tests the Integration abstract base class, registration
 decorator, config schema validation, and integration discovery.
 """
 
-from typing import Any, Dict, Generator
+from collections.abc import Generator
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -37,13 +38,13 @@ class TestIntegrationBaseClass:
             async def connect(self) -> bool:
                 return True
 
-            async def send_data(self, data: Dict[str, Any]) -> bool:
+            async def send_data(self, data: dict[str, Any]) -> bool:
                 return True
 
-            async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+            async def receive_data(self) -> Generator[dict[str, Any], None, None]:
                 yield {"test": "data"}
 
-            async def get_device_data(self) -> Dict[str, Any]:
+            async def get_device_data(self) -> dict[str, Any]:
                 return {"device1": {"value": 42}}
 
         return TestIntegration

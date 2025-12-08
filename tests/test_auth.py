@@ -383,9 +383,11 @@ class TestAuthManagerWaiting:
             "general.data_dir": str(data_dir),
         }.get(key, default)
 
-        with patch("app.auth.config", mock_config), patch(
-            "app.auth.AUTH_POLL_INTERVAL", 0.1
-        ), patch("app.auth.SPACE_CREATION_POLL_INTERVAL", 0.1):
+        with (
+            patch("app.auth.config", mock_config),
+            patch("app.auth.AUTH_POLL_INTERVAL", 0.1),
+            patch("app.auth.SPACE_CREATION_POLL_INTERVAL", 0.1),
+        ):
             from app.auth import AuthManager
             from app.utils.singleton import SingletonMeta
 

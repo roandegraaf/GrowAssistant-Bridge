@@ -10,15 +10,10 @@ import json
 import logging
 import os
 import uuid
-from typing import Dict, Literal, Optional, Tuple
+from typing import Literal, Optional
 
 import httpx
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import config
 from app.constants import (
@@ -178,7 +173,7 @@ class AuthManager(metaclass=SingletonMeta):
             logger.error(f"Error validating credentials: {e}")
             return False
 
-    def _get_auth_headers(self) -> Dict[str, str]:
+    def _get_auth_headers(self) -> dict[str, str]:
         """Get authentication headers for API requests.
 
         Returns:
@@ -299,7 +294,7 @@ class AuthManager(metaclass=SingletonMeta):
 
     async def check_connection_status(
         self,
-    ) -> Tuple[bool, Literal["not_connected", "connected", "ready"]]:
+    ) -> tuple[bool, Literal["not_connected", "connected", "ready"]]:
         """Check if client has been connected to an environment.
 
         Returns:

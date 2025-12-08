@@ -11,15 +11,10 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import httpx
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 # Import api_types for the new data format
 from app.api_types import (
@@ -126,7 +121,7 @@ class ApiClient(metaclass=SingletonMeta):
 
         logger.info("API Client stopped")
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get headers for API requests.
 
         Returns:
@@ -137,7 +132,7 @@ class ApiClient(metaclass=SingletonMeta):
             client_id = auth_manager.get_client_id()
         return build_auth_headers(client_id=client_id)
 
-    def _get_api_value_logger(self, data_point: Dict[str, Any]) -> logging.Logger:
+    def _get_api_value_logger(self, data_point: dict[str, Any]) -> logging.Logger:
         """Create a logger for an individual API value.
 
         Args:
@@ -270,7 +265,7 @@ class ApiClient(metaclass=SingletonMeta):
         """
         self._settings_callback = callback
 
-    def _validate_send_preconditions(self) -> Tuple[bool, str, Optional[str]]:
+    def _validate_send_preconditions(self) -> tuple[bool, str, Optional[str]]:
         """Validate preconditions for sending data.
 
         Returns:
@@ -291,7 +286,7 @@ class ApiClient(metaclass=SingletonMeta):
 
         return True, "", client_id
 
-    def _process_legacy_data_points(self, data_points: List[Dict[str, Any]]) -> None:
+    def _process_legacy_data_points(self, data_points: list[dict[str, Any]]) -> None:
         """Process legacy data points and convert to new format.
 
         Args:
@@ -375,7 +370,7 @@ class ApiClient(metaclass=SingletonMeta):
             value_logger.info(f"Client ID: {client_id}")
             value_logger.info(f"Status: {status}")
 
-    def _clear_sent_data(self) -> Tuple[int, int, int]:
+    def _clear_sent_data(self) -> tuple[int, int, int]:
         """Clear sent data and return counts.
 
         Returns:
@@ -387,7 +382,7 @@ class ApiClient(metaclass=SingletonMeta):
         self._actions = []
         return counts
 
-    def _detect_problems_from_data(self, data_points: List[Dict[str, Any]]):
+    def _detect_problems_from_data(self, data_points: list[dict[str, Any]]):
         """Detect problems from data points.
 
         This method analyzes data points for potential issues like:
@@ -479,8 +474,8 @@ class ApiClient(metaclass=SingletonMeta):
                 pass
 
     async def send_data(
-        self, data_points: Optional[List[Dict[str, Any]]] = None
-    ) -> Tuple[bool, str]:
+        self, data_points: Optional[list[dict[str, Any]]] = None
+    ) -> tuple[bool, str]:
         """Send data to the API.
 
         Args:
@@ -560,7 +555,7 @@ class ApiClient(metaclass=SingletonMeta):
             logger.exception(f"Unexpected error sending data: {str(e)}")
             return False, f"Unexpected error: {str(e)}"
 
-    async def _process_response(self, response_data: Dict[str, Any]):
+    async def _process_response(self, response_data: dict[str, Any]):
         """Process API response data.
 
         Args:
@@ -618,7 +613,7 @@ class ApiClient(metaclass=SingletonMeta):
             else:
                 logger.warning(f"No handler registered for action type: {action_type}")
 
-    async def poll_commands(self) -> Optional[List[Dict[str, Any]]]:
+    async def poll_commands(self) -> Optional[list[dict[str, Any]]]:
         """Poll for commands from the API.
 
         Returns:
@@ -697,7 +692,7 @@ class ApiClient(metaclass=SingletonMeta):
                 logger.error(f"Error in command polling task: {str(e)}")
                 await asyncio.sleep(interval)
 
-    async def get_command(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    async def get_command(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
         """Get a command from the command queue.
 
         Args:

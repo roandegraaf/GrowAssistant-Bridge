@@ -11,7 +11,7 @@ import logging
 import os
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from app.config import config
 from app.utils.singleton import SingletonMeta
@@ -171,7 +171,7 @@ class QueueManager(metaclass=SingletonMeta):
             except Exception as e:
                 logger.error(f"Error in periodic flush: {e}")
 
-    async def put(self, data: Dict[str, Any]) -> bool:
+    async def put(self, data: dict[str, Any]) -> bool:
         """Add a data point to the queue.
 
         Args:
@@ -192,7 +192,7 @@ class QueueManager(metaclass=SingletonMeta):
             logger.warning("Queue is full, item not added")
             return False
 
-    async def get(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    async def get(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
         """Get a data point from the queue.
 
         Args:
@@ -213,7 +213,7 @@ class QueueManager(metaclass=SingletonMeta):
 
     async def get_batch(
         self, max_items: int, timeout: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get a batch of data points from the queue.
 
         Args:
@@ -242,7 +242,7 @@ class QueueManager(metaclass=SingletonMeta):
 
     async def get_data_points(
         self, max_items: int, timeout: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get a batch of data points from the queue - alias for get_batch.
 
         Args:
@@ -254,7 +254,7 @@ class QueueManager(metaclass=SingletonMeta):
         """
         return await self.get_batch(max_items, timeout)
 
-    async def mark_processed(self, data_points: List[Dict[str, Any]]) -> None:
+    async def mark_processed(self, data_points: list[dict[str, Any]]) -> None:
         """Mark data points as processed.
 
         Args:
@@ -265,7 +265,7 @@ class QueueManager(metaclass=SingletonMeta):
 
         logger.debug(f"Marked {len(data_points)} items as processed")
 
-    async def requeue_data_points(self, data_points: List[Dict[str, Any]]) -> None:
+    async def requeue_data_points(self, data_points: list[dict[str, Any]]) -> None:
         """Requeue data points that failed to send.
 
         Args:

@@ -8,7 +8,7 @@ These types MUST match the API (ValueType, ProblemType, ProblemStatus enums).
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 
 # Action Types (maps to API ValueType enum)
@@ -75,7 +75,7 @@ def create_data_log(
     log_type: Union[LogType, str],
     value: Union[str, float, int],
     log_date: Optional[datetime] = None,
-) -> Dict:
+) -> dict:
     """Create a data log entry.
 
     Args:
@@ -104,7 +104,7 @@ def create_problem(
     user_can_resolve: bool = True,
     resolved: bool = False,
     problem_id: Optional[str] = None,
-) -> Dict:
+) -> dict:
     """Create a problem report.
 
     Args:
@@ -133,7 +133,7 @@ def create_problem(
     }
 
 
-def create_action_response(action_id: str, received: bool = True, resolved: bool = False) -> Dict:
+def create_action_response(action_id: str, received: bool = True, resolved: bool = False) -> dict:
     """Create an action response.
 
     Args:
@@ -148,7 +148,7 @@ def create_action_response(action_id: str, received: bool = True, resolved: bool
 
 
 # Helper function to parse API response
-def parse_api_response(response_data: Dict) -> Dict:
+def parse_api_response(response_data: dict) -> dict:
     """Parse the API response.
 
     Args:

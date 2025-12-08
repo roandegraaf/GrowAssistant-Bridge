@@ -7,7 +7,7 @@ with support for environment variable overrides.
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -36,7 +36,7 @@ class Config(metaclass=SingletonMeta):
             config_file: Path to the configuration file, or None to use the default.
         """
         self.config_file = config_file or self._find_config_file()
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
         self.load_config()
 
     def _find_config_file(self) -> str:
@@ -139,7 +139,7 @@ class Config(metaclass=SingletonMeta):
 
         return config
 
-    def get_section(self, section: str) -> Dict[str, Any]:
+    def get_section(self, section: str) -> dict[str, Any]:
         """Get a section of the configuration.
 
         Args:

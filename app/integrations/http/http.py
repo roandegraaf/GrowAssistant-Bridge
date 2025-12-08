@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -28,7 +29,7 @@ class HTTPIntegration(Integration):
 
     CONFIG_SCHEMA = HTTPIntegrationConfig
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the HTTP integration.
 
         Args:
@@ -102,7 +103,7 @@ class HTTPIntegration(Integration):
             logger.error(f"Failed to initialize HTTP client: {e}")
             return False
 
-    async def _poll_endpoint(self, name: str, endpoint: Dict[str, Any]):
+    async def _poll_endpoint(self, name: str, endpoint: dict[str, Any]):
         """Periodically poll an HTTP endpoint.
 
         Args:
@@ -151,7 +152,7 @@ class HTTPIntegration(Integration):
             # Wait for next interval
             await asyncio.sleep(interval)
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data to an HTTP endpoint.
 
         Args:
@@ -229,7 +230,7 @@ class HTTPIntegration(Integration):
             logger.error(f"Failed to send HTTP request: {e}")
             return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Get data from HTTP endpoints that have been polled.
 
         Yields:
@@ -256,7 +257,7 @@ class HTTPIntegration(Integration):
                     # Mark as yielded
                     endpoint["last_result_yielded"] = result["timestamp"]
 
-    async def get_device_data(self) -> Dict[str, Any]:
+    async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all HTTP endpoints (devices).
 
         Returns:
@@ -317,7 +318,7 @@ class HTTPIntegration(Integration):
                     device_type="http_endpoint",
                 )
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command via HTTP.
 
         Args:

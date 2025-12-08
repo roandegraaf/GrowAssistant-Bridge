@@ -25,7 +25,8 @@ integrations:
 import asyncio
 import logging
 import time
-from typing import Any, Dict, Generator
+from collections.abc import Generator
+from typing import Any
 
 try:
     import Adafruit_DHT
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 class DHTIntegration(Integration):
     """Integration for DHT temperature/humidity sensors."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the DHT sensor integration.
 
         Args:
@@ -134,7 +135,7 @@ class DHTIntegration(Integration):
             logger.error(f"Failed to initialize DHT Sensor Integration: {e}")
             return False
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data to DHT sensors.
 
         Note: DHT sensors are read-only, so this method always returns False.
@@ -148,7 +149,7 @@ class DHTIntegration(Integration):
         logger.warning("DHT sensors are read-only and do not accept commands")
         return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the DHT sensors.
 
         Yields:
@@ -173,7 +174,7 @@ class DHTIntegration(Integration):
                     "timestamp": device["last_success"],
                 }
 
-    async def get_device_data(self) -> Dict[str, Any]:
+    async def get_device_data(self) -> dict[str, Any]:
         """Get the current data for all DHT sensors.
 
         Returns:

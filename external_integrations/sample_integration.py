@@ -28,7 +28,8 @@ import asyncio
 import logging
 import random
 import time
-from typing import TYPE_CHECKING, Any, Dict, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 # Import API types
 from app.api_types import ActionType, LogType, ProblemStatus, ProblemType
@@ -51,7 +52,7 @@ class SampleIntegration(Integration):
     It simulates a device that generates random data and accepts commands.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the sample integration.
 
         Args:
@@ -133,7 +134,7 @@ class SampleIntegration(Integration):
             logger.error(f"Failed to connect to Sample Integration: {e}")
             return False
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data/command to a device.
 
         IMPLEMENT THIS METHOD: Send commands to your device/service
@@ -173,7 +174,7 @@ class SampleIntegration(Integration):
             logger.error(f"Failed to send data to {device_name}: {e}")
             return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the devices.
 
         IMPLEMENT THIS METHOD: Retrieve data from your device/service
@@ -222,7 +223,7 @@ class SampleIntegration(Integration):
                 "timestamp": device["last_updated"],
             }
 
-    async def get_device_data(self) -> Dict[str, Any]:
+    async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all devices.
 
         IMPLEMENT THIS METHOD: Return the current state of all devices
@@ -276,7 +277,7 @@ class SampleIntegration(Integration):
                 await asyncio.sleep(5)  # Wait a bit before retrying
 
     # Implement handlers for each action type
-    async def handle_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_action(self, action_data: dict[str, Any]) -> bool:
         """Handle an action from the API.
 
         This method dispatches to the appropriate handler based on action type.
@@ -307,7 +308,7 @@ class SampleIntegration(Integration):
             logger.warning(f"No handler for action type: {action_type}")
             return False
 
-    async def handle_temperature_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_temperature_action(self, action_data: dict[str, Any]) -> bool:
         """Handle temperature action.
 
         Args:
@@ -343,7 +344,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling temperature action: {e}")
             return False
 
-    async def handle_humidity_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_humidity_action(self, action_data: dict[str, Any]) -> bool:
         """Handle humidity action.
 
         Args:
@@ -379,7 +380,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling humidity action: {e}")
             return False
 
-    async def handle_light_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_light_action(self, action_data: dict[str, Any]) -> bool:
         """Handle light action.
 
         The API sends simple light on/off commands via actions.
@@ -427,7 +428,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling light action: {e}")
             return False
 
-    async def handle_fan_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_fan_action(self, action_data: dict[str, Any]) -> bool:
         """Handle fan action.
 
         Args:
@@ -463,7 +464,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling fan action: {e}")
             return False
 
-    async def handle_tank_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_tank_action(self, action_data: dict[str, Any]) -> bool:
         """Handle tank water amount action.
 
         Args:
@@ -490,7 +491,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling tank action: {e}")
             return False
 
-    async def handle_ph_value_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_ph_value_action(self, action_data: dict[str, Any]) -> bool:
         """Handle pH value target action.
 
         Args:
@@ -517,7 +518,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling pH value action: {e}")
             return False
 
-    async def handle_ph_ml_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_ph_ml_action(self, action_data: dict[str, Any]) -> bool:
         """Handle pH adjustment volume action.
 
         Args:
@@ -549,7 +550,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling pH ML action: {e}")
             return False
 
-    async def handle_supplement_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_supplement_action(self, action_data: dict[str, Any]) -> bool:
         """Handle nutrient supplement volume action.
 
         Args:
@@ -581,7 +582,7 @@ class SampleIntegration(Integration):
             logger.error(f"Error handling supplement action: {e}")
             return False
 
-    async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+    async def apply_settings(self, settings: dict[str, Any]) -> bool:
         """Apply settings received from the API.
 
         This demonstrates how to handle settings updates from the API.
@@ -776,7 +777,7 @@ class SampleIntegration(Integration):
 
         logger.info(f"Registered {len(self.devices)} devices with registry")
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command on a target device.
 
         NEW PATTERN: This is the unified command interface that replaces

@@ -7,7 +7,7 @@ about integrations, enabling self-description, validation, and discovery.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -57,12 +57,12 @@ class IntegrationManifest:
     version: str = "1.0.0"
     description: str = ""
     documentation: str = ""
-    requirements: List[str] = field(default_factory=list)
-    dependencies: List[str] = field(default_factory=list)
-    device_categories: List[DeviceCategory] = field(default_factory=lambda: [DeviceCategory.BOTH])
-    config_schema: Optional[Type[BaseModel]] = None
+    requirements: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    device_categories: list[DeviceCategory] = field(default_factory=lambda: [DeviceCategory.BOTH])
+    config_schema: Optional[type[BaseModel]] = None
     iot_class: IoTClass = IoTClass.LOCAL_POLLING
-    codeowners: List[str] = field(default_factory=list)
+    codeowners: list[str] = field(default_factory=list)
     is_builtin: bool = False
 
     def supports_sensors(self) -> bool:
@@ -79,7 +79,7 @@ class IntegrationManifest:
             or DeviceCategory.BOTH in self.device_categories
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert manifest to dictionary for serialization."""
         return {
             "domain": self.domain,
@@ -96,7 +96,7 @@ class IntegrationManifest:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IntegrationManifest":
+    def from_dict(cls, data: dict[str, Any]) -> "IntegrationManifest":
         """Create manifest from dictionary."""
         device_categories = [DeviceCategory(dc) for dc in data.get("device_categories", ["both"])]
         iot_class = IoTClass(data.get("iot_class", "local_polling"))

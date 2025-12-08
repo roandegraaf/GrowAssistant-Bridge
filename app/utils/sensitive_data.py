@@ -6,13 +6,13 @@ in configuration and log outputs to prevent accidental exposure.
 """
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Optional
 
 # Default mask string used to replace sensitive values
 DEFAULT_MASK = "**********"
 
 # Default paths to sensitive fields (dot notation for nested keys)
-DEFAULT_SENSITIVE_PATHS: Set[str] = {
+DEFAULT_SENSITIVE_PATHS: set[str] = {
     "api.auth_token",
     "web.password_hash",
     "web.secret_key",
@@ -21,7 +21,7 @@ DEFAULT_SENSITIVE_PATHS: Set[str] = {
 }
 
 # Keys that should always be masked regardless of path
-SENSITIVE_KEYS: Set[str] = {
+SENSITIVE_KEYS: set[str] = {
     "password",
     "password_hash",
     "secret",
@@ -34,11 +34,11 @@ SENSITIVE_KEYS: Set[str] = {
 
 
 def mask_sensitive_data(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     mask: str = DEFAULT_MASK,
-    sensitive_paths: Optional[Set[str]] = None,
-    sensitive_keys: Optional[Set[str]] = None,
-) -> Dict[str, Any]:
+    sensitive_paths: Optional[set[str]] = None,
+    sensitive_keys: Optional[set[str]] = None,
+) -> dict[str, Any]:
     """Mask sensitive data in a dictionary.
 
     This function creates a deep copy and replaces sensitive values
@@ -73,8 +73,8 @@ def mask_sensitive_data(
 
 def _mask_recursive(
     data: Any,
-    sensitive_paths: Set[str],
-    sensitive_keys: Set[str],
+    sensitive_paths: set[str],
+    sensitive_keys: set[str],
     mask: str,
     current_path: str,
 ) -> None:
@@ -111,10 +111,10 @@ def _mask_recursive(
 
 
 def unmask_sensitive_data(
-    masked_data: Dict[str, Any],
-    original_data: Dict[str, Any],
+    masked_data: dict[str, Any],
+    original_data: dict[str, Any],
     mask: str = DEFAULT_MASK,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Restore masked values from original data.
 
     This function is useful when updating configuration - it preserves
@@ -175,9 +175,9 @@ def _unmask_recursive(
 
 
 def get_safe_config_for_logging(
-    config_data: Dict[str, Any],
-    additional_masks: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    config_data: dict[str, Any],
+    additional_masks: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Get a config dictionary that's safe for logging.
 
     This is a convenience function that masks common sensitive fields

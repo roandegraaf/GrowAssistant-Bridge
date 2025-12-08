@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 import paho.mqtt.client as mqtt
 
@@ -28,7 +29,7 @@ class MQTTIntegration(Integration):
 
     CONFIG_SCHEMA = MQTTIntegrationConfig
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the MQTT integration.
 
         Args:
@@ -39,9 +40,9 @@ class MQTTIntegration(Integration):
         self.connected = False
         self.message_queue = asyncio.Queue()
         self.topics = {}
-        self._latest_device_data: Dict[str, Dict[str, Any]] = (
-            {}
-        )  # Store latest data per device name
+        self._latest_device_data: dict[
+            str, dict[str, Any]
+        ] = {}  # Store latest data per device name
 
         # Check if enabled
         if not self.config.get("enabled", False):
@@ -200,7 +201,7 @@ class MQTTIntegration(Integration):
             logger.error(f"Failed to connect to MQTT broker: {e}")
             return False
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Publish a message to an MQTT topic.
 
         Args:
@@ -244,7 +245,7 @@ class MQTTIntegration(Integration):
             logger.error(f"Failed to publish MQTT message: {e}")
             return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive messages from subscribed MQTT topics.
 
         Yields:
@@ -263,7 +264,7 @@ class MQTTIntegration(Integration):
             except asyncio.QueueEmpty:
                 break
 
-    async def get_device_data(self) -> Dict[str, Any]:
+    async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all MQTT devices (topics).
 
         Returns:
@@ -321,7 +322,7 @@ class MQTTIntegration(Integration):
                     device_type=topic_type,
                 )
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command via MQTT.
 
         Args:

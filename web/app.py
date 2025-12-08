@@ -789,7 +789,9 @@ def start_web_server(passed_app_instance):
             os.makedirs(log_dir, exist_ok=True)
 
         handler = RotatingFileHandler(
-            os.path.join(log_dir, "web.log"), maxBytes=10 * 1024 * 1024, backupCount=5  # 10 MB
+            os.path.join(log_dir, "web.log"),
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,  # 10 MB
         )
         handler.setFormatter(
             logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")

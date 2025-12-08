@@ -12,18 +12,8 @@ import logging
 import os
 import pkgutil
 import sys
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    ClassVar,
-    Dict,
-    Generator,
-    List,
-    Optional,
-    Type,
-    Union,
-)
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union
 
 from pydantic import BaseModel, ValidationError
 
@@ -63,9 +53,9 @@ class Integration(abc.ABC):
     """
 
     # Subclasses can override this with a Pydantic model for config validation
-    CONFIG_SCHEMA: ClassVar[Optional[Type[BaseModel]]] = None
+    CONFIG_SCHEMA: ClassVar[Optional[type[BaseModel]]] = None
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the integration with configuration.
 
         Args:
@@ -131,7 +121,7 @@ class Integration(abc.ABC):
         if "devices" in self.config:
             registry.register_integration_by_devices(self.name, self.config.get("devices", {}))
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command on a target device.
 
         This is the unified command interface that properly wraps send_data().
@@ -159,7 +149,7 @@ class Integration(abc.ABC):
         pass
 
     @abc.abstractmethod
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data/command to the device/service.
 
         Args:
@@ -171,7 +161,7 @@ class Integration(abc.ABC):
         pass
 
     @abc.abstractmethod
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the device/service.
 
         Yields:
@@ -180,7 +170,7 @@ class Integration(abc.ABC):
         pass
 
     @abc.abstractmethod
-    async def get_device_data(self) -> Dict[str, Any]:
+    async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all devices managed by this integration.
 
         Returns:
@@ -250,7 +240,7 @@ class Integration(abc.ABC):
         """
         api_client.acknowledge_action(action_id, received, resolved)
 
-    async def handle_action(self, action_data: Dict[str, Any]) -> bool:
+    async def handle_action(self, action_data: dict[str, Any]) -> bool:
         """Handle an action requested by the API.
 
         This method should be implemented by integrations to handle
@@ -266,7 +256,7 @@ class Integration(abc.ABC):
         logger.warning(f"Integration {self.name} does not implement handle_action")
         return False
 
-    async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+    async def apply_settings(self, settings: dict[str, Any]) -> bool:
         """Apply settings received from the API.
 
         This method can be implemented by integrations to handle
@@ -301,13 +291,13 @@ class Integration(abc.ABC):
 
 
 # Registry: class name -> class
-_integration_classes: Dict[str, Type[Integration]] = {}
+_integration_classes: dict[str, type[Integration]] = {}
 
 # Registry: config key -> class (for lookup by config.yaml key)
-_integration_by_config_key: Dict[str, Type[Integration]] = {}
+_integration_by_config_key: dict[str, type[Integration]] = {}
 
 
-def register_integration(cls: Type[Integration]) -> Type[Integration]:
+def register_integration(cls: type[Integration]) -> type[Integration]:
     """Decorator to register an integration class.
 
     Registers the class by both class name and config key for flexible lookup.
@@ -331,7 +321,7 @@ def register_integration(cls: Type[Integration]) -> Type[Integration]:
     return cls
 
 
-def get_integration_class(name: str) -> Optional[Type[Integration]]:
+def get_integration_class(name: str) -> Optional[type[Integration]]:
     """Get an integration class by class name.
 
     Args:
@@ -343,7 +333,7 @@ def get_integration_class(name: str) -> Optional[Type[Integration]]:
     return _integration_classes.get(name)
 
 
-def get_integration_class_by_config_key(config_key: str) -> Optional[Type[Integration]]:
+def get_integration_class_by_config_key(config_key: str) -> Optional[type[Integration]]:
     """Get an integration class by its configuration key.
 
     This is the primary way to look up integrations when loading from config.
@@ -358,7 +348,7 @@ def get_integration_class_by_config_key(config_key: str) -> Optional[Type[Integr
     return _integration_by_config_key.get(config_key.lower())
 
 
-def get_all_integration_classes() -> Dict[str, Type[Integration]]:
+def get_all_integration_classes() -> dict[str, type[Integration]]:
     """Get all registered integration classes.
 
     Returns:
@@ -367,7 +357,7 @@ def get_all_integration_classes() -> Dict[str, Type[Integration]]:
     return _integration_classes.copy()
 
 
-def get_all_config_keys() -> List[str]:
+def get_all_config_keys() -> list[str]:
     """Get all registered config keys.
 
     Returns:
@@ -376,7 +366,7 @@ def get_all_config_keys() -> List[str]:
     return list(_integration_by_config_key.keys())
 
 
-def _load_from_directory(directory_path: str) -> List[str]:
+def _load_from_directory(directory_path: str) -> list[str]:
     """Load Python modules from a directory path.
 
     Args:
@@ -420,7 +410,7 @@ def _load_from_directory(directory_path: str) -> List[str]:
     return loaded_modules
 
 
-def discover_integrations() -> List[str]:
+def discover_integrations() -> list[str]:
     """Discover and load all available integration modules.
 
     This function searches for modules in the 'integrations' package and imports them.

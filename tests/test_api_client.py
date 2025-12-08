@@ -21,9 +21,10 @@ class TestApiClient:
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a fresh ApiClient instance."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
             mock_auth.is_ready_for_data.return_value = True
@@ -163,9 +164,10 @@ class TestApiClientSendData:
     @pytest.fixture
     def api_client(self, mock_config, mock_httpx_response):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
             mock_auth.is_ready_for_data.return_value = True
@@ -217,9 +219,10 @@ class TestApiClientSendData:
     @pytest.mark.asyncio
     async def test_send_data_not_started(self, mock_config):
         """Test send_data when client not started."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = True
 
             from app.api_client import ApiClient
@@ -237,9 +240,10 @@ class TestApiClientSendData:
     @pytest.mark.asyncio
     async def test_send_data_not_authenticated(self, mock_config, mock_httpx_client):
         """Test send_data when not authenticated."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = False
 
             from app.api_client import ApiClient
@@ -275,9 +279,10 @@ class TestApiClientPollCommands:
     @pytest.fixture
     async def api_client(self, mock_config, mock_httpx_response):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
 
@@ -332,9 +337,10 @@ class TestApiClientPollCommands:
     @pytest.mark.asyncio
     async def test_poll_commands_not_authenticated(self, mock_config):
         """Test poll_commands when not authenticated."""
-        with patch("app.api_client.config", mock_config), patch(
-            "app.api_client.auth_manager"
-        ) as mock_auth:
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager") as mock_auth,
+        ):
             mock_auth.is_authenticated.return_value = False
 
             from app.api_client import ApiClient

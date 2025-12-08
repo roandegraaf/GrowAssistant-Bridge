@@ -18,9 +18,11 @@ class TestWebAppRoutes:
     @pytest.fixture
     def client(self, mock_config):
         """Create Flask test client."""
-        with patch("web.app.config", mock_config), patch(
-            "web.app.auth_manager"
-        ) as mock_auth, patch("web.app.registry"):
+        with (
+            patch("web.app.config", mock_config),
+            patch("web.app.auth_manager") as mock_auth,
+            patch("web.app.registry"),
+        ):
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 
@@ -138,9 +140,11 @@ class TestWebAppAPIEndpoints:
     @pytest.fixture
     def authenticated_client(self, mock_config):
         """Create authenticated Flask test client."""
-        with patch("web.app.config", mock_config), patch(
-            "web.app.auth_manager"
-        ) as mock_auth, patch("web.app.registry") as mock_registry:
+        with (
+            patch("web.app.config", mock_config),
+            patch("web.app.auth_manager") as mock_auth,
+            patch("web.app.registry") as mock_registry,
+        ):
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 

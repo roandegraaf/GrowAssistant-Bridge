@@ -6,7 +6,7 @@ the need for repetitive singleton boilerplate code across the application.
 """
 
 import threading
-from typing import Any, Dict
+from typing import Any
 
 
 class SingletonMeta(type):
@@ -31,7 +31,7 @@ class SingletonMeta(type):
         assert instance1 is instance2  # True
     """
 
-    _instances: Dict[type, Any] = {}
+    _instances: dict[type, Any] = {}
     _lock: threading.Lock = threading.Lock()
 
     def __call__(cls, *args, **kwargs):

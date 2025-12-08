@@ -1,26 +1,12 @@
 # Pre-commit hooks configuration for GrowAssistant-Bridge
 repos:
-  # Code formatting with black
-  - repo: https://github.com/psf/black
-    rev: 24.1.1
-    hooks:
-      - id: black
-        language_version: python3
-        args: [--line-length=100]
-
-  # Linting with ruff
+  # Linting and formatting with ruff (replaces black, isort, flake8)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.13
+    rev: v0.8.2
     hooks:
       - id: ruff
-        args: [--fix]
-
-  # Import sorting with isort
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: [--profile=black]
+        args: [--fix, --unsafe-fixes]
+      - id: ruff-format
 
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

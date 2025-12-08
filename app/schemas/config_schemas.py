@@ -7,7 +7,7 @@ integration is instantiated.
 """
 
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -72,7 +72,7 @@ class GPIOPinConfig(BaseModel):
 class GPIOIntegrationConfig(BaseIntegrationConfig):
     """Configuration schema for GPIO integration."""
 
-    pins: Dict[str, GPIOPinConfig] = Field(
+    pins: dict[str, GPIOPinConfig] = Field(
         default_factory=dict, description="Dictionary of pin configurations keyed by ID"
     )
 
@@ -97,7 +97,7 @@ class MQTTIntegrationConfig(BaseIntegrationConfig):
     username: str = Field(default="", description="MQTT authentication username")
     password: str = Field(default="", description="MQTT authentication password")
     client_id: str = Field(default="grow_assistant", description="MQTT client identifier")
-    topics: Dict[str, MQTTTopicConfig] = Field(
+    topics: dict[str, MQTTTopicConfig] = Field(
         default_factory=dict, description="Dictionary of topic configurations keyed by ID"
     )
 
@@ -123,7 +123,7 @@ class HTTPEndpointConfig(BaseModel):
     name: str = Field(..., min_length=1, description="Unique name for the endpoint")
     url: str = Field(..., min_length=1, description="Endpoint URL")
     method: HTTPMethod = Field(default=HTTPMethod.GET, description="HTTP method")
-    headers: Dict[str, str] = Field(
+    headers: dict[str, str] = Field(
         default_factory=dict, description="HTTP headers to include in requests"
     )
     interval: int = Field(
@@ -134,7 +134,7 @@ class HTTPEndpointConfig(BaseModel):
 class HTTPIntegrationConfig(BaseIntegrationConfig):
     """Configuration schema for HTTP integration."""
 
-    endpoints: Dict[str, HTTPEndpointConfig] = Field(
+    endpoints: dict[str, HTTPEndpointConfig] = Field(
         default_factory=dict, description="Dictionary of endpoint configurations keyed by ID"
     )
 
@@ -165,7 +165,7 @@ class SerialIntegrationConfig(BaseIntegrationConfig):
     parity: SerialParity = Field(default=SerialParity.NONE, description="Parity checking mode")
     stopbits: Literal[1, 1.5, 2] = Field(default=1, description="Number of stop bits")
     timeout: float = Field(default=1.0, ge=0, description="Read timeout in seconds")
-    devices: Dict[str, "DeviceConfig"] = Field(
+    devices: dict[str, "DeviceConfig"] = Field(
         default_factory=dict, description="Dictionary of device configurations"
     )
 
@@ -188,7 +188,7 @@ class DeviceConfig(BaseModel):
 class GenericIntegrationConfig(BaseIntegrationConfig):
     """Generic configuration schema for external/custom integrations."""
 
-    devices: Dict[str, DeviceConfig] = Field(
+    devices: dict[str, DeviceConfig] = Field(
         default_factory=dict, description="Dictionary of device configurations"
     )
     update_interval: int = Field(default=60, ge=1, description="Update interval in seconds")
@@ -202,7 +202,7 @@ class GenericIntegrationConfig(BaseIntegrationConfig):
 # =============================================================================
 
 
-def validate_integration_config(config: Dict[str, Any], schema: type[BaseModel]) -> BaseModel:
+def validate_integration_config(config: dict[str, Any], schema: type[BaseModel]) -> BaseModel:
     """Validate integration configuration against a schema.
 
     Args:

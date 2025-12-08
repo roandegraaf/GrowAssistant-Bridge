@@ -6,7 +6,8 @@ It's designed to work with Raspberry Pi but gracefully degrades when not on a Pi
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 from app.integrations import Integration, register_integration
 from app.schemas.config_schemas import GPIOIntegrationConfig
@@ -32,7 +33,7 @@ class GPIOIntegration(Integration):
 
     CONFIG_SCHEMA = GPIOIntegrationConfig
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the GPIO integration.
 
         Args:
@@ -122,7 +123,7 @@ class GPIOIntegration(Integration):
             logger.error(f"Failed to initialize GPIO: {e}")
             return False
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Set the state of a GPIO pin.
 
         Args:
@@ -163,7 +164,7 @@ class GPIOIntegration(Integration):
             logger.error(f"Failed to set GPIO pin {pin_name}: {e}")
             return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Read the state of all input GPIO pins.
 
         Yields:
@@ -212,7 +213,7 @@ class GPIOIntegration(Integration):
                     device_type="gpio_input",
                 )
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command on a GPIO pin.
 
         Args:

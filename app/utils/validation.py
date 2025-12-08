@@ -6,7 +6,7 @@ to prevent security issues like injection attacks.
 """
 
 import re
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 # Safe patterns for common input types
 SAFE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
@@ -14,7 +14,7 @@ SAFE_PATH_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
 UUID_PATTERN = re.compile(r"^[a-fA-F0-9\-]{36}$")
 
 
-def validate_name(name: str, max_length: int = 255) -> Tuple[bool, Optional[str]]:
+def validate_name(name: str, max_length: int = 255) -> tuple[bool, Optional[str]]:
     """Validate a name/identifier string.
 
     Args:
@@ -39,7 +39,7 @@ def validate_name(name: str, max_length: int = 255) -> Tuple[bool, Optional[str]
     return True, None
 
 
-def validate_path(path: str, max_length: int = 1024) -> Tuple[bool, Optional[str]]:
+def validate_path(path: str, max_length: int = 1024) -> tuple[bool, Optional[str]]:
     """Validate a file path string.
 
     Args:
@@ -65,7 +65,7 @@ def validate_path(path: str, max_length: int = 1024) -> Tuple[bool, Optional[str
     return True, None
 
 
-def validate_uuid(uuid_str: str) -> Tuple[bool, Optional[str]]:
+def validate_uuid(uuid_str: str) -> tuple[bool, Optional[str]]:
     """Validate a UUID string.
 
     Args:
@@ -85,7 +85,7 @@ def validate_uuid(uuid_str: str) -> Tuple[bool, Optional[str]]:
 
 def validate_integer(
     value: Any, min_value: Optional[int] = None, max_value: Optional[int] = None
-) -> Tuple[bool, Optional[str], Optional[int]]:
+) -> tuple[bool, Optional[str], Optional[int]]:
     """Validate and convert an integer value.
 
     Args:
@@ -112,7 +112,7 @@ def validate_integer(
 
 def validate_float(
     value: Any, min_value: Optional[float] = None, max_value: Optional[float] = None
-) -> Tuple[bool, Optional[str], Optional[float]]:
+) -> tuple[bool, Optional[str], Optional[float]]:
     """Validate and convert a float value.
 
     Args:
@@ -159,7 +159,7 @@ def sanitize_string(value: str, max_length: int = 1000) -> str:
     return sanitized.strip()
 
 
-def validate_url(url: str) -> Tuple[bool, Optional[str]]:
+def validate_url(url: str) -> tuple[bool, Optional[str]]:
     """Validate a URL string.
 
     Args:

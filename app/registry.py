@@ -12,7 +12,7 @@ Example: mqtt.temperature, gpio.pump1
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Optional
 
 from app.utils.singleton import SingletonMeta
 
@@ -45,8 +45,8 @@ class DeviceInfo:
     device_type: str
     category: DeviceCategory
     integration_name: str
-    capabilities: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    capabilities: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def entity_id(self) -> str:
@@ -77,24 +77,24 @@ class DeviceRegistry(metaclass=SingletonMeta):
     def __init__(self):
         """Initialize the device registry."""
         # Primary storage: entity_id -> DeviceInfo
-        self._devices: Dict[str, DeviceInfo] = {}
+        self._devices: dict[str, DeviceInfo] = {}
 
         # Indexes for fast lookups
-        self._by_domain: Dict[str, Set[str]] = {}  # domain -> set of entity_ids
-        self._by_type: Dict[str, Set[str]] = {}  # device_type -> set of entity_ids
-        self._by_integration: Dict[str, Set[str]] = {}  # integration_name -> set of entity_ids
-        self._by_category: Dict[DeviceCategory, Set[str]] = {
+        self._by_domain: dict[str, set[str]] = {}  # domain -> set of entity_ids
+        self._by_type: dict[str, set[str]] = {}  # device_type -> set of entity_ids
+        self._by_integration: dict[str, set[str]] = {}  # integration_name -> set of entity_ids
+        self._by_category: dict[DeviceCategory, set[str]] = {
             DeviceCategory.SENSOR: set(),
             DeviceCategory.ACTUATOR: set(),
         }
 
         # Legacy mappings for backward compatibility
-        self._sensors: Dict[str, str] = {}
-        self._actuators: Dict[str, str] = {}
+        self._sensors: dict[str, str] = {}
+        self._actuators: dict[str, str] = {}
 
         # Maps device types to common actions they support
         # These actions should match what the GrowAssistant API actually supports
-        self._device_type_actions: Dict[str, List[str]] = {
+        self._device_type_actions: dict[str, list[str]] = {
             "pump": ["on", "off"],
             "light": ["on", "off"],
             "fan": ["on", "off", "speed"],
@@ -118,8 +118,8 @@ class DeviceRegistry(metaclass=SingletonMeta):
         device_type: str,
         category: DeviceCategory,
         integration_name: str,
-        capabilities: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        capabilities: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         """Register a device with full domain qualification.
 
@@ -288,7 +288,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
             integration_name=integration_name,
         )
 
-    def register_device_type_actions(self, device_type: str, actions: List[str]) -> None:
+    def register_device_type_actions(self, device_type: str, actions: list[str]) -> None:
         """Register actions supported by a device type.
 
         Args:
@@ -299,7 +299,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         logger.info(f"Registered actions for device type '{device_type}': {actions}")
 
     def register_integration_by_devices(
-        self, integration_name: str, devices_config: Dict[str, Any]
+        self, integration_name: str, devices_config: dict[str, Any]
     ) -> None:
         """Register an integration by its device configurations.
 
@@ -373,7 +373,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
 
         return integration
 
-    def get_all_sensors(self) -> Dict[str, str]:
+    def get_all_sensors(self) -> dict[str, str]:
         """Get all registered sensors.
 
         Returns:
@@ -381,7 +381,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         """
         return self._sensors.copy()
 
-    def get_all_actuators(self) -> Dict[str, str]:
+    def get_all_actuators(self) -> dict[str, str]:
         """Get all registered actuators.
 
         Returns:
@@ -389,7 +389,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         """
         return self._actuators.copy()
 
-    def get_device_types(self) -> List[str]:
+    def get_device_types(self) -> list[str]:
         """Get all unique device types registered in the system.
 
         Returns:
@@ -397,7 +397,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         """
         return list(self._device_type_actions.keys())
 
-    def get_device_actions(self, device_type: str) -> List[str]:
+    def get_device_actions(self, device_type: str) -> list[str]:
         """Get available actions for a specific device type.
 
         Args:
@@ -468,7 +468,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
             )
         return matches[0] if matches else None
 
-    def get_devices_by_domain(self, domain: str) -> List[DeviceInfo]:
+    def get_devices_by_domain(self, domain: str) -> list[DeviceInfo]:
         """Get all devices in a domain.
 
         Args:
@@ -480,7 +480,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         entity_ids = self._by_domain.get(domain, set())
         return [self._devices[eid] for eid in entity_ids]
 
-    def get_devices_by_type(self, device_type: str) -> List[DeviceInfo]:
+    def get_devices_by_type(self, device_type: str) -> list[DeviceInfo]:
         """Get all devices of a specific type across all domains.
 
         Args:
@@ -492,7 +492,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         entity_ids = self._by_type.get(device_type, set())
         return [self._devices[eid] for eid in entity_ids]
 
-    def get_devices_by_integration(self, integration_name: str) -> List[DeviceInfo]:
+    def get_devices_by_integration(self, integration_name: str) -> list[DeviceInfo]:
         """Get all devices managed by a specific integration.
 
         Args:
@@ -504,7 +504,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         entity_ids = self._by_integration.get(integration_name, set())
         return [self._devices[eid] for eid in entity_ids]
 
-    def get_all_devices(self) -> List[DeviceInfo]:
+    def get_all_devices(self) -> list[DeviceInfo]:
         """Get all registered devices.
 
         Returns:
@@ -512,7 +512,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         """
         return list(self._devices.values())
 
-    def get_all_entity_ids(self) -> List[str]:
+    def get_all_entity_ids(self) -> list[str]:
         """Get all registered entity IDs.
 
         Returns:

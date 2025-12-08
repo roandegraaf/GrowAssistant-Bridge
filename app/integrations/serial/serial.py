@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 import serial
 import serial.tools.list_ports
@@ -29,7 +30,7 @@ class SerialIntegration(Integration):
 
     CONFIG_SCHEMA = SerialIntegrationConfig
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the Serial integration.
 
         Args:
@@ -165,7 +166,7 @@ class SerialIntegration(Integration):
                 logger.error(f"Error reading from serial port: {e}")
                 await asyncio.sleep(1)  # Longer delay after error
 
-    async def send_data(self, data: Dict[str, Any]) -> bool:
+    async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data to the serial device.
 
         Args:
@@ -210,7 +211,7 @@ class SerialIntegration(Integration):
             logger.error(f"Failed to send data to serial port: {e}")
             return False
 
-    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+    async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the serial device.
 
         Yields:
@@ -257,7 +258,7 @@ class SerialIntegration(Integration):
         # which handles the 'devices' configuration pattern
         super().register_capabilities(registry)
 
-    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command via serial.
 
         Args:

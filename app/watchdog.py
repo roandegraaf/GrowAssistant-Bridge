@@ -12,7 +12,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 from app.utils.singleton import SingletonMeta
 
@@ -40,7 +40,7 @@ class WatchdogManager(metaclass=SingletonMeta):
         self._watchdog_process: Optional[subprocess.Popen] = None
         self._restart_requested = False
         self._pid = os.getpid()  # Current process PID
-        self._exit_handlers: List[Callable] = []
+        self._exit_handlers: list[Callable] = []
 
         # Register an exit handler to clean up the watchdog
         atexit.register(self._cleanup_watchdog)

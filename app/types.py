@@ -6,7 +6,7 @@ used throughout the application. These definitions improve code quality by
 enabling static type checking and IDE autocompletion.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Optional, TypedDict, Union
 
 # =============================================================================
 # API Data Structures
@@ -66,9 +66,9 @@ class ActionDict(TypedDict):
 class SendDataPayload(TypedDict):
     """Payload for sending data to the API."""
 
-    dataLogs: List[DataLogDict]
-    problems: List[ProblemDict]
-    actions: List[ActionResponseDict]
+    dataLogs: list[DataLogDict]
+    problems: list[ProblemDict]
+    actions: list[ActionResponseDict]
 
 
 class APIResponseSettings(TypedDict, total=False):
@@ -76,9 +76,9 @@ class APIResponseSettings(TypedDict, total=False):
 
     rdh_mode: bool
     status: str
-    light: Dict[str, Any]
-    climate: Dict[str, Any]
-    tank: Dict[str, Any]
+    light: dict[str, Any]
+    climate: dict[str, Any]
+    tank: dict[str, Any]
 
 
 class ParsedAPIResponse(TypedDict):
@@ -86,10 +86,10 @@ class ParsedAPIResponse(TypedDict):
 
     rdh_mode: bool
     status: str
-    light: Dict[str, Any]
-    climate: Dict[str, Any]
-    tank: Dict[str, Any]
-    actions: List[ActionDict]
+    light: dict[str, Any]
+    climate: dict[str, Any]
+    tank: dict[str, Any]
+    actions: list[ActionDict]
 
 
 # =============================================================================
@@ -169,7 +169,7 @@ class HTTPEndpointConfigDict(TypedDict, total=False):
     name: str
     url: str
     method: str  # "GET", "POST", etc.
-    headers: Dict[str, str]
+    headers: dict[str, str]
     interval: int
 
 
@@ -186,15 +186,15 @@ class IntegrationConfigDict(TypedDict, total=False):
 
     enabled: bool
     # GPIO specific
-    pins: Dict[str, GPIOPinConfigDict]
+    pins: dict[str, GPIOPinConfigDict]
     # MQTT specific
     broker: str
     port: int
-    topics: Dict[str, MQTTTopicConfigDict]
+    topics: dict[str, MQTTTopicConfigDict]
     # HTTP specific
-    endpoints: Dict[str, HTTPEndpointConfigDict]
+    endpoints: dict[str, HTTPEndpointConfigDict]
     # Generic devices
-    devices: Dict[str, DeviceConfigDict]
+    devices: dict[str, DeviceConfigDict]
     update_interval: int
 
 
@@ -203,7 +203,7 @@ class AppConfigDict(TypedDict, total=False):
 
     api: APIConfigDict
     general: GeneralConfigDict
-    integrations: Dict[str, IntegrationConfigDict]
+    integrations: dict[str, IntegrationConfigDict]
     queue: QueueConfigDict
     web: WebConfigDict
 
@@ -231,7 +231,7 @@ class QueueItemDict(TypedDict, total=False):
     """Item stored in the data queue."""
 
     timestamp: float  # Unix timestamp
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
 
 # =============================================================================
@@ -255,7 +255,7 @@ class IntegrationStatusDict(TypedDict, total=False):
     connected: bool
     last_data_received: Optional[str]
     error: Optional[str]
-    devices: Dict[str, IntegrationDeviceDataDict]
+    devices: dict[str, IntegrationDeviceDataDict]
 
 
 # =============================================================================
@@ -302,7 +302,7 @@ class WebAPISuccessResponse(TypedDict, total=False):
 class DeviceListResponse(TypedDict):
     """Response containing list of devices."""
 
-    devices: Dict[str, Dict[str, IntegrationDeviceDataDict]]
+    devices: dict[str, dict[str, IntegrationDeviceDataDict]]
 
 
 class QueueInfoResponse(TypedDict):

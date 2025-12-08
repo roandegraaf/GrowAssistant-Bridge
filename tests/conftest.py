@@ -9,8 +9,9 @@ for external dependencies.
 import asyncio
 import os
 import sys
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Dict, Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -51,7 +52,7 @@ def reset_singletons():
 
 
 @pytest.fixture
-def sample_config() -> Dict[str, Any]:
+def sample_config() -> dict[str, Any]:
     """Provide a sample configuration dictionary."""
     return {
         "api": {
@@ -96,7 +97,7 @@ def sample_config() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def temp_config_file(sample_config: Dict[str, Any], tmp_path: Path) -> Generator[Path, None, None]:
+def temp_config_file(sample_config: dict[str, Any], tmp_path: Path) -> Generator[Path, None, None]:
     """Create a temporary config file for testing."""
     config_file = tmp_path / "config.yaml"
 
@@ -115,7 +116,7 @@ def temp_data_dir(tmp_path: Path) -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-def mock_config(sample_config: Dict[str, Any]):
+def mock_config(sample_config: dict[str, Any]):
     """Provide a mocked Config instance."""
     mock = MagicMock()
     mock.config = sample_config
@@ -162,7 +163,7 @@ def mock_httpx_response():
 
     def create_response(
         status_code: int = 200,
-        json_data: Dict[str, Any] = None,
+        json_data: dict[str, Any] = None,
         text: str = "",
         raise_error: bool = False,
     ):
@@ -191,7 +192,7 @@ def mock_httpx_response():
 
 
 @pytest.fixture
-def sample_data_point() -> Dict[str, Any]:
+def sample_data_point() -> dict[str, Any]:
     """Provide a sample data point."""
     return {
         "timestamp": 1700000000000,
@@ -254,7 +255,7 @@ def mock_registry():
 
 
 @pytest.fixture
-def sample_api_response() -> Dict[str, Any]:
+def sample_api_response() -> dict[str, Any]:
     """Provide a sample API response."""
     return {
         "rdhMode": False,
@@ -276,7 +277,7 @@ def sample_api_response() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def sample_action() -> Dict[str, Any]:
+def sample_action() -> dict[str, Any]:
     """Provide a sample action."""
     return {
         "id": "test-action-1",
@@ -292,7 +293,7 @@ def sample_action() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def sample_integration_config() -> Dict[str, Any]:
+def sample_integration_config() -> dict[str, Any]:
     """Provide a sample integration configuration."""
     return {
         "enabled": True,
@@ -416,7 +417,7 @@ def mock_env_vars():
 
 
 @pytest.fixture
-def sample_credentials() -> Dict[str, Any]:
+def sample_credentials() -> dict[str, Any]:
     """Provide sample authentication credentials."""
     return {
         "client_id": "test-client-123",
@@ -429,7 +430,7 @@ def sample_credentials() -> Dict[str, Any]:
 
 @pytest.fixture
 def temp_credentials_file(
-    sample_credentials: Dict[str, Any], tmp_path: Path
+    sample_credentials: dict[str, Any], tmp_path: Path
 ) -> Generator[Path, None, None]:
     """Create a temporary credentials file for testing."""
     import json
