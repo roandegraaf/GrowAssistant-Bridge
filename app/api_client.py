@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 from tenacity import (
@@ -21,25 +21,29 @@ from tenacity import (
     wait_exponential,
 )
 
+# Import api_types for the new data format
+from app.api_types import (
+    ActionType,
+    LogType,
+    ProblemStatus,
+    ProblemType,
+    create_action_response,
+    create_data_log,
+    create_problem,
+    parse_api_response,
+)
 from app.auth import auth_manager
 from app.config import config
 from app.constants import (
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_RETRY_MAX_ATTEMPTS,
-    DEFAULT_RETRY_MIN_BACKOFF,
     DEFAULT_RETRY_MAX_BACKOFF,
-    MILLISECONDS_PER_SECOND,
+    DEFAULT_RETRY_MIN_BACKOFF,
     ProblemPriority,
     SensorRanges,
 )
-from app.utils.singleton import SingletonMeta
 from app.utils.http_utils import build_auth_headers
-# Import api_types for the new data format
-from app.api_types import (
-    ActionType, LogType, ProblemType, ProblemStatus,
-    create_data_log, create_problem, create_action_response, parse_api_response
-)
-
+from app.utils.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +89,7 @@ class ApiClient(metaclass=SingletonMeta):
         self._settings_callback = None  # Callback for when settings are received
 
         logger.info("API client initialized")
-    
+
     async def start(self):
         """Start the API client.
 
@@ -101,27 +105,27 @@ class ApiClient(metaclass=SingletonMeta):
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             verify=verify_ssl,
         )
-        
+
         # Create a command queue
         self._command_queue = asyncio.Queue()
-        
+
         # Create API log directory if needed
         if self._log_values:
             os.makedirs(self._api_log_dir, exist_ok=True)
-        
+
         logger.info("API client started")
-    
+
     async def stop(self):
         """Stop the API client.
-        
+
         This method closes the HTTP client.
         """
         if self._client:
             await self._client.aclose()
             self._client = None
-            
+
         logger.info("API Client stopped")
-    
+
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests.
 
@@ -132,26 +136,26 @@ class ApiClient(metaclass=SingletonMeta):
         if auth_manager.is_authenticated():
             client_id = auth_manager.get_client_id()
         return build_auth_headers(client_id=client_id)
-    
+
     def _get_api_value_logger(self, data_point: Dict[str, Any]) -> logging.Logger:
         """Create a logger for an individual API value.
-        
+
         Args:
             data_point: The data point to create a logger for.
-            
+
         Returns:
             logging.Logger: Logger for the data point.
         """
         # Create a unique identifier for this data point
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         # Extract meaningful identifiers from the data
         # First try to get integration name
         integration = data_point.get("integration", "")
         if not integration:
             # Look for source as backup
             integration = data_point.get("source", "unknown")
-        
+
         # Try to get endpoint or sensor name
         endpoint = data_point.get("endpoint_name", "")
         if not endpoint:
@@ -160,35 +164,41 @@ class ApiClient(metaclass=SingletonMeta):
             # If still not found, try action or target
             if not endpoint:
                 endpoint = data_point.get("action", "") or data_point.get("target", "unknown")
-        
+
         log_id = f"{timestamp}_{integration}_{endpoint}"
-        
+
         # Create a logger for this data point
         value_logger = logging.getLogger(f"api.value.{log_id}")
-        
+
         # Remove existing handlers to prevent duplicates
         for handler in value_logger.handlers[:]:
             value_logger.removeHandler(handler)
-        
+
         # Set level from config
         log_level_name = config.get("general.log_level", "INFO")
         log_level = getattr(logging, log_level_name.upper(), logging.INFO)
         value_logger.setLevel(log_level)
-        
+
         # Create log file name
         log_file = os.path.join(self._api_log_dir, f"{log_id}.log")
-        
+
         # Create file handler
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(log_level)
-        file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(file_format)
         value_logger.addHandler(file_handler)
-        
+
         return value_logger
-    
+
     # New methods for API data format
-    def add_data_log(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date: Optional[datetime] = None, pump_num: Optional[int] = None):
+    def add_data_log(
+        self,
+        log_type: Union[LogType, str],
+        value: Union[str, float, int],
+        log_date: Optional[datetime] = None,
+        pump_num: Optional[int] = None,
+    ):
         """Add a data log entry.
 
         Args:
@@ -201,12 +211,19 @@ class ApiClient(metaclass=SingletonMeta):
         if pump_num is not None:
             data_log["pumpNum"] = pump_num
         self._data_logs.append(data_log)
-        
-    def add_problem(self, problem_type: Union[ProblemType, str], status: Union[ProblemStatus, str], 
-                    description: str, priority: int = 0, user_can_resolve: bool = True, 
-                    resolved: bool = False, problem_id: Optional[str] = None):
+
+    def add_problem(
+        self,
+        problem_type: Union[ProblemType, str],
+        status: Union[ProblemStatus, str],
+        description: str,
+        priority: int = 0,
+        user_can_resolve: bool = True,
+        resolved: bool = False,
+        problem_id: Optional[str] = None,
+    ):
         """Add a problem report.
-        
+
         Args:
             problem_type: Type of problem
             status: Problem status category
@@ -216,21 +233,22 @@ class ApiClient(metaclass=SingletonMeta):
             resolved: Whether already resolved
             problem_id: Optional ID (generated if not provided)
         """
-        self._problems.append(create_problem(
-            problem_type, status, description, priority,
-            user_can_resolve, resolved, problem_id
-        ))
-        
+        self._problems.append(
+            create_problem(
+                problem_type, status, description, priority, user_can_resolve, resolved, problem_id
+            )
+        )
+
     def acknowledge_action(self, action_id: str, received: bool = True, resolved: bool = False):
         """Acknowledge an action from the API.
-        
+
         Args:
             action_id: ID of the action
             received: Whether action was received
             resolved: Whether action was completed
         """
         self._actions.append(create_action_response(action_id, received, resolved))
-        
+
     def register_action_handler(self, action_type: Union[ActionType, str], handler: Callable):
         """Register a handler for a specific action type.
 
@@ -291,11 +309,7 @@ class ApiClient(metaclass=SingletonMeta):
             self.add_data_log(log_type, value, log_date, pump_num)
 
     def _log_transmission_results(
-        self,
-        url: str,
-        client_id: str,
-        success: bool,
-        error_msg: Optional[str] = None
+        self, url: str, client_id: str, success: bool, error_msg: Optional[str] = None
     ) -> None:
         """Log transmission results for each data item.
 
@@ -309,15 +323,16 @@ class ApiClient(metaclass=SingletonMeta):
             return
 
         status = "Success" if success else "Failed"
-        log_fn = logging.Logger.info if success else logging.Logger.error
 
         # Log data logs
         for data_log in self._data_logs:
-            value_logger = self._get_api_value_logger({
-                "type": data_log.get("logType"),
-                "value": data_log.get("value"),
-                "timestamp": data_log.get("logDate")
-            })
+            value_logger = self._get_api_value_logger(
+                {
+                    "type": data_log.get("logType"),
+                    "value": data_log.get("value"),
+                    "timestamp": data_log.get("logDate"),
+                }
+            )
             if success:
                 value_logger.info(f"Data log sent to API: {json.dumps(data_log)}")
             else:
@@ -328,11 +343,13 @@ class ApiClient(metaclass=SingletonMeta):
 
         # Log problems
         for problem in self._problems:
-            value_logger = self._get_api_value_logger({
-                "type": problem.get("type"),
-                "status": problem.get("status"),
-                "description": problem.get("description")
-            })
+            value_logger = self._get_api_value_logger(
+                {
+                    "type": problem.get("type"),
+                    "status": problem.get("status"),
+                    "description": problem.get("description"),
+                }
+            )
             if success:
                 value_logger.info(f"Problem sent to API: {json.dumps(problem)}")
             else:
@@ -343,11 +360,13 @@ class ApiClient(metaclass=SingletonMeta):
 
         # Log actions
         for action in self._actions:
-            value_logger = self._get_api_value_logger({
-                "action": action.get("id"),
-                "received": action.get("received"),
-                "resolved": action.get("resolved")
-            })
+            value_logger = self._get_api_value_logger(
+                {
+                    "action": action.get("id"),
+                    "received": action.get("received"),
+                    "resolved": action.get("resolved"),
+                }
+            )
             if success:
                 value_logger.info(f"Action response sent to API: {json.dumps(action)}")
             else:
@@ -393,7 +412,10 @@ class ApiClient(metaclass=SingletonMeta):
         }
 
         ranges = {
-            "TEMPERATURE": {"min": SensorRanges.TEMPERATURE_MIN, "max": SensorRanges.TEMPERATURE_MAX},
+            "TEMPERATURE": {
+                "min": SensorRanges.TEMPERATURE_MIN,
+                "max": SensorRanges.TEMPERATURE_MAX,
+            },
             "HUMIDITY": {"min": SensorRanges.HUMIDITY_MIN, "max": SensorRanges.HUMIDITY_MAX},
             "PH": {"min": SensorRanges.PH_MIN, "max": SensorRanges.PH_MAX},
             "PH_VALUE": {"min": SensorRanges.PH_MIN, "max": SensorRanges.PH_MAX},
@@ -413,14 +435,20 @@ class ApiClient(metaclass=SingletonMeta):
             problem_type = type_mapping.get(data_type, ProblemType.CLIENT)
 
             # Check if value indicates a sensor failure (null, error, etc.)
-            if isinstance(value, str) and value.lower() in ["error", "failed", "null", "none", "unavailable"]:
+            if isinstance(value, str) and value.lower() in [
+                "error",
+                "failed",
+                "null",
+                "none",
+                "unavailable",
+            ]:
                 self.add_problem(
                     problem_type=problem_type,
                     status=ProblemStatus.CONNECTION,  # Sensor failure is a connection issue
                     description=f"Sensor failure detected for {data_type} from {integration}",
                     priority=ProblemPriority.HIGH,
                     user_can_resolve=False,
-                    resolved=False
+                    resolved=False,
                 )
                 continue
 
@@ -434,22 +462,25 @@ class ApiClient(metaclass=SingletonMeta):
                     min_val = range_config.get("min")
                     max_val = range_config.get("max")
 
-                    if (min_val is not None and numeric_value < min_val) or \
-                       (max_val is not None and numeric_value > max_val):
+                    if (min_val is not None and numeric_value < min_val) or (
+                        max_val is not None and numeric_value > max_val
+                    ):
                         self.add_problem(
                             problem_type=problem_type,
                             status=ProblemStatus.RANGE,
                             description=f"{data_type} value {numeric_value} is out of range from {integration}",
                             priority=ProblemPriority.MEDIUM,
                             user_can_resolve=True,
-                            resolved=False
+                            resolved=False,
                         )
 
             except (ValueError, TypeError):
                 # Value is not numeric, which might be okay for some types
                 pass
-    
-    async def send_data(self, data_points: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, str]:
+
+    async def send_data(
+        self, data_points: Optional[List[Dict[str, Any]]] = None
+    ) -> Tuple[bool, str]:
         """Send data to the API.
 
         Args:
@@ -482,13 +513,15 @@ class ApiClient(metaclass=SingletonMeta):
         payload = {
             "dataLogs": self._data_logs,
             "problems": self._problems,
-            "actions": self._actions
+            "actions": self._actions,
         }
 
         try:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
-                stop=stop_after_attempt(config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)),
+                stop=stop_after_attempt(
+                    config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)
+                ),
                 wait=wait_exponential(
                     min=config.get("api.retry_min_backoff", DEFAULT_RETRY_MIN_BACKOFF),
                     max=config.get("api.retry_max_backoff", DEFAULT_RETRY_MAX_BACKOFF),
@@ -499,14 +532,18 @@ class ApiClient(metaclass=SingletonMeta):
                         f"Sending data to API: {len(self._data_logs)} logs, "
                         f"{len(self._problems)} problems, {len(self._actions)} actions"
                     )
-                    response = await self._client.post(url, json=payload, headers=self._get_headers())
+                    response = await self._client.post(
+                        url, json=payload, headers=self._get_headers()
+                    )
                     response.raise_for_status()
                     await self._process_response(response.json())
 
             # Log success and clear data
             self._log_transmission_results(url, client_id, success=True)
             logs, problems, actions = self._clear_sent_data()
-            logger.info(f"Successfully sent {logs} data logs, {problems} problems, and {actions} actions")
+            logger.info(
+                f"Successfully sent {logs} data logs, {problems} problems, and {actions} actions"
+            )
             return True, "Data sent successfully"
 
         except httpx.HTTPStatusError as e:
@@ -522,7 +559,7 @@ class ApiClient(metaclass=SingletonMeta):
         except Exception as e:
             logger.exception(f"Unexpected error sending data: {str(e)}")
             return False, f"Unexpected error: {str(e)}"
-    
+
     async def _process_response(self, response_data: Dict[str, Any]):
         """Process API response data.
 
@@ -538,7 +575,7 @@ class ApiClient(metaclass=SingletonMeta):
             "status": parsed.get("status", ""),
             "light": parsed.get("light", {}),
             "climate": parsed.get("climate", {}),
-            "tank": parsed.get("tank", {})
+            "tank": parsed.get("tank", {}),
         }
 
         # Call settings callback if registered
@@ -572,96 +609,100 @@ class ApiClient(metaclass=SingletonMeta):
                     if success:
                         self.acknowledge_action(action_id, received=True, resolved=True)
 
-                    logger.info(f"Handled action {action_id} of type {action_type}, success: {success}")
+                    logger.info(
+                        f"Handled action {action_id} of type {action_type}, success: {success}"
+                    )
 
                 except Exception as e:
                     logger.error(f"Error handling action {action_id} of type {action_type}: {e}")
             else:
                 logger.warning(f"No handler registered for action type: {action_type}")
-                
+
     async def poll_commands(self) -> Optional[List[Dict[str, Any]]]:
         """Poll for commands from the API.
-        
+
         Returns:
             Optional[List[Dict[str, Any]]]: List of commands, or None on error.
         """
         if not self._client:
             logger.error("API client not started")
             return None
-            
+
         # Ensure we're authenticated
         if not auth_manager.is_authenticated():
             logger.warning("Not authenticated, cannot poll commands")
             return None
-            
+
         client_id = auth_manager.get_client_id()
         if not client_id:
             logger.warning("No client ID available, cannot poll commands")
             return None
-            
+
         url = f"{self._base_url}/client/{client_id}"
-        
+
         try:
             response = await self._client.get(url, headers=self._get_headers())
-            
+
             # Handle 204 status code (connected but no space)
             if response.status_code == 204:
                 logger.debug("Client is connected but no space created yet, no commands available")
                 return []
-            
+
             # Ensure the response is valid
             response.raise_for_status()
-            
+
             data = response.json()
             commands = data.get("commands", [])
-            
+
             if commands:
                 logger.info(f"Received {len(commands)} commands from API")
-            
+
             return commands
-            
+
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error polling commands: {e.response.status_code} - {e.response.text}")
-            
+            logger.error(
+                f"HTTP error polling commands: {e.response.status_code} - {e.response.text}"
+            )
+
         except (httpx.RequestError, asyncio.TimeoutError) as e:
             logger.error(f"Error polling commands: {str(e)}")
-            
+
         except Exception as e:
             logger.exception(f"Unexpected error polling commands: {str(e)}")
-            
+
         return None
-    
+
     async def start_command_polling(self):
         """Start polling for commands in a background task."""
         asyncio.create_task(self._command_polling_task())
-    
+
     async def _command_polling_task(self):
         """Background task for polling commands."""
         interval = config.get("api.poll_interval", 30)  # Default: 30 seconds
-        
+
         while True:
             try:
                 commands = await self.poll_commands()
                 if commands:
                     for command in commands:
                         await self._command_queue.put(command)
-                        
+
                 await asyncio.sleep(interval)
-                
+
             except asyncio.CancelledError:
                 logger.info("Command polling task cancelled")
                 break
-                
+
             except Exception as e:
                 logger.error(f"Error in command polling task: {str(e)}")
                 await asyncio.sleep(interval)
-    
+
     async def get_command(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """Get a command from the command queue.
-        
+
         Args:
             timeout: Timeout in seconds, or None to wait indefinitely.
-            
+
         Returns:
             Optional[Dict[str, Any]]: Command, or None if timeout occurs.
         """
@@ -670,65 +711,66 @@ class ApiClient(metaclass=SingletonMeta):
                 command = await self._command_queue.get()
             else:
                 command = await asyncio.wait_for(self._command_queue.get(), timeout)
-                
+
             return command
-            
+
         except asyncio.TimeoutError:
             return None
-    
+
     async def send_command_result(self, command_id: str, success: bool, message: str) -> bool:
         """Send the result of executing a command back to the API.
-        
+
         Args:
             command_id: ID of the command.
             success: Whether the command was executed successfully.
             message: Message describing the result.
-            
+
         Returns:
             bool: True if the result was sent successfully, False otherwise.
         """
         if not self._client:
             logger.error("API client not started")
             return False
-            
+
         # Ensure we're authenticated
         if not auth_manager.is_authenticated():
             return False
-            
+
         client_id = auth_manager.get_client_id()
         if not client_id:
             return False
-            
+
         url = f"{self._base_url}/client/{client_id}/commands/{command_id}/result"
-        
+
         try:
             data = {
                 "success": success,
                 "message": message,
                 "timestamp": int(time.time() * 1000),  # milliseconds since epoch
             }
-            
+
             response = await self._client.post(url, json=data, headers=self._get_headers())
             response.raise_for_status()
-            
+
             logger.info(f"Command result sent successfully: {command_id}, success={success}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error sending command result: {e}")
             return False
 
     def get_init_state(self):
         """Get the initialization state of the API client.
-        
+
         Returns:
             dict: A dictionary with initialization state information.
         """
         return {
             "initialized": self._client is not None,
-            "has_command_queue": hasattr(self, "_command_queue") and self._command_queue is not None
+            "has_command_queue": hasattr(self, "_command_queue")
+            and self._command_queue is not None,
         }
 
 
 # Create a global instance for easy imports
-api_client = ApiClient() 
+api_client = ApiClient()

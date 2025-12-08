@@ -5,10 +5,7 @@ This module tests client registration, credential management,
 connection status checking, and authentication flows.
 """
 
-import asyncio
 import json
-import os
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -386,9 +383,9 @@ class TestAuthManagerWaiting:
             "general.data_dir": str(data_dir),
         }.get(key, default)
 
-        with patch("app.auth.config", mock_config), \
-             patch("app.auth.AUTH_POLL_INTERVAL", 0.1), \
-             patch("app.auth.SPACE_CREATION_POLL_INTERVAL", 0.1):
+        with patch("app.auth.config", mock_config), patch(
+            "app.auth.AUTH_POLL_INTERVAL", 0.1
+        ), patch("app.auth.SPACE_CREATION_POLL_INTERVAL", 0.1):
             from app.auth import AuthManager
             from app.utils.singleton import SingletonMeta
 

@@ -5,10 +5,8 @@ This module tests the data types, enums, and helper functions
 used for API communication.
 """
 
-from datetime import datetime
 import uuid
-
-import pytest
+from datetime import datetime
 
 from app.api_types import (
     ActionType,
@@ -126,9 +124,7 @@ class TestCreateProblem:
     def test_create_problem_basic(self):
         """Test creating a basic problem."""
         problem = create_problem(
-            ProblemType.TEMPERATURE,
-            ProblemStatus.RANGE,
-            "Temperature out of acceptable range"
+            ProblemType.TEMPERATURE, ProblemStatus.RANGE, "Temperature out of acceptable range"
         )
 
         assert problem["type"] == "TEMPERATURE"
@@ -142,10 +138,7 @@ class TestCreateProblem:
     def test_create_problem_with_priority(self):
         """Test creating problem with custom priority."""
         problem = create_problem(
-            ProblemType.TANK,
-            ProblemStatus.EMPTY,
-            "Tank is empty",
-            priority=80
+            ProblemType.TANK, ProblemStatus.EMPTY, "Tank is empty", priority=80
         )
 
         assert problem["priority"] == 80
@@ -154,10 +147,7 @@ class TestCreateProblem:
         """Test creating problem with custom ID."""
         custom_id = "custom-problem-id"
         problem = create_problem(
-            ProblemType.CLIENT,
-            ProblemStatus.CONNECTION,
-            "Connection lost",
-            problem_id=custom_id
+            ProblemType.CLIENT, ProblemStatus.CONNECTION, "Connection lost", problem_id=custom_id
         )
 
         assert problem["id"] == custom_id
@@ -165,10 +155,7 @@ class TestCreateProblem:
     def test_create_problem_user_cannot_resolve(self):
         """Test creating problem user cannot resolve."""
         problem = create_problem(
-            ProblemType.SPACE,
-            ProblemStatus.OTHER,
-            "System error",
-            user_can_resolve=False
+            ProblemType.SPACE, ProblemStatus.OTHER, "System error", user_can_resolve=False
         )
 
         assert problem["userCanResolve"] is False
@@ -176,32 +163,21 @@ class TestCreateProblem:
     def test_create_problem_already_resolved(self):
         """Test creating already resolved problem."""
         problem = create_problem(
-            ProblemType.HUMIDITY,
-            ProblemStatus.RANGE,
-            "Humidity normalized",
-            resolved=True
+            ProblemType.HUMIDITY, ProblemStatus.RANGE, "Humidity normalized", resolved=True
         )
 
         assert problem["resolved"] is True
 
     def test_create_problem_id_is_uuid(self):
         """Test that generated problem ID is valid UUID."""
-        problem = create_problem(
-            ProblemType.LIGHT,
-            ProblemStatus.OTHER,
-            "Light issue"
-        )
+        problem = create_problem(ProblemType.LIGHT, ProblemStatus.OTHER, "Light issue")
 
         # Should not raise
         uuid.UUID(problem["id"])
 
     def test_create_problem_with_string_enums(self):
         """Test creating problem with string types."""
-        problem = create_problem(
-            "CUSTOM_TYPE",
-            "CUSTOM_STATUS",
-            "Custom problem"
-        )
+        problem = create_problem("CUSTOM_TYPE", "CUSTOM_STATUS", "Custom problem")
 
         assert problem["type"] == "CUSTOM_TYPE"
         assert problem["status"] == "CUSTOM_STATUS"
@@ -220,20 +196,13 @@ class TestCreateActionResponse:
 
     def test_create_action_response_resolved(self):
         """Test creating resolved action response."""
-        response = create_action_response(
-            "action-456",
-            received=True,
-            resolved=True
-        )
+        response = create_action_response("action-456", received=True, resolved=True)
 
         assert response["resolved"] is True
 
     def test_create_action_response_not_received(self):
         """Test creating action response not received."""
-        response = create_action_response(
-            "action-789",
-            received=False
-        )
+        response = create_action_response("action-789", received=False)
 
         assert response["received"] is False
 
@@ -303,11 +272,7 @@ class TestParseApiResponse:
 
     def test_parse_response_with_missing_action_fields(self):
         """Test parsing actions with missing fields."""
-        response = {
-            "actions": [
-                {"id": "action-1"}  # Missing most fields
-            ]
-        }
+        response = {"actions": [{"id": "action-1"}]}  # Missing most fields
 
         result = parse_api_response(response)
 

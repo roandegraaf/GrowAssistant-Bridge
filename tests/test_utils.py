@@ -6,16 +6,15 @@ HTTP utilities, and other helper functions.
 """
 
 import threading
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
+from app.utils.http_utils import (
+    build_auth_headers,
+    build_headers,
+    get_client_headers,
+)
 from app.utils.singleton import SingletonMeta
 from app.utils.validation import (
-    SAFE_NAME_PATTERN,
-    SAFE_PATH_PATTERN,
-    UUID_PATTERN,
     sanitize_string,
     validate_float,
     validate_integer,
@@ -24,16 +23,11 @@ from app.utils.validation import (
     validate_url,
     validate_uuid,
 )
-from app.utils.http_utils import (
-    build_auth_headers,
-    build_headers,
-    get_client_headers,
-)
-
 
 # =============================================================================
 # SingletonMeta Tests
 # =============================================================================
+
 
 class TestSingletonMeta:
     """Tests for the SingletonMeta metaclass."""
@@ -160,6 +154,7 @@ class TestSingletonMeta:
 # =============================================================================
 # Validation Tests
 # =============================================================================
+
 
 class TestValidateName:
     """Tests for validate_name function."""
@@ -473,6 +468,7 @@ class TestValidateUrl:
 # =============================================================================
 # HTTP Utils Tests
 # =============================================================================
+
 
 class TestBuildHeaders:
     """Tests for build_headers function."""

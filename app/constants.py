@@ -67,6 +67,7 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # Sensor Value Ranges
 # =============================================================================
 
+
 class SensorRanges:
     """Acceptable ranges for different sensor types."""
 
@@ -86,6 +87,7 @@ class SensorRanges:
 # =============================================================================
 # Problem Priority Levels
 # =============================================================================
+
 
 class ProblemPriority:
     """Priority levels for problems (0-100)."""

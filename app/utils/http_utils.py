@@ -11,7 +11,7 @@ from typing import Dict, Optional
 def build_headers(
     content_type: str = "application/json",
     accept: str = "application/json",
-    extra_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Build standard HTTP headers for API requests.
 
@@ -63,9 +63,7 @@ def build_auth_headers(
 
 
 def get_client_headers(
-    auth_manager,
-    include_client_id: bool = True,
-    include_token: bool = False
+    auth_manager, include_client_id: bool = True, include_token: bool = False
 ) -> Dict[str, str]:
     """Build headers using auth manager credentials.
 

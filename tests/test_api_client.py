@@ -21,8 +21,9 @@ class TestApiClient:
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a fresh ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
             mock_auth.is_ready_for_data.return_value = True
@@ -86,8 +87,7 @@ class TestApiClientDataMethods:
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a fresh ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager"):
+        with patch("app.api_client.config", mock_config), patch("app.api_client.auth_manager"):
             from app.api_client import ApiClient
             from app.utils.singleton import SingletonMeta
 
@@ -163,8 +163,9 @@ class TestApiClientSendData:
     @pytest.fixture
     def api_client(self, mock_config, mock_httpx_response):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
             mock_auth.is_ready_for_data.return_value = True
@@ -180,8 +181,7 @@ class TestApiClientSendData:
             # Set up mock HTTP client
             mock_client = AsyncMock()
             mock_response = mock_httpx_response(
-                status_code=200,
-                json_data={"status": "ok", "actions": []}
+                status_code=200, json_data={"status": "ok", "actions": []}
             )
             mock_client.post.return_value = mock_response
             mock_client.aclose = AsyncMock()
@@ -217,8 +217,9 @@ class TestApiClientSendData:
     @pytest.mark.asyncio
     async def test_send_data_not_started(self, mock_config):
         """Test send_data when client not started."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = True
 
             from app.api_client import ApiClient
@@ -236,8 +237,9 @@ class TestApiClientSendData:
     @pytest.mark.asyncio
     async def test_send_data_not_authenticated(self, mock_config, mock_httpx_client):
         """Test send_data when not authenticated."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = False
 
             from app.api_client import ApiClient
@@ -273,8 +275,9 @@ class TestApiClientPollCommands:
     @pytest.fixture
     def api_client(self, mock_config, mock_httpx_response):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = True
             mock_auth.get_client_id.return_value = "test-client-123"
 
@@ -304,7 +307,7 @@ class TestApiClientPollCommands:
                     {"id": "cmd-1", "action": "on", "target": "pump1"},
                     {"id": "cmd-2", "action": "off", "target": "pump2"},
                 ]
-            }
+            },
         )
         api_client._client.get.return_value = mock_response
 
@@ -328,8 +331,9 @@ class TestApiClientPollCommands:
     @pytest.mark.asyncio
     async def test_poll_commands_not_authenticated(self, mock_config):
         """Test poll_commands when not authenticated."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager") as mock_auth:
+        with patch("app.api_client.config", mock_config), patch(
+            "app.api_client.auth_manager"
+        ) as mock_auth:
             mock_auth.is_authenticated.return_value = False
 
             from app.api_client import ApiClient
@@ -369,8 +373,7 @@ class TestApiClientProcessResponse:
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager"):
+        with patch("app.api_client.config", mock_config), patch("app.api_client.auth_manager"):
             from app.api_client import ApiClient
             from app.utils.singleton import SingletonMeta
 
@@ -405,11 +408,7 @@ class TestApiClientProcessResponse:
     @pytest.mark.asyncio
     async def test_process_response_action_without_handler(self, api_client):
         """Test process_response with action but no handler."""
-        response = {
-            "actions": [
-                {"id": "action-1", "type": "UNKNOWN_TYPE", "value": "test"}
-            ]
-        }
+        response = {"actions": [{"id": "action-1", "type": "UNKNOWN_TYPE", "value": "test"}]}
 
         await api_client._process_response(response)
 
@@ -425,8 +424,7 @@ class TestApiClientProblemDetection:
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), \
-             patch("app.api_client.auth_manager"):
+        with patch("app.api_client.config", mock_config), patch("app.api_client.auth_manager"):
             from app.api_client import ApiClient
             from app.utils.singleton import SingletonMeta
 
@@ -438,9 +436,7 @@ class TestApiClientProblemDetection:
 
     def test_detect_temperature_out_of_range(self, api_client):
         """Test detection of temperature out of range."""
-        data_points = [
-            {"type": "TEMPERATURE", "value": 100, "integration": "test"}  # Way too high
-        ]
+        data_points = [{"type": "TEMPERATURE", "value": 100, "integration": "test"}]  # Way too high
 
         api_client._detect_problems_from_data(data_points)
 
@@ -450,9 +446,7 @@ class TestApiClientProblemDetection:
 
     def test_detect_sensor_failure(self, api_client):
         """Test detection of sensor failure."""
-        data_points = [
-            {"type": "HUMIDITY", "value": "error", "integration": "test"}
-        ]
+        data_points = [{"type": "HUMIDITY", "value": "error", "integration": "test"}]
 
         api_client._detect_problems_from_data(data_points)
 

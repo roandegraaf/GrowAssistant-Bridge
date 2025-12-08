@@ -12,10 +12,9 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Optional, List, Callable
+from typing import Callable, List, Optional
 
 from app.utils.singleton import SingletonMeta
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,61 +46,61 @@ class WatchdogManager(metaclass=SingletonMeta):
         atexit.register(self._cleanup_watchdog)
 
         logger.info("Watchdog manager initialized")
-    
+
     def start(self):
         """Start the watchdog in a separate process."""
         if self._running:
             logger.warning("Watchdog already running")
             return
-            
+
         logger.info(f"Starting watchdog to monitor PID {self._pid}")
         self._running = True
-        
+
         # Create a simple Python script for the watchdog
         watchdog_script = self._create_watchdog_script()
-        
+
         # Create environment for the subprocess
         env = os.environ.copy()
-        
+
         # Start the watchdog process
         try:
             # Set creation flags based on platform
             kwargs = {}
-            if sys.platform == 'win32':
-                kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
-            
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
             self._watchdog_process = subprocess.Popen(
-                [sys.executable, '-c', watchdog_script],
+                [sys.executable, "-c", watchdog_script],
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
-                **kwargs
+                **kwargs,
             )
-            
+
             # Start a thread to read the watchdog output
             thread = threading.Thread(target=self._read_watchdog_output)
             thread.daemon = True
             thread.start()
-            
+
             logger.info(f"Watchdog started with PID {self._watchdog_process.pid}")
         except Exception as e:
             logger.error(f"Failed to start watchdog: {e}")
             self._running = False
-    
+
     def _create_watchdog_script(self) -> str:
         """Create a Python script for the watchdog process.
-        
+
         Returns:
             str: The Python script as a string.
         """
         script_path = sys.argv[0]
-        script_args = ' '.join(sys.argv[1:])
+        script_args = " ".join(sys.argv[1:])
         python_executable = sys.executable
         main_pid = self._pid
-        
+
         # This script will be executed in a separate process
-        return f'''
+        return f"""
 import os
 import sys
 import time
@@ -197,12 +196,12 @@ def create_managed_process():
     # Create environment
     env = os.environ.copy()
     env['WATCHDOG_MANAGED'] = '1'
-    
+
     try:
         # Start the application
         cmd = [python_executable, script_path] + script_args.split()
         logger.info(f"Starting managed process: {{' '.join(cmd)}}")
-        
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -211,13 +210,13 @@ def create_managed_process():
             bufsize=1,
             env=env
         )
-        
+
         # Start a thread to read the output
         import threading
         thread = threading.Thread(target=read_process_output, args=(process,))
         thread.daemon = True
         thread.start()
-        
+
         logger.info(f"Process started with PID {{process.pid}}")
         return process
     except Exception as e:
@@ -229,12 +228,12 @@ while running:
     # Check if the main process is still running
     if not is_process_running(main_pid):
         logger.info(f"Main process {{main_pid}} has exited")
-        
+
         # Don't restart if it was a deliberate shutdown
         if deliberate_shutdown:
             logger.info("Deliberate shutdown detected, not restarting")
             break
-            
+
         # Restart the application
         restart_process = create_managed_process()
         if restart_process:
@@ -243,7 +242,7 @@ while running:
         else:
             # Wait before trying again
             time.sleep(5)
-            
+
     # Check for restart request file
     if os.path.exists(".restart_requested"):
         logger.info("Restart requested via file")
@@ -251,7 +250,7 @@ while running:
             os.remove(".restart_requested")
         except:
             pass
-            
+
         # Kill the current process
         try:
             if sys.platform == 'win32':
@@ -264,23 +263,23 @@ while running:
             time.sleep(2)
         except Exception as e:
             logger.error(f"Error terminating process: {{e}}")
-            
+
         # Restart the application
         restart_process = create_managed_process()
         if restart_process:
             main_pid = restart_process.pid
-    
+
     # Wait a bit before checking again
     time.sleep(1)
 
 logger.info("Watchdog exiting")
-'''
-    
+"""
+
     def _read_watchdog_output(self):
         """Read and log the watchdog process output."""
         if not self._watchdog_process or not self._watchdog_process.stdout:
             return
-            
+
         try:
             for line in self._watchdog_process.stdout:
                 # Log the line
@@ -289,7 +288,7 @@ logger.info("Watchdog exiting")
                     logger.info(f"[Watchdog] {line}")
         except Exception as e:
             logger.error(f"Error reading watchdog output: {e}")
-    
+
     def _cleanup_watchdog(self):
         """Clean up the watchdog when the main process exits."""
         if self._running and self._watchdog_process and self._watchdog_process.poll() is None:
@@ -301,23 +300,23 @@ logger.info("Watchdog exiting")
                 logger.warning("Watchdog did not terminate gracefully, killing it")
                 self._watchdog_process.kill()
             self._running = False
-    
+
     def stop(self, deliberate=True):
         """Stop the watchdog.
-        
+
         Args:
             deliberate: Whether the shutdown was deliberate.
         """
         if not self._running:
             logger.warning("Watchdog not running")
             return
-            
+
         logger.info(f"Stopping watchdog (deliberate={deliberate})")
-        
+
         # Signal to the watchdog that this is a deliberate shutdown
         if deliberate and self._watchdog_process and self._watchdog_process.poll() is None:
             try:
-                if sys.platform == 'win32':
+                if sys.platform == "win32":
                     # On Windows, we need to use CTRL_BREAK_EVENT
                     self._watchdog_process.send_signal(signal.CTRL_BREAK_EVENT)
                 else:
@@ -325,19 +324,19 @@ logger.info("Watchdog exiting")
                     self._watchdog_process.terminate()
             except Exception as e:
                 logger.error(f"Error sending signal to watchdog: {e}")
-        
+
         self._cleanup_watchdog()
         self._running = False
         logger.info("Watchdog stopped")
-    
+
     def request_restart(self):
         """Request a restart of the application."""
         if not self._running:
             logger.warning("Watchdog not running, can't request restart")
             return False
-            
+
         logger.info("Requesting application restart via watchdog")
-        
+
         # Create a file to signal the watchdog to restart the application
         try:
             with open(".restart_requested", "w") as f:
@@ -347,14 +346,15 @@ logger.info("Watchdog exiting")
         except Exception as e:
             logger.error(f"Error creating restart request file: {e}")
             return False
-    
+
     def register_exit_handler(self, handler: Callable):
         """Register a handler to be called when the application exits.
-        
+
         Args:
             handler: The handler function to call.
         """
         self._exit_handlers.append(handler)
 
+
 # Create a global instance
-watchdog_manager = WatchdogManager() 
+watchdog_manager = WatchdogManager()

@@ -96,8 +96,7 @@ def _mask_recursive(
 
         # Check if this key or path should be masked
         should_mask = (
-            key.lower() in {k.lower() for k in sensitive_keys}
-            or full_path in sensitive_paths
+            key.lower() in {k.lower() for k in sensitive_keys} or full_path in sensitive_paths
         )
 
         if should_mask and value is not None and value != "":

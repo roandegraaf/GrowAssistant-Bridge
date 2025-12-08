@@ -9,10 +9,9 @@ for external dependencies.
 import asyncio
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -25,6 +24,7 @@ sys.path.insert(0, str(project_root))
 # =============================================================================
 # Singleton Reset Fixtures
 # =============================================================================
+
 
 @pytest.fixture(autouse=True)
 def reset_singletons():
@@ -48,6 +48,7 @@ def reset_singletons():
 # =============================================================================
 # Configuration Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_config() -> Dict[str, Any]:
@@ -140,6 +141,7 @@ def mock_config(sample_config: Dict[str, Any]):
 # HTTP Client Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def mock_httpx_client():
     """Provide a mocked httpx AsyncClient."""
@@ -157,11 +159,12 @@ def mock_httpx_client():
 @pytest.fixture
 def mock_httpx_response():
     """Provide a factory for mock HTTP responses."""
+
     def create_response(
         status_code: int = 200,
         json_data: Dict[str, Any] = None,
         text: str = "",
-        raise_error: bool = False
+        raise_error: bool = False,
     ):
         import httpx
 
@@ -172,9 +175,7 @@ def mock_httpx_response():
 
         if raise_error and status_code >= 400:
             mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-                f"HTTP {status_code}",
-                request=MagicMock(),
-                response=mock_response
+                f"HTTP {status_code}", request=MagicMock(), response=mock_response
             )
         else:
             mock_response.raise_for_status = MagicMock()
@@ -187,6 +188,7 @@ def mock_httpx_response():
 # =============================================================================
 # Queue Manager Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_data_point() -> Dict[str, Any]:
@@ -214,10 +216,11 @@ def sample_data_points() -> list:
 # Registry Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def mock_registry():
     """Provide a fresh DeviceRegistry instance for testing."""
-    from app.registry import DeviceRegistry, DeviceCategory
+    from app.registry import DeviceCategory, DeviceRegistry
     from app.utils.singleton import SingletonMeta
 
     # Reset the singleton first
@@ -248,6 +251,7 @@ def mock_registry():
 # =============================================================================
 # API Types Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_api_response() -> Dict[str, Any]:
@@ -286,6 +290,7 @@ def sample_action() -> Dict[str, Any]:
 # Integration Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_integration_config() -> Dict[str, Any]:
     """Provide a sample integration configuration."""
@@ -302,6 +307,7 @@ def sample_integration_config() -> Dict[str, Any]:
 # =============================================================================
 # Web App Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def flask_test_client(mock_config):
@@ -335,6 +341,7 @@ def authenticated_flask_client(flask_test_client):
 # Async Utilities
 # =============================================================================
 
+
 @pytest.fixture
 def event_loop():
     """Create an instance of the default event loop for each test case."""
@@ -346,6 +353,7 @@ def event_loop():
 # =============================================================================
 # Environment Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def clean_environment():
@@ -367,6 +375,7 @@ def clean_environment():
 @pytest.fixture
 def mock_env_vars():
     """Provide environment variable mocking context manager."""
+
     def set_env_vars(**kwargs):
         original = {k: os.environ.get(k) for k in kwargs}
 
@@ -405,6 +414,7 @@ def mock_env_vars():
 # Credential Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_credentials() -> Dict[str, Any]:
     """Provide sample authentication credentials."""
@@ -418,7 +428,9 @@ def sample_credentials() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def temp_credentials_file(sample_credentials: Dict[str, Any], tmp_path: Path) -> Generator[Path, None, None]:
+def temp_credentials_file(
+    sample_credentials: Dict[str, Any], tmp_path: Path
+) -> Generator[Path, None, None]:
     """Create a temporary credentials file for testing."""
     import json
 

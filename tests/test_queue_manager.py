@@ -7,10 +7,8 @@ and data point management.
 
 import asyncio
 import json
-import os
 import sqlite3
-from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -173,7 +171,9 @@ class TestQueueManagerPersistence:
         await queue_manager_with_persistence.stop()
 
     @pytest.mark.asyncio
-    async def test_flush_to_db_persists_items(self, queue_manager_with_persistence, tmp_path, sample_data_points):
+    async def test_flush_to_db_persists_items(
+        self, queue_manager_with_persistence, tmp_path, sample_data_points
+    ):
         """Test that flush_to_db persists items to database."""
         await queue_manager_with_persistence.start()
 
@@ -203,16 +203,18 @@ class TestQueueManagerPersistence:
         # Pre-populate database
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL,
                 data TEXT
             )
-        """)
+        """
+        )
         cursor.execute(
             "INSERT INTO queue (timestamp, data) VALUES (?, ?)",
-            (sample_data_point["timestamp"], json.dumps(sample_data_point))
+            (sample_data_point["timestamp"], json.dumps(sample_data_point)),
         )
         conn.commit()
         conn.close()
@@ -251,7 +253,9 @@ class TestQueueManagerPersistence:
             await qm.stop()
 
     @pytest.mark.asyncio
-    async def test_stop_flushes_remaining_items(self, queue_manager_with_persistence, tmp_path, sample_data_point):
+    async def test_stop_flushes_remaining_items(
+        self, queue_manager_with_persistence, tmp_path, sample_data_point
+    ):
         """Test that stop flushes remaining items to database."""
         await queue_manager_with_persistence.start()
         await queue_manager_with_persistence.put(sample_data_point)
@@ -287,6 +291,7 @@ class TestQueueManagerConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_puts(self, queue_manager):
         """Test that concurrent puts work correctly."""
+
         async def put_item(i):
             await queue_manager.put({"value": i, "timestamp": i * 1000})
 

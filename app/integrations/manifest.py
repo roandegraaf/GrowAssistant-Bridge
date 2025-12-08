@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 class DeviceCategory(str, Enum):
     """Category of device an integration can handle."""
+
     SENSOR = "sensor"
     ACTUATOR = "actuator"
     BOTH = "both"
@@ -21,10 +22,11 @@ class DeviceCategory(str, Enum):
 
 class IoTClass(str, Enum):
     """Classification of how the integration communicates."""
-    LOCAL_POLLING = "local_polling"    # Polls local device
-    LOCAL_PUSH = "local_push"          # Local device pushes data
-    CLOUD_POLLING = "cloud_polling"    # Polls cloud service
-    CLOUD_PUSH = "cloud_push"          # Cloud service pushes data
+
+    LOCAL_POLLING = "local_polling"  # Polls local device
+    LOCAL_PUSH = "local_push"  # Local device pushes data
+    CLOUD_POLLING = "cloud_polling"  # Polls cloud service
+    CLOUD_PUSH = "cloud_push"  # Cloud service pushes data
 
 
 @dataclass
@@ -49,6 +51,7 @@ class IntegrationManifest:
         codeowners: List of maintainer identifiers.
         is_builtin: Whether this is a built-in integration.
     """
+
     domain: str
     name: str
     version: str = "1.0.0"
@@ -64,11 +67,17 @@ class IntegrationManifest:
 
     def supports_sensors(self) -> bool:
         """Check if this integration supports sensors."""
-        return DeviceCategory.SENSOR in self.device_categories or DeviceCategory.BOTH in self.device_categories
+        return (
+            DeviceCategory.SENSOR in self.device_categories
+            or DeviceCategory.BOTH in self.device_categories
+        )
 
     def supports_actuators(self) -> bool:
         """Check if this integration supports actuators."""
-        return DeviceCategory.ACTUATOR in self.device_categories or DeviceCategory.BOTH in self.device_categories
+        return (
+            DeviceCategory.ACTUATOR in self.device_categories
+            or DeviceCategory.BOTH in self.device_categories
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert manifest to dictionary for serialization."""
@@ -89,9 +98,7 @@ class IntegrationManifest:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "IntegrationManifest":
         """Create manifest from dictionary."""
-        device_categories = [
-            DeviceCategory(dc) for dc in data.get("device_categories", ["both"])
-        ]
+        device_categories = [DeviceCategory(dc) for dc in data.get("device_categories", ["both"])]
         iot_class = IoTClass(data.get("iot_class", "local_polling"))
 
         return cls(

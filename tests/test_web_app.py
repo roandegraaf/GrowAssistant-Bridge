@@ -6,7 +6,7 @@ and API endpoints using Flask's test client.
 """
 
 import json
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -18,9 +18,9 @@ class TestWebAppRoutes:
     @pytest.fixture
     def client(self, mock_config):
         """Create Flask test client."""
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth, \
-             patch("web.app.registry") as mock_registry:
+        with patch("web.app.config", mock_config), patch(
+            "web.app.auth_manager"
+        ) as mock_auth, patch("web.app.registry"):
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 
@@ -90,8 +90,7 @@ class TestWebAppAuthentication:
         }.get(key, default)
         mock_config.config_file = str(tmp_path / "config.yaml")
 
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth:
+        with patch("web.app.config", mock_config), patch("web.app.auth_manager") as mock_auth:
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 
@@ -109,9 +108,7 @@ class TestWebAppAuthentication:
         """Test successful login."""
         with patch("web.app.is_password_set", return_value=True):
             response = client.post(
-                "/login",
-                data={"username": "admin", "password": "testpass"},
-                follow_redirects=False
+                "/login", data={"username": "admin", "password": "testpass"}, follow_redirects=False
             )
 
             assert response.status_code == 302
@@ -119,10 +116,7 @@ class TestWebAppAuthentication:
     def test_login_failure(self, client):
         """Test failed login with wrong password."""
         with patch("web.app.is_password_set", return_value=True):
-            response = client.post(
-                "/login",
-                data={"username": "admin", "password": "wrongpass"}
-            )
+            response = client.post("/login", data={"username": "admin", "password": "wrongpass"})
 
             assert b"Invalid" in response.data or response.status_code == 200
 
@@ -144,9 +138,9 @@ class TestWebAppAPIEndpoints:
     @pytest.fixture
     def authenticated_client(self, mock_config):
         """Create authenticated Flask test client."""
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth, \
-             patch("web.app.registry") as mock_registry:
+        with patch("web.app.config", mock_config), patch(
+            "web.app.auth_manager"
+        ) as mock_auth, patch("web.app.registry") as mock_registry:
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 
@@ -284,9 +278,7 @@ class TestWebAppConfigEndpoints:
         }
 
         response = authenticated_client.post(
-            "/api/config",
-            data=json.dumps(new_config),
-            content_type="application/json"
+            "/api/config", data=json.dumps(new_config), content_type="application/json"
         )
 
         assert response.status_code == 200
@@ -296,9 +288,7 @@ class TestWebAppConfigEndpoints:
     def test_update_config_no_data(self, authenticated_client):
         """Test updating config with no data."""
         response = authenticated_client.post(
-            "/api/config",
-            data="",
-            content_type="application/json"
+            "/api/config", data="", content_type="application/json"
         )
 
         # Flask may return 400 or 500 depending on how it handles empty JSON
@@ -333,8 +323,7 @@ class TestWebAppConnectionStatus:
     @pytest.fixture
     def client(self, mock_config):
         """Create Flask test client with mocks."""
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth:
+        with patch("web.app.config", mock_config), patch("web.app.auth_manager") as mock_auth:
             mock_auth.is_authenticated.return_value = False
             mock_auth._client = None
 
@@ -399,8 +388,7 @@ class TestWebAppHelpers:
             "web.auth_enabled": True,
         }.get(key, default)
 
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth:
+        with patch("web.app.config", mock_config), patch("web.app.auth_manager") as mock_auth:
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 
@@ -423,8 +411,7 @@ class TestWebAppHelpers:
             "web.auth_enabled": False,
         }.get(key, default)
 
-        with patch("web.app.config", mock_config), \
-             patch("web.app.auth_manager") as mock_auth:
+        with patch("web.app.config", mock_config), patch("web.app.auth_manager") as mock_auth:
             mock_auth.get_auth_code.return_value = None
             mock_auth.is_authenticated.return_value = True
 

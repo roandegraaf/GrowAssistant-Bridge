@@ -12,15 +12,31 @@ import logging
 import os
 import pkgutil
 import sys
-from typing import Any, ClassVar, Dict, Generator, List, Optional, Type, Callable, Union, TYPE_CHECKING
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Type,
+    Union,
+)
 
 from pydantic import BaseModel, ValidationError
 
-from app.api_types import (
-    ActionType, LogType, ProblemType, ProblemStatus,
-    create_data_log, create_problem, create_action_response
-)
 from app.api_client import api_client
+from app.api_types import (
+    ActionType,
+    LogType,
+    ProblemStatus,
+    ProblemType,
+    create_action_response,
+    create_data_log,
+    create_problem,
+)
 
 if TYPE_CHECKING:
     from app.registry import DeviceRegistry
@@ -31,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 class ConfigurationError(Exception):
     """Raised when configuration validation fails."""
+
     pass
 
 
@@ -112,17 +129,9 @@ class Integration(abc.ABC):
         """
         # Default implementation for integrations with 'devices' config
         if "devices" in self.config:
-            registry.register_integration_by_devices(
-                self.name,
-                self.config.get("devices", {})
-            )
+            registry.register_integration_by_devices(self.name, self.config.get("devices", {}))
 
-    async def execute_command(
-        self,
-        target_id: str,
-        action: str,
-        payload: Dict[str, Any]
-    ) -> bool:
+    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
         """Execute a command on a target device.
 
         This is the unified command interface that properly wraps send_data().
@@ -138,37 +147,33 @@ class Integration(abc.ABC):
         Returns:
             bool: True if command executed successfully, False otherwise.
         """
-        return await self.send_data({
-            "target_id": target_id,
-            "action": action,
-            **payload
-        })
-    
+        return await self.send_data({"target_id": target_id, "action": action, **payload})
+
     @abc.abstractmethod
     async def connect(self) -> bool:
         """Establish connection to the device/service.
-        
+
         Returns:
             bool: True if connection was successful, False otherwise.
         """
         pass
-    
+
     @abc.abstractmethod
     async def send_data(self, data: Dict[str, Any]) -> bool:
         """Send data/command to the device/service.
-        
+
         Args:
             data: Data to send to the device/service.
-            
+
         Returns:
             bool: True if send was successful, False otherwise.
         """
         pass
-    
+
     @abc.abstractmethod
     async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
         """Receive data from the device/service.
-        
+
         Yields:
             Dict[str, Any]: Data received from the device/service.
         """
@@ -177,14 +182,20 @@ class Integration(abc.ABC):
     @abc.abstractmethod
     async def get_device_data(self) -> Dict[str, Any]:
         """Get the current data/state for all devices managed by this integration.
-        
+
         Returns:
             Dict[str, Any]: A dictionary mapping device names to their current values/states.
         """
         pass
-        
+
     # New methods for API data format
-    def log_data(self, log_type: Union[LogType, str], value: Union[str, float, int], log_date=None, pump_num=None):
+    def log_data(
+        self,
+        log_type: Union[LogType, str],
+        value: Union[str, float, int],
+        log_date=None,
+        pump_num=None,
+    ):
         """Log data to the API.
 
         Args:
@@ -194,12 +205,19 @@ class Integration(abc.ABC):
             pump_num: Optional pump number (only for pump-related logs)
         """
         api_client.add_data_log(log_type, value, log_date, pump_num)
-        
-    def report_problem(self, problem_type: Union[ProblemType, str], status: Union[ProblemStatus, str], 
-                     description: str, priority: int = 0, user_can_resolve: bool = True, 
-                     resolved: bool = False, problem_id: Optional[str] = None):
+
+    def report_problem(
+        self,
+        problem_type: Union[ProblemType, str],
+        status: Union[ProblemStatus, str],
+        description: str,
+        priority: int = 0,
+        user_can_resolve: bool = True,
+        resolved: bool = False,
+        problem_id: Optional[str] = None,
+    ):
         """Report a problem to the API.
-        
+
         Args:
             problem_type: Type of problem
             status: Problem status category
@@ -210,29 +228,28 @@ class Integration(abc.ABC):
             problem_id: Optional ID
         """
         api_client.add_problem(
-            problem_type, status, description, priority,
-            user_can_resolve, resolved, problem_id
+            problem_type, status, description, priority, user_can_resolve, resolved, problem_id
         )
-        
+
     def register_action_handler(self, action_type: Union[ActionType, str], handler: Callable):
         """Register a handler for API actions.
-        
+
         Args:
             action_type: Type of action to handle
             handler: Callback function(action_data) -> bool
         """
         api_client.register_action_handler(action_type, handler)
-        
+
     def acknowledge_action(self, action_id: str, received: bool = True, resolved: bool = False):
         """Acknowledge an action from the API.
-        
+
         Args:
             action_id: ID of the action
             received: Whether received
             resolved: Whether completed
         """
         api_client.acknowledge_action(action_id, received, resolved)
-        
+
     async def handle_action(self, action_data: Dict[str, Any]) -> bool:
         """Handle an action requested by the API.
 
@@ -361,33 +378,33 @@ def get_all_config_keys() -> List[str]:
 
 def _load_from_directory(directory_path: str) -> List[str]:
     """Load Python modules from a directory path.
-    
+
     Args:
         directory_path: Path to directory containing Python modules.
-        
+
     Returns:
         List[str]: List of successfully loaded module names.
     """
     loaded_modules = []
-    
+
     if not os.path.exists(directory_path):
         logger.warning(f"External integration directory does not exist: {directory_path}")
         return loaded_modules
-        
+
     logger.info(f"Scanning for integration modules in: {directory_path}")
-    
+
     # Add the directory to sys.path if not already there
     if directory_path not in sys.path:
         sys.path.append(directory_path)
-    
+
     # Walk through all Python files in the directory
     for file in os.listdir(directory_path):
-        if file.endswith('.py') and not file.startswith('_'):
+        if file.endswith(".py") and not file.startswith("_"):
             module_name = file[:-3]  # Remove .py extension
             try:
                 # Construct the full path to the module
                 module_path = os.path.join(directory_path, file)
-                
+
                 # Load the module
                 spec = importlib.util.spec_from_file_location(module_name, module_path)
                 if spec is not None:
@@ -399,23 +416,23 @@ def _load_from_directory(directory_path: str) -> List[str]:
                 logger.error(f"Error importing external module {module_name}: {e}")
             except Exception as e:
                 logger.error(f"Error loading external module {module_name}: {e}")
-    
+
     return loaded_modules
 
 
 def discover_integrations() -> List[str]:
     """Discover and load all available integration modules.
-    
+
     This function searches for modules in the 'integrations' package and imports them.
     It also searches for external integrations in the configured external integrations directory.
     Each module should register its integration class(es) using the register_integration decorator.
-    
+
     Returns:
         List[str]: List of discovered integration module names.
     """
     package_dir = os.path.dirname(__file__)
     module_names = []
-    
+
     # First, load built-in integrations
     for _, name, is_pkg in pkgutil.iter_modules([package_dir]):
         if is_pkg:  # Only load packages (directories with __init__.py)
@@ -425,19 +442,20 @@ def discover_integrations() -> List[str]:
                 logger.info(f"Discovered built-in integration module: {name}")
             except ImportError as e:
                 logger.error(f"Error importing built-in integration module {name}: {e}")
-    
+
     # Then, load external integrations from the external directory
     from app.config import config
+
     external_dir = config.get("general.external_integrations_dir", "external_integrations")
-    
+
     # Make path absolute if it's not already
     if not os.path.isabs(external_dir):
         # Get the project root directory (two levels up from this file)
         app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         external_dir = os.path.join(app_root, external_dir)
-    
+
     # Load from external directory
     external_modules = _load_from_directory(external_dir)
     module_names.extend(external_modules)
-    
-    return module_names 
+
+    return module_names

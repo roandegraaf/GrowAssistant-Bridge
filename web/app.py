@@ -5,39 +5,50 @@ This module provides a Flask web interface for the GrowAssistant Bridge.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import os
-import time
-import yaml
-import concurrent.futures
-from typing import Any, Dict, List
-from functools import wraps
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED # Import concurrent futures
 import threading
-from flask import Response
+import time
+from concurrent.futures import (  # Import concurrent futures
+    wait,
+)
+from functools import wraps
 
-from flask import Flask, jsonify, render_template, request, session, redirect, url_for, abort, flash, current_app
-from werkzeug.security import check_password_hash, generate_password_hash
+import yaml
+from flask import (
+    Flask,
+    Response,
+    current_app,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.security import check_password_hash, generate_password_hash
 
+from app.auth import auth_manager
 from app.config import config
 from app.registry import registry
-from app.auth import auth_manager
-
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__,
-            template_folder=os.path.join(os.path.dirname(__file__), "templates"),
-            static_folder=os.path.join(os.path.dirname(__file__), "static"))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(os.path.dirname(__file__), "templates"),
+    static_folder=os.path.join(os.path.dirname(__file__), "static"),
+)
 
 # Initialize rate limiter
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://"
+    storage_uri="memory://",
 )
 
 
@@ -45,16 +56,19 @@ limiter = Limiter(
 @app.after_request
 def add_security_headers(response):
     """Add security headers to all responses."""
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    )
     return response
 
 
 def login_required(f):
     """Decorator to require login for routes."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Skip auth check if auth is disabled in config
@@ -64,6 +78,7 @@ def login_required(f):
         if not session.get("logged_in"):
             return redirect(url_for("login", next=request.url))
         return f(*args, **kwargs)
+
     return decorated_function
 
 
@@ -95,9 +110,9 @@ def setup():
     # If password is already set, redirect to login
     if is_password_set():
         return redirect(url_for("login"))
-        
+
     error = None
-    
+
     if request.method == "POST":
         username = request.form.get("username", "admin")
         password = request.form.get("password")
@@ -114,32 +129,32 @@ def setup():
             try:
                 # Generate password hash
                 password_hash = generate_password_hash(password)
-                
+
                 # Read current config
-                with open(config.config_file, "r") as f:
+                with open(config.config_file) as f:
                     config_data = yaml.safe_load(f)
-                
+
                 # Update web section
                 if "web" not in config_data:
                     config_data["web"] = {}
-                    
+
                 config_data["web"]["username"] = username
                 config_data["web"]["password_hash"] = password_hash
-                
+
                 # Write updated config
                 with open(config.config_file, "w") as f:
                     yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
-                
+
                 # Update config in memory
                 config.reload()
-                
+
                 # Redirect to login
                 return redirect(url_for("login"))
-                
+
             except Exception as e:
                 logger.error(f"Error setting password: {e}")
                 error = f"Error setting password: {str(e)}"
-    
+
     return render_template("setup.html", error=error)
 
 
@@ -151,20 +166,20 @@ def login():
     if not config.get("web.auth_enabled", False):
         session["logged_in"] = True
         return redirect(url_for("index"))
-    
+
     # If no password is set, redirect to setup
     if not is_password_set():
         return redirect(url_for("setup"))
-        
+
     error = None
-    
+
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-        
+
         stored_username = config.get("web.username", "admin")
         stored_password_hash = config.get("web.password_hash", "")
-        
+
         if username == stored_username and check_password_hash(stored_password_hash, password):
             # Regenerate session to prevent session fixation attacks
             session.clear()
@@ -176,8 +191,10 @@ def login():
             # Log failed login attempt with IP address and timestamp
             client_ip = request.remote_addr
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            logger.warning(f"Failed login attempt - IP: {client_ip}, Username: {username}, Time: {timestamp}")
-    
+            logger.warning(
+                f"Failed login attempt - IP: {client_ip}, Username: {username}, Time: {timestamp}"
+            )
+
     return render_template("login.html", error=error)
 
 
@@ -195,12 +212,12 @@ def index():
     # Check if we need to show onboarding
     auth_code = auth_manager.get_auth_code()
     is_authenticated = auth_manager.is_authenticated()
-    
+
     return render_template(
-        "index.html", 
+        "index.html",
         show_onboarding=auth_code is not None,
         auth_code=auth_code,
-        is_authenticated=is_authenticated
+        is_authenticated=is_authenticated,
     )
 
 
@@ -225,15 +242,15 @@ def get_device_types():
     """Get all registered device types."""
     try:
         device_types = registry.get_device_types()
-        
+
         # Get actions for each device type
         result = {}
         for device_type in device_types:
             actions = registry.get_device_actions(device_type)
             result[device_type] = actions
-        
+
         logger.info(f"Device types response: {result}")
-            
+
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error getting device types: {e}")
@@ -246,19 +263,25 @@ def get_integrations():
     """Get information about loaded integrations."""
     try:
         # Get the existing Application instance from Flask app context
-        app_instance = current_app.config.get('APPLICATION_INSTANCE')
+        app_instance = current_app.config.get("APPLICATION_INSTANCE")
 
         # Check if the application instance exists
         if app_instance is None:
             # This might happen if the web server started before the main app fully initialized
             # or if accessed very early.
             logger.warning("Application instance not found in Flask context for /api/integrations")
-            return jsonify({"error": "Application instance not available yet. Please try again."}), 503
+            return (
+                jsonify({"error": "Application instance not available yet. Please try again."}),
+                503,
+            )
 
         # Check if integrations attribute exists
-        if not hasattr(app_instance, '_integrations'):
+        if not hasattr(app_instance, "_integrations"):
             logger.error("Application instance has no _integrations attribute")
-            return jsonify({"error": "Application seems initialized but integrations are missing."}), 500
+            return (
+                jsonify({"error": "Application seems initialized but integrations are missing."}),
+                500,
+            )
 
         integrations = []
         if app_instance._integrations:
@@ -267,7 +290,7 @@ def get_integrations():
                     integration_info = {
                         "name": name,
                         "type": integration.__class__.__name__,
-                        "status": "active" # Assuming active if loaded
+                        "status": "active",  # Assuming active if loaded
                     }
                     integrations.append(integration_info)
                     logger.debug(f"Found integration: {name} ({integration.__class__.__name__})")
@@ -277,12 +300,18 @@ def get_integrations():
         else:
             # Check if integrations are still loading by examining the config
             integrations_config = config.get_section("integrations")
-            enabled_integrations = [name for name, cfg in integrations_config.items() 
-                                   if cfg.get("enabled", False)]
-            
+            enabled_integrations = [
+                name for name, cfg in integrations_config.items() if cfg.get("enabled", False)
+            ]
+
             if enabled_integrations:
-                logger.info(f"Integrations defined in config but not loaded yet: {enabled_integrations}")
-                return jsonify({"message": "Integrations are still loading. Please try again later."}), 202
+                logger.info(
+                    f"Integrations defined in config but not loaded yet: {enabled_integrations}"
+                )
+                return (
+                    jsonify({"message": "Integrations are still loading. Please try again later."}),
+                    202,
+                )
             else:
                 logger.info("No integrations are enabled in the configuration.")
 
@@ -299,12 +328,12 @@ def get_queue_info():
     """Get information about the queue."""
     try:
         from app.queue_manager import queue_manager
-        
+
         info = {
             "size": queue_manager.size(),
             "empty": queue_manager.is_empty(),
         }
-        
+
         return jsonify(info)
     except Exception as e:
         logger.error(f"Error getting queue info: {e}")
@@ -316,15 +345,15 @@ def get_queue_info():
 def get_devices():
     """Get the current data/state for all registered devices across integrations."""
     try:
-        app_instance = current_app.config.get('APPLICATION_INSTANCE')
+        app_instance = current_app.config.get("APPLICATION_INSTANCE")
         if app_instance is None:
             logger.warning("Application instance not found in Flask context for /api/devices")
             return jsonify({"error": "Application instance not available yet."}), 503
 
-        if not hasattr(app_instance, '_integrations'):
+        if not hasattr(app_instance, "_integrations"):
             logger.error("Application instance has no _integrations attribute")
             return jsonify({"error": "Integrations not found in application."}), 500
-        
+
         all_device_data = {}
         if app_instance._integrations:
             if not app_instance.loop:
@@ -333,39 +362,45 @@ def get_devices():
 
             futures = []
             integration_names = []
-            
+
             # Schedule coroutines on the main event loop
             for integration_name, integration in app_instance._integrations.items():
                 coro = integration.get_device_data()
                 future = asyncio.run_coroutine_threadsafe(coro, app_instance.loop)
                 futures.append(future)
                 integration_names.append(integration_name)
-            
+
             # Wait for all futures to complete (with a timeout)
-            done, not_done = wait(futures, timeout=10.0) # 10 second timeout
+            done, not_done = wait(futures, timeout=10.0)  # 10 second timeout
 
             if not_done:
-                 logger.warning(f"Timeout waiting for device data from {len(not_done)} integrations.")
-                 # Handle timed out futures - maybe mark them as error?
-                 for i, future in enumerate(futures):
-                     if future in not_done:
-                         integration_name = integration_names[i]
-                         all_device_data[integration_name] = {"error": "Timeout getting data"}
+                logger.warning(
+                    f"Timeout waiting for device data from {len(not_done)} integrations."
+                )
+                # Handle timed out futures - maybe mark them as error?
+                for i, future in enumerate(futures):
+                    if future in not_done:
+                        integration_name = integration_names[i]
+                        all_device_data[integration_name] = {"error": "Timeout getting data"}
 
             # Process completed results
             for i, future in enumerate(futures):
-                 if future in done:
+                if future in done:
                     integration_name = integration_names[i]
                     try:
-                        result = future.result() # Get result from future
+                        result = future.result()  # Get result from future
                         if isinstance(result, dict):
                             # Add integration name as a prefix to avoid key collisions
                             for device_name, device_info in result.items():
                                 all_device_data[f"{integration_name}.{device_name}"] = device_info
                         else:
-                             logger.warning(f"Unexpected data type returned from {integration_name}.get_device_data: {type(result)}")
+                            logger.warning(
+                                f"Unexpected data type returned from {integration_name}.get_device_data: {type(result)}"
+                            )
                     except Exception as e:
-                        logger.error(f"Error getting result from integration {integration_name}: {e}")
+                        logger.error(
+                            f"Error getting result from integration {integration_name}: {e}"
+                        )
                         all_device_data[integration_name] = {"error": str(e)}
 
         return jsonify(all_device_data)
@@ -380,32 +415,36 @@ def get_config():
     """Get the current configuration."""
     try:
         # Check if raw format is requested
-        format_raw = request.args.get('format') == 'raw'
-        
+        format_raw = request.args.get("format") == "raw"
+
         if format_raw:
             # Return raw YAML content
-            with open(config.config_file, "r") as f:
+            with open(config.config_file) as f:
                 raw_yaml = f.read()
-            return Response(raw_yaml, mimetype='text/plain')
-            
+            return Response(raw_yaml, mimetype="text/plain")
+
         # Otherwise return JSON as before
-        with open(config.config_file, "r") as f:
+        with open(config.config_file) as f:
             config_data = yaml.safe_load(f)
-            
+
         # Remove sensitive data
         if "api" in config_data and "auth_token" in config_data["api"]:
-            config_data["api"]["auth_token"] = "**********" if config_data["api"]["auth_token"] else ""
-            
+            config_data["api"]["auth_token"] = (
+                "**********" if config_data["api"]["auth_token"] else ""
+            )
+
         if "web" in config_data:
             if "password_hash" in config_data["web"]:
                 config_data["web"]["password_hash"] = "**********"
             if "secret_key" in config_data["web"]:
                 config_data["web"]["secret_key"] = "**********"
-            
+
         if "mqtt" in config_data.get("integrations", {}):
             if "password" in config_data["integrations"]["mqtt"]:
-                config_data["integrations"]["mqtt"]["password"] = "**********" if config_data["integrations"]["mqtt"]["password"] else ""
-        
+                config_data["integrations"]["mqtt"]["password"] = (
+                    "**********" if config_data["integrations"]["mqtt"]["password"] else ""
+                )
+
         return jsonify(config_data)
     except Exception as e:
         logger.error(f"Error reading configuration: {e}")
@@ -420,35 +459,52 @@ def update_config():
         config_data = request.json
         if not config_data:
             return jsonify({"error": "No data provided"}), 400
-            
+
         # Read the current config to get sensitive values
-        with open(config.config_file, "r") as f:
+        with open(config.config_file) as f:
             current_config = yaml.safe_load(f)
-            
+
         # Restore sensitive values if they were masked
         if "api" in config_data and "auth_token" in config_data["api"]:
             if config_data["api"]["auth_token"] == "**********":
-                config_data["api"]["auth_token"] = current_config.get("api", {}).get("auth_token", "")
-                
+                config_data["api"]["auth_token"] = current_config.get("api", {}).get(
+                    "auth_token", ""
+                )
+
         if "web" in config_data:
-            if "password_hash" in config_data["web"] and config_data["web"]["password_hash"] == "**********":
-                config_data["web"]["password_hash"] = current_config.get("web", {}).get("password_hash", "")
-            if "secret_key" in config_data["web"] and config_data["web"]["secret_key"] == "**********":
-                config_data["web"]["secret_key"] = current_config.get("web", {}).get("secret_key", "")
-                
+            if (
+                "password_hash" in config_data["web"]
+                and config_data["web"]["password_hash"] == "**********"
+            ):
+                config_data["web"]["password_hash"] = current_config.get("web", {}).get(
+                    "password_hash", ""
+                )
+            if (
+                "secret_key" in config_data["web"]
+                and config_data["web"]["secret_key"] == "**********"
+            ):
+                config_data["web"]["secret_key"] = current_config.get("web", {}).get(
+                    "secret_key", ""
+                )
+
         if "mqtt" in config_data.get("integrations", {}):
-            if "password" in config_data["integrations"]["mqtt"] and config_data["integrations"]["mqtt"]["password"] == "**********":
-                config_data["integrations"]["mqtt"]["password"] = current_config.get("integrations", {}).get("mqtt", {}).get("password", "")
-            
+            if (
+                "password" in config_data["integrations"]["mqtt"]
+                and config_data["integrations"]["mqtt"]["password"] == "**********"
+            ):
+                config_data["integrations"]["mqtt"]["password"] = (
+                    current_config.get("integrations", {}).get("mqtt", {}).get("password", "")
+                )
+
         # Create backup of current config
         backup_file = f"{config.config_file}.bak"
         try:
-            with open(config.config_file, "r") as src, open(backup_file, "w") as dst:
+            with open(config.config_file) as src, open(backup_file, "w") as dst:
                 dst.write(src.read())
         except Exception as e:
             logger.error(f"Error creating backup: {e}")
             return jsonify({"error": f"Failed to create backup: {str(e)}"}), 500
-            
+
         # Write new config
         try:
             with open(config.config_file, "w") as f:
@@ -456,12 +512,14 @@ def update_config():
         except Exception as e:
             logger.error(f"Error writing configuration: {e}")
             return jsonify({"error": f"Failed to write configuration: {str(e)}"}), 500
-            
+
         # Notify user that changes require restart
-        return jsonify({
-            "success": True,
-            "message": "Configuration updated. Restart the application for changes to take effect."
-        })
+        return jsonify(
+            {
+                "success": True,
+                "message": "Configuration updated. Restart the application for changes to take effect.",
+            }
+        )
     except Exception as e:
         logger.error(f"Error updating configuration: {e}")
         return jsonify({"error": str(e)}), 500
@@ -475,31 +533,31 @@ def send_command():
         data = request.json
         if not data:
             return jsonify({"error": "No data provided"}), 400
-            
+
         action = data.get("action")
         target = data.get("target")
         payload = data.get("payload", {})
-        
+
         if not action or not target:
             return jsonify({"error": "Missing action or target"}), 400
-            
+
         # Check if there's an integration for this action
         action_key = f"{action}_{target}"
         if not registry.has_integration_for_action(action_key):
             return jsonify({"error": f"No integration found for action: {action_key}"}), 404
-            
+
         # Add command to queue for processing
         from app.api_client import api_client
-        
+
         command = {
             "id": "web-" + str(int(time.time())),
             "action": action,
             "target": target,
             "payload": payload,
         }
-        
+
         asyncio.create_task(api_client._command_queue.put(command))
-        
+
         return jsonify({"success": True, "message": "Command sent for processing"})
     except Exception as e:
         logger.error(f"Error sending command: {e}")
@@ -510,39 +568,38 @@ def send_command():
 @login_required
 def restart_server():
     """Restart the application server.
-    
+
     This endpoint will initiate a graceful shutdown of the current server
     and restart the application. The client should expect a brief disconnection.
     """
     try:
-        app_instance = current_app.config.get('APPLICATION_INSTANCE')
+        app_instance = current_app.config.get("APPLICATION_INSTANCE")
         if app_instance is None:
             logger.warning("Application instance not found in Flask context for restart request")
             return jsonify({"error": "Application instance not available."}), 503
-        
+
         # Set a flag to restart in a separate thread to allow the response to be sent
         def restart_app():
             # Import needed modules inside the function to ensure they're available in this scope
+            import asyncio
             import os
             import time
-            import asyncio
 
             logger.info("Initiating application restart...")
             # Wait a moment to allow the response to be sent
             time.sleep(2)
-            
-            # Check if this is a watchdog-managed process
-            is_watchdog_managed = os.environ.get('WATCHDOG_MANAGED', '0') == '1'
+
             restart_requested = False
-            
+
             # Try to use the watchdog to restart
             try:
                 from app.watchdog import watchdog_manager
+
                 logger.info("Requesting restart via watchdog")
                 restart_requested = watchdog_manager.request_restart()
             except ImportError:
                 logger.warning("Watchdog not available, using fallback restart method")
-            
+
             # If we couldn't request a restart via watchdog, use the fallback method
             if not restart_requested:
                 logger.info("Using fallback restart method (exit code 42)")
@@ -550,20 +607,22 @@ def restart_server():
                 if app_instance.loop:
                     asyncio.run_coroutine_threadsafe(app_instance.stop(), app_instance.loop)
                     time.sleep(2)  # Wait for stop to complete
-                    
+
                     # Exit with code 42 to signal a restart
                     logger.info("Exiting with code 42 to trigger restart")
                     os._exit(42)
-            
+
         # Start the restart process in a separate thread
         restart_thread = threading.Thread(target=restart_app)
         restart_thread.daemon = True
         restart_thread.start()
-        
-        return jsonify({
-            "success": True,
-            "message": "Server restart initiated. The server will be unavailable briefly."
-        })
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Server restart initiated. The server will be unavailable briefly.",
+            }
+        )
     except Exception as e:
         logger.error(f"Error restarting server: {e}")
         return jsonify({"error": str(e)}), 500
@@ -575,19 +634,19 @@ def get_connection_status():
     """Get the current connection status of the application."""
     try:
         from app.api_client import api_client
-        
+
         # Check if the API client has been initialized
         api_init_state = api_client.get_init_state()
-        
+
         # Use an async function to run the auth_manager.check_connection_status method
         async def check_status():
             # Check first if auth_manager has been initialized
-            if hasattr(auth_manager, '_client') and auth_manager._client is not None:
+            if hasattr(auth_manager, "_client") and auth_manager._client is not None:
                 if auth_manager.is_authenticated():
                     connected, status = await auth_manager.check_connection_status()
                     auth_code = auth_manager.get_auth_code()
                     client_id = auth_manager.get_client_id()
-                    
+
                     return {
                         "authenticated": True,
                         "connected": connected,
@@ -595,7 +654,7 @@ def get_connection_status():
                         "auth_code": auth_code,
                         "client_id": client_id,
                         "ready": auth_manager.is_ready_for_data(),
-                        "api_client_initialized": api_init_state.get("initialized", False)
+                        "api_client_initialized": api_init_state.get("initialized", False),
                     }
                 else:
                     # Check if the client is in the registration process
@@ -607,7 +666,7 @@ def get_connection_status():
                             "status": "registration",
                             "auth_code": auth_code,
                             "ready": False,
-                            "api_client_initialized": api_init_state.get("initialized", False)
+                            "api_client_initialized": api_init_state.get("initialized", False),
                         }
                     else:
                         return {
@@ -615,7 +674,7 @@ def get_connection_status():
                             "connected": False,
                             "status": "not_registered",
                             "ready": False,
-                            "api_client_initialized": api_init_state.get("initialized", False)
+                            "api_client_initialized": api_init_state.get("initialized", False),
                         }
             else:
                 # Auth manager hasn't been fully initialized yet
@@ -625,22 +684,24 @@ def get_connection_status():
                     "status": "initializing",
                     "message": "Authentication manager is initializing",
                     "ready": False,
-                    "api_client_initialized": api_init_state.get("initialized", False)
+                    "api_client_initialized": api_init_state.get("initialized", False),
                 }
-        
+
         # Get the application instance to use its event loop
-        app_instance = current_app.config.get('APPLICATION_INSTANCE')
-        if app_instance is None or not hasattr(app_instance, 'loop') or app_instance.loop is None:
+        app_instance = current_app.config.get("APPLICATION_INSTANCE")
+        if app_instance is None or not hasattr(app_instance, "loop") or app_instance.loop is None:
             # Fall back to a simple status if we can't use the event loop
-            return jsonify({
-                "authenticated": False,
-                "connected": False,
-                "status": "initializing",
-                "message": "Application is still initializing",
-                "ready": False,
-                "api_client_initialized": api_init_state.get("initialized", False)
-            })
-        
+            return jsonify(
+                {
+                    "authenticated": False,
+                    "connected": False,
+                    "status": "initializing",
+                    "message": "Application is still initializing",
+                    "ready": False,
+                    "api_client_initialized": api_init_state.get("initialized", False),
+                }
+            )
+
         # Run the async function in the application's event loop
         try:
             future = asyncio.run_coroutine_threadsafe(check_status(), app_instance.loop)
@@ -648,25 +709,32 @@ def get_connection_status():
             return jsonify(status_info)
         except concurrent.futures.TimeoutError:
             # If the operation times out, the server might be busy with authentication
-            return jsonify({
-                "authenticated": False,
-                "connected": False,
-                "status": "busy",
-                "message": "Server is busy processing authentication",
-                "ready": False,
-                "api_client_initialized": api_init_state.get("initialized", False)
-            })
-            
+            return jsonify(
+                {
+                    "authenticated": False,
+                    "connected": False,
+                    "status": "busy",
+                    "message": "Server is busy processing authentication",
+                    "ready": False,
+                    "api_client_initialized": api_init_state.get("initialized", False),
+                }
+            )
+
     except Exception as e:
         logger.exception(f"Error getting connection status: {e}")
-        return jsonify({
-            "authenticated": False, 
-            "connected": False, 
-            "status": "error",
-            "error": str(e),
-            "ready": False,
-            "api_client_initialized": False
-        }), 500
+        return (
+            jsonify(
+                {
+                    "authenticated": False,
+                    "connected": False,
+                    "status": "error",
+                    "error": str(e),
+                    "ready": False,
+                    "api_client_initialized": False,
+                }
+            ),
+            500,
+        )
 
 
 def start_web_server(passed_app_instance):
@@ -684,7 +752,7 @@ def start_web_server(passed_app_instance):
 
         # Save to config file for persistence
         try:
-            with open(config.config_file, "r") as f:
+            with open(config.config_file) as f:
                 config_data = yaml.safe_load(f)
 
             if "web" not in config_data:
@@ -706,50 +774,56 @@ def start_web_server(passed_app_instance):
 
     # Configure secure session cookies
     ssl_enabled = config.get("web.ssl_enabled", False)
-    app.config['SESSION_COOKIE_SECURE'] = ssl_enabled  # Only send cookie over HTTPS if SSL is enabled
-    app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevent JavaScript access to session cookie
-    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # CSRF protection
-    
+    app.config["SESSION_COOKIE_SECURE"] = (
+        ssl_enabled  # Only send cookie over HTTPS if SSL is enabled
+    )
+    app.config["SESSION_COOKIE_HTTPONLY"] = True  # Prevent JavaScript access to session cookie
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # CSRF protection
+
     # Configure logging for production
     if not debug:
         from logging.handlers import RotatingFileHandler
+
         log_dir = os.path.dirname(config.get("general.log_file", "logs/app.log"))
         if not os.path.exists(log_dir):
             os.makedirs(log_dir, exist_ok=True)
-            
+
         handler = RotatingFileHandler(
-            os.path.join(log_dir, "web.log"),
-            maxBytes=10 * 1024 * 1024,  # 10 MB
-            backupCount=5
+            os.path.join(log_dir, "web.log"), maxBytes=10 * 1024 * 1024, backupCount=5  # 10 MB
         )
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
         app.logger.addHandler(handler)
         app.logger.setLevel(logging.INFO)
-    
+
     # Use the passed application instance directly
     if passed_app_instance is None:
         logger.error("Application instance was not passed to start_web_server!")
-    elif not hasattr(passed_app_instance, '_integrations'):
+    elif not hasattr(passed_app_instance, "_integrations"):
         logger.error("Passed application instance exists but has no _integrations attribute")
     else:
         integrations_count = len(passed_app_instance._integrations)
         if integrations_count > 0:
             integration_names = list(passed_app_instance._integrations.keys())
-            logger.info(f"Web server received application instance with {integrations_count} integrations: {integration_names}")
+            logger.info(
+                f"Web server received application instance with {integrations_count} integrations: {integration_names}"
+            )
         else:
             # Check if integrations should be loaded based on config
             integrations_config = config.get_section("integrations")
-            enabled_integrations = [name for name, cfg in integrations_config.items() 
-                                   if cfg.get("enabled", False)]
+            enabled_integrations = [
+                name for name, cfg in integrations_config.items() if cfg.get("enabled", False)
+            ]
             if enabled_integrations:
-                logger.info(f"Web server started but integrations not loaded yet. Expected integrations: {enabled_integrations}")
+                logger.info(
+                    f"Web server started but integrations not loaded yet. Expected integrations: {enabled_integrations}"
+                )
             else:
                 logger.info("Web server started with no integrations (none enabled in config)")
 
     # Store the instance for endpoint use (using Flask's app context)
-    app.config['APPLICATION_INSTANCE'] = passed_app_instance
+    app.config["APPLICATION_INSTANCE"] = passed_app_instance
 
     # Set up HTTPS if configured
     ssl_context = None
@@ -761,14 +835,14 @@ def start_web_server(passed_app_instance):
             logger.info(f"HTTPS enabled with certificate {cert_file}")
         else:
             logger.warning("SSL enabled but certificate or key not found")
-    
+
     # Fix: Disable Flask reloader in debug mode since we manage our own processes
     app.run(
-        host=host, 
-        port=port, 
-        debug=debug, 
+        host=host,
+        port=port,
+        debug=debug,
         ssl_context=ssl_context,
-        use_reloader=False  # Disable Flask's reloader
+        use_reloader=False,  # Disable Flask's reloader
     )
 
 
@@ -778,4 +852,4 @@ if __name__ == "__main__":
     # This part is for direct execution, which is not the main use case.
     # Passing None is appropriate here as there's no main Application instance.
     logger.info("Starting web server directly (not recommended for full app functionality)")
-    start_web_server(None) 
+    start_web_server(None)

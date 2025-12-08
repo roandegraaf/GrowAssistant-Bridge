@@ -266,16 +266,25 @@ class TestDeviceRegistry:
     def test_get_devices_by_type(self, registry):
         """Test getting devices by type."""
         registry.register_device(
-            name="sensor1", domain="mqtt", device_type="temperature",
-            category=DeviceCategory.SENSOR, integration_name="MQTTIntegration"
+            name="sensor1",
+            domain="mqtt",
+            device_type="temperature",
+            category=DeviceCategory.SENSOR,
+            integration_name="MQTTIntegration",
         )
         registry.register_device(
-            name="sensor2", domain="http", device_type="temperature",
-            category=DeviceCategory.SENSOR, integration_name="HTTPIntegration"
+            name="sensor2",
+            domain="http",
+            device_type="temperature",
+            category=DeviceCategory.SENSOR,
+            integration_name="HTTPIntegration",
         )
         registry.register_device(
-            name="sensor3", domain="gpio", device_type="humidity",
-            category=DeviceCategory.SENSOR, integration_name="GPIOIntegration"
+            name="sensor3",
+            domain="gpio",
+            device_type="humidity",
+            category=DeviceCategory.SENSOR,
+            integration_name="GPIOIntegration",
         )
 
         temp_devices = registry.get_devices_by_type("temperature")

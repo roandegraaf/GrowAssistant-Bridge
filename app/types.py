@@ -7,15 +7,15 @@ enabling static type checking and IDE autocompletion.
 """
 
 from typing import Any, Dict, List, Optional, TypedDict, Union
-from datetime import datetime
-
 
 # =============================================================================
 # API Data Structures
 # =============================================================================
 
+
 class DataLogDict(TypedDict):
     """Data log entry sent to the API."""
+
     logDate: str  # ISO format datetime
     logType: str  # LogType enum value
     value: str
@@ -23,11 +23,13 @@ class DataLogDict(TypedDict):
 
 class DataLogWithPumpDict(DataLogDict, total=False):
     """Data log entry with optional pump number."""
+
     pumpNum: int
 
 
 class ProblemDict(TypedDict):
     """Problem report sent to the API."""
+
     id: str  # UUID
     priority: int  # 0-100
     description: str
@@ -39,6 +41,7 @@ class ProblemDict(TypedDict):
 
 class ActionResponseDict(TypedDict):
     """Action response sent to the API."""
+
     id: str
     received: bool
     resolved: bool
@@ -46,6 +49,7 @@ class ActionResponseDict(TypedDict):
 
 class ActionDict(TypedDict):
     """Action received from the API."""
+
     id: str
     type: str  # ActionType enum value
     value: str
@@ -58,8 +62,10 @@ class ActionDict(TypedDict):
 # API Request/Response Payloads
 # =============================================================================
 
+
 class SendDataPayload(TypedDict):
     """Payload for sending data to the API."""
+
     dataLogs: List[DataLogDict]
     problems: List[ProblemDict]
     actions: List[ActionResponseDict]
@@ -67,6 +73,7 @@ class SendDataPayload(TypedDict):
 
 class APIResponseSettings(TypedDict, total=False):
     """Settings received in API response."""
+
     rdh_mode: bool
     status: str
     light: Dict[str, Any]
@@ -76,6 +83,7 @@ class APIResponseSettings(TypedDict, total=False):
 
 class ParsedAPIResponse(TypedDict):
     """Parsed API response structure."""
+
     rdh_mode: bool
     status: str
     light: Dict[str, Any]
@@ -88,8 +96,10 @@ class ParsedAPIResponse(TypedDict):
 # Configuration Structures
 # =============================================================================
 
+
 class APIConfigDict(TypedDict, total=False):
     """API configuration section."""
+
     url: str
     batch_size: int
     poll_interval: int
@@ -104,6 +114,7 @@ class APIConfigDict(TypedDict, total=False):
 
 class GeneralConfigDict(TypedDict, total=False):
     """General configuration section."""
+
     collection_interval: int
     log_level: str
     log_file: str
@@ -113,6 +124,7 @@ class GeneralConfigDict(TypedDict, total=False):
 
 class QueueConfigDict(TypedDict, total=False):
     """Queue configuration section."""
+
     persistence_enabled: bool
     max_queue_size: int
     flush_interval: int
@@ -121,6 +133,7 @@ class QueueConfigDict(TypedDict, total=False):
 
 class WebConfigDict(TypedDict, total=False):
     """Web interface configuration section."""
+
     enabled: bool
     host: str
     port: int
@@ -134,6 +147,7 @@ class WebConfigDict(TypedDict, total=False):
 
 class GPIOPinConfigDict(TypedDict, total=False):
     """GPIO pin configuration."""
+
     name: str
     pin: int
     direction: str  # "IN" or "OUT"
@@ -143,6 +157,7 @@ class GPIOPinConfigDict(TypedDict, total=False):
 
 class MQTTTopicConfigDict(TypedDict, total=False):
     """MQTT topic configuration."""
+
     name: str
     type: str  # Device type
     qos: int
@@ -150,6 +165,7 @@ class MQTTTopicConfigDict(TypedDict, total=False):
 
 class HTTPEndpointConfigDict(TypedDict, total=False):
     """HTTP endpoint configuration."""
+
     name: str
     url: str
     method: str  # "GET", "POST", etc.
@@ -159,6 +175,7 @@ class HTTPEndpointConfigDict(TypedDict, total=False):
 
 class DeviceConfigDict(TypedDict, total=False):
     """Generic device configuration."""
+
     name: str
     type: str  # Device type (temperature, humidity, pump, etc.)
     enabled: bool
@@ -166,6 +183,7 @@ class DeviceConfigDict(TypedDict, total=False):
 
 class IntegrationConfigDict(TypedDict, total=False):
     """Integration configuration."""
+
     enabled: bool
     # GPIO specific
     pins: Dict[str, GPIOPinConfigDict]
@@ -182,6 +200,7 @@ class IntegrationConfigDict(TypedDict, total=False):
 
 class AppConfigDict(TypedDict, total=False):
     """Complete application configuration."""
+
     api: APIConfigDict
     general: GeneralConfigDict
     integrations: Dict[str, IntegrationConfigDict]
@@ -193,8 +212,10 @@ class AppConfigDict(TypedDict, total=False):
 # Data Point Structures (Legacy and Internal)
 # =============================================================================
 
+
 class LegacyDataPointDict(TypedDict, total=False):
     """Legacy data point format for backward compatibility."""
+
     type: str
     value: Union[str, float, int]
     timestamp: int  # Milliseconds since epoch
@@ -208,6 +229,7 @@ class LegacyDataPointDict(TypedDict, total=False):
 
 class QueueItemDict(TypedDict, total=False):
     """Item stored in the data queue."""
+
     timestamp: float  # Unix timestamp
     data: Dict[str, Any]
 
@@ -216,8 +238,10 @@ class QueueItemDict(TypedDict, total=False):
 # Integration Data Structures
 # =============================================================================
 
+
 class IntegrationDeviceDataDict(TypedDict, total=False):
     """Device data returned from integrations."""
+
     name: str
     type: str
     value: Union[str, float, int, None]
@@ -227,6 +251,7 @@ class IntegrationDeviceDataDict(TypedDict, total=False):
 
 class IntegrationStatusDict(TypedDict, total=False):
     """Integration status information."""
+
     connected: bool
     last_data_received: Optional[str]
     error: Optional[str]
@@ -237,8 +262,10 @@ class IntegrationStatusDict(TypedDict, total=False):
 # Authentication Structures
 # =============================================================================
 
+
 class CredentialsDict(TypedDict, total=False):
     """Stored credentials structure."""
+
     client_id: str
     custom_id: str
     registration_time: str
@@ -249,6 +276,7 @@ class CredentialsDict(TypedDict, total=False):
 
 class ConnectionStatusDict(TypedDict):
     """Connection status information."""
+
     connected: bool
     status: str  # "not_connected", "connected", "ready"
 
@@ -257,24 +285,29 @@ class ConnectionStatusDict(TypedDict):
 # Web API Response Structures
 # =============================================================================
 
+
 class WebAPIErrorResponse(TypedDict):
     """Standard error response for web API."""
+
     error: str
 
 
 class WebAPISuccessResponse(TypedDict, total=False):
     """Standard success response for web API."""
+
     success: bool
     message: str
 
 
 class DeviceListResponse(TypedDict):
     """Response containing list of devices."""
+
     devices: Dict[str, Dict[str, IntegrationDeviceDataDict]]
 
 
 class QueueInfoResponse(TypedDict):
     """Queue status information response."""
+
     size: int
     is_empty: bool
     persistence_enabled: bool

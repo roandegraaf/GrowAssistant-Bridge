@@ -8,7 +8,6 @@ to prevent security issues like injection attacks.
 import re
 from typing import Any, Optional, Tuple
 
-
 # Safe patterns for common input types
 SAFE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 SAFE_PATH_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
@@ -32,7 +31,10 @@ def validate_name(name: str, max_length: int = 255) -> Tuple[bool, Optional[str]
         return False, f"Name exceeds maximum length of {max_length}"
 
     if not SAFE_NAME_PATTERN.match(name):
-        return False, "Name contains invalid characters (only alphanumeric, underscore, hyphen, and dot allowed)"
+        return (
+            False,
+            "Name contains invalid characters (only alphanumeric, underscore, hyphen, and dot allowed)",
+        )
 
     return True, None
 
@@ -82,9 +84,7 @@ def validate_uuid(uuid_str: str) -> Tuple[bool, Optional[str]]:
 
 
 def validate_integer(
-    value: Any,
-    min_value: Optional[int] = None,
-    max_value: Optional[int] = None
+    value: Any, min_value: Optional[int] = None, max_value: Optional[int] = None
 ) -> Tuple[bool, Optional[str], Optional[int]]:
     """Validate and convert an integer value.
 
@@ -111,9 +111,7 @@ def validate_integer(
 
 
 def validate_float(
-    value: Any,
-    min_value: Optional[float] = None,
-    max_value: Optional[float] = None
+    value: Any, min_value: Optional[float] = None, max_value: Optional[float] = None
 ) -> Tuple[bool, Optional[str], Optional[float]]:
     """Validate and convert a float value.
 
@@ -156,10 +154,7 @@ def sanitize_string(value: str, max_length: int = 1000) -> str:
     sanitized = value[:max_length]
 
     # Remove null bytes and control characters (except newlines and tabs)
-    sanitized = "".join(
-        char for char in sanitized
-        if ord(char) >= 32 or char in "\n\t\r"
-    )
+    sanitized = "".join(char for char in sanitized if ord(char) >= 32 or char in "\n\t\r")
 
     return sanitized.strip()
 
@@ -184,7 +179,7 @@ def validate_url(url: str) -> Tuple[bool, Optional[str]]:
         r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # or IP
         r"(?::\d+)?"  # optional port
         r"(?:/?|[/?]\S+)$",
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     if not url_pattern.match(url):

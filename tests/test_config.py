@@ -6,8 +6,6 @@ section retrieval, and reloading functionality.
 """
 
 import os
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 import yaml
@@ -49,7 +47,10 @@ class TestConfig:
 
         config = Config(str(temp_config_file))
 
-        assert config.get("integrations.sample.enabled") == sample_config["integrations"]["sample"]["enabled"]
+        assert (
+            config.get("integrations.sample.enabled")
+            == sample_config["integrations"]["sample"]["enabled"]
+        )
         assert config.get("queue.max_queue_size") == sample_config["queue"]["max_queue_size"]
 
     def test_config_get_section(self, temp_config_file, sample_config, clean_environment):
@@ -154,7 +155,7 @@ class TestConfig:
         with open(config_file, "w") as f:
             yaml.dump(config_data, f)
 
-        config = Config(str(config_file))
+        Config(str(config_file))
 
         assert (tmp_path / "test_data_dir").exists()
 
@@ -173,7 +174,7 @@ class TestConfig:
         with open(config_file, "w") as f:
             yaml.dump(config_data, f)
 
-        config = Config(str(config_file))
+        Config(str(config_file))
 
         assert log_dir.exists()
 
@@ -184,6 +185,7 @@ class TestInitLogging:
     def test_init_logging_configures_root_logger(self, temp_config_file, clean_environment):
         """Test that init_logging configures the root logger."""
         import logging
+
         from app.config import Config, init_logging
 
         # Initialize config first
@@ -202,6 +204,7 @@ class TestInitLogging:
     def test_init_logging_respects_log_level(self, tmp_path, clean_environment):
         """Test that init_logging respects configured log level."""
         import logging
+
         from app.config import Config, init_logging
         from app.utils.singleton import SingletonMeta
 
@@ -226,7 +229,6 @@ class TestInitLogging:
 
         # Clear existing handlers
         root_logger = logging.getLogger()
-        original_level = root_logger.level
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
 
@@ -238,6 +240,7 @@ class TestInitLogging:
     def test_init_logging_creates_file_handler(self, tmp_path, clean_environment):
         """Test that init_logging creates a file handler when log_file is set."""
         import logging
+
         from app.config import Config, init_logging
 
         log_file = tmp_path / "logs" / "test.log"

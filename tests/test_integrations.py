@@ -6,24 +6,22 @@ decorator, config schema validation, and integration discovery.
 """
 
 from typing import Any, Dict, Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.integrations import (
     ConfigurationError,
     Integration,
-    discover_integrations,
+    _integration_by_config_key,
+    _integration_classes,
     get_all_config_keys,
     get_all_integration_classes,
     get_integration_class,
     get_integration_class_by_config_key,
     register_integration,
-    _integration_classes,
-    _integration_by_config_key,
 )
-from app.registry import DeviceCategory, DeviceRegistry
 
 
 class TestIntegrationBaseClass:
@@ -66,10 +64,17 @@ class TestIntegrationBaseClass:
         """Test config key removes 'Integration' suffix."""
 
         class MQTTIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         assert MQTTIntegration.get_config_key() == "mqtt"
 
@@ -146,10 +151,17 @@ class TestIntegrationConfigValidation:
         class ValidatedIntegration(Integration):
             CONFIG_SCHEMA = SampleConfig
 
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         config = {"host": "localhost", "port": 8080}
         integration = ValidatedIntegration(config)
@@ -168,10 +180,17 @@ class TestIntegrationConfigValidation:
         class StrictIntegration(Integration):
             CONFIG_SCHEMA = StrictConfig
 
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         with pytest.raises(ConfigurationError):
             StrictIntegration({})
@@ -180,10 +199,17 @@ class TestIntegrationConfigValidation:
         """Test validated_config is None without schema."""
 
         class NoSchemaIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         integration = NoSchemaIntegration({})
 
@@ -214,10 +240,17 @@ class TestIntegrationRegistration:
 
         @register_integration
         class CustomIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         assert "CustomIntegration" in _integration_classes
         assert "custom" in _integration_by_config_key
@@ -228,10 +261,17 @@ class TestIntegrationRegistration:
 
         @register_integration
         class FindableIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         result = get_integration_class("FindableIntegration")
 
@@ -248,10 +288,17 @@ class TestIntegrationRegistration:
 
         @register_integration
         class ConfigKeyIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         result = get_integration_class_by_config_key("configkey")
 
@@ -262,10 +309,17 @@ class TestIntegrationRegistration:
 
         @register_integration
         class CaseIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         result1 = get_integration_class_by_config_key("case")
         result2 = get_integration_class_by_config_key("CASE")
@@ -278,17 +332,31 @@ class TestIntegrationRegistration:
 
         @register_integration
         class Integration1(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         @register_integration
         class Integration2(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         all_classes = get_all_integration_classes()
 
@@ -301,10 +369,17 @@ class TestIntegrationRegistration:
 
         @register_integration
         class KeyIntegration(Integration):
-            async def connect(self): pass
-            async def send_data(self, data): pass
-            async def receive_data(self): pass
-            async def get_device_data(self): pass
+            async def connect(self):
+                pass
+
+            async def send_data(self, data):
+                pass
+
+            async def receive_data(self):
+                pass
+
+            async def get_device_data(self):
+                pass
 
         keys = get_all_config_keys()
 
@@ -319,10 +394,17 @@ class TestIntegrationApiMethods:
         """Create integration with mocked api_client."""
 
         class ApiIntegration(Integration):
-            async def connect(self): return True
-            async def send_data(self, data): return True
-            async def receive_data(self): yield {}
-            async def get_device_data(self): return {}
+            async def connect(self):
+                return True
+
+            async def send_data(self, data):
+                return True
+
+            async def receive_data(self):
+                yield {}
+
+            async def get_device_data(self):
+                return {}
 
         with patch("app.integrations.api_client") as mock_api:
             integration = ApiIntegration({})
@@ -342,9 +424,7 @@ class TestIntegrationApiMethods:
         from app.api_types import ProblemStatus, ProblemType
 
         integration_with_mocks.report_problem(
-            ProblemType.TEMPERATURE,
-            ProblemStatus.RANGE,
-            "Temperature out of range"
+            ProblemType.TEMPERATURE, ProblemStatus.RANGE, "Temperature out of range"
         )
 
         integration_with_mocks._mock_api.add_problem.assert_called_once()
