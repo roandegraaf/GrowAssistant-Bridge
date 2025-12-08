@@ -28,19 +28,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install ruff black isort pytest-cov
+        pip install ruff pytest-cov
 
     - name: Run linting with ruff
       run: |
         ruff check . --output-format=github
 
-    - name: Check code formatting with black
+    - name: Check code formatting with ruff
       run: |
-        black --check .
-
-    - name: Check import sorting with isort
-      run: |
-        isort --check-only --profile black .
+        ruff format --check .
 
     - name: Run tests with coverage
       run: |
