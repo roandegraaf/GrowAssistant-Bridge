@@ -48,7 +48,6 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by black)
-    "W503",   # line break before binary operator
 ]
 line-length = 100
 target-version = "py38"
