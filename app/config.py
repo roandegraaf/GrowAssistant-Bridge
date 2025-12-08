@@ -12,50 +12,33 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from app.utils.singleton import SingletonMeta
+
 
 logger = logging.getLogger(__name__)
 
 
-class Config:
+class Config(metaclass=SingletonMeta):
     """Configuration manager for the application.
-    
+
     This class loads configuration from a YAML file and provides
     access to configuration values with environment variable overrides.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the Config class.
         config: The loaded configuration dictionary.
         config_file: Path to the configuration file.
     """
-    
-    _instance = None
-    
-    def __new__(cls, config_file: Optional[str] = None):
-        """Create or return the singleton instance.
-        
-        Args:
-            config_file: Path to the configuration file, or None to use the default.
-            
-        Returns:
-            Config: The singleton instance.
-        """
-        if cls._instance is None:
-            cls._instance = super(Config, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self, config_file: Optional[str] = None):
         """Initialize the configuration manager.
-        
+
         Args:
             config_file: Path to the configuration file, or None to use the default.
         """
-        if self._initialized:
-            return
-            
         self.config_file = config_file or self._find_config_file()
-        self.config = {}
-        self._initialized = True
+        self.config: Dict[str, Any] = {}
         self.load_config()
     
     def _find_config_file(self) -> str:

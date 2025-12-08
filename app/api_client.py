@@ -23,6 +23,17 @@ from tenacity import (
 
 from app.auth import auth_manager
 from app.config import config
+from app.constants import (
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_RETRY_MAX_ATTEMPTS,
+    DEFAULT_RETRY_MIN_BACKOFF,
+    DEFAULT_RETRY_MAX_BACKOFF,
+    MILLISECONDS_PER_SECOND,
+    ProblemPriority,
+    SensorRanges,
+)
+from app.utils.singleton import SingletonMeta
+from app.utils.http_utils import build_auth_headers
 # Import api_types for the new data format
 from app.api_types import (
     ActionType, LogType, ProblemType, ProblemStatus,
@@ -33,54 +44,39 @@ from app.api_types import (
 logger = logging.getLogger(__name__)
 
 
-class ApiClient:
+class ApiClient(metaclass=SingletonMeta):
     """Client for interacting with the GrowAssistant API.
-    
+
     This class provides methods for sending data to the API and receiving commands.
     It handles authentication, error handling, and retry logic.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the ApiClient.
         _client: HTTP client for making requests.
         _base_url: Base URL of the API.
     """
-    
-    _instance = None
-    
-    def __new__(cls):
-        """Create or return the singleton instance.
-        
-        Returns:
-            ApiClient: The singleton instance.
-        """
-        if cls._instance is None:
-            cls._instance = super(ApiClient, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self):
         """Initialize the API client."""
-        if self._initialized:
-            return
-            
         self._base_url = config.get("api.url", "http://localhost:8080")
-        
+
         # Client and queue
         self._client = None
         self._command_queue = None
-        
+
         # API logging
         self._log_values = config.get("api.log_values", False)
-        
+
         # Create log directory if value logging is enabled
         log_dir = config.get("general.log_dir", "logs")
         self._api_log_dir = os.path.join(log_dir, "api_values")
-        
+
         # Initialize data storage for new API format
         self._data_logs = []
         self._problems = []
         self._actions = []
-        
+
         # Action handling
         self._pending_actions = {}  # Actions waiting for resolution
         self._action_handlers = {}  # Callbacks for handling actions
@@ -88,18 +84,22 @@ class ApiClient:
         # Settings handling
         self._settings_callback = None  # Callback for when settings are received
 
-        self._initialized = True
-        
         logger.info("API client initialized")
     
     async def start(self):
         """Start the API client.
-        
+
         This initializes the HTTP client and creates a command queue.
+        SSL verification is enabled by default for HTTPS connections.
         """
+        # Get SSL verification setting (default: True for production security)
+        verify_ssl = config.get("api.verify_ssl", True)
+        timeout = config.get("api.timeout", DEFAULT_HTTP_TIMEOUT)
+
         self._client = httpx.AsyncClient(
-            timeout=30.0,
+            timeout=timeout,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
+            verify=verify_ssl,
         )
         
         # Create a command queue
@@ -124,24 +124,14 @@ class ApiClient:
     
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests.
-        
+
         Returns:
             Dict[str, str]: Headers for API requests.
         """
-        # Use auth manager to get auth headers
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        
-        # Add authorization if authenticated
+        client_id = None
         if auth_manager.is_authenticated():
             client_id = auth_manager.get_client_id()
-            if client_id:
-                # Pass client ID in header
-                headers["X-Client-ID"] = client_id
-            
-        return headers
+        return build_auth_headers(client_id=client_id)
     
     def _get_api_value_logger(self, data_point: Dict[str, Any]) -> logging.Logger:
         """Create a logger for an individual API value.
@@ -262,6 +252,122 @@ class ApiClient:
         """
         self._settings_callback = callback
 
+    def _validate_send_preconditions(self) -> Tuple[bool, str, Optional[str]]:
+        """Validate preconditions for sending data.
+
+        Returns:
+            Tuple containing:
+            - success: Whether preconditions are met
+            - message: Error message if failed, empty string if success
+            - client_id: The client ID if successful, None otherwise
+        """
+        if not self._client:
+            return False, "API client not started", None
+
+        if not auth_manager.is_authenticated():
+            return False, "Not authenticated with API", None
+
+        client_id = auth_manager.get_client_id()
+        if not client_id:
+            return False, "No client ID available", None
+
+        return True, "", client_id
+
+    def _process_legacy_data_points(self, data_points: List[Dict[str, Any]]) -> None:
+        """Process legacy data points and convert to new format.
+
+        Args:
+            data_points: List of legacy format data points.
+        """
+        # Detect problems from the data points first
+        self._detect_problems_from_data(data_points)
+
+        for point in data_points:
+            log_type = point.get("type", "SYSTEM")
+            value = point.get("value", "")
+            timestamp = point.get("timestamp")
+            log_date = datetime.fromtimestamp(timestamp / 1000) if timestamp else None
+            pump_num = point.get("pumpNum") or point.get("pump_num")
+            self.add_data_log(log_type, value, log_date, pump_num)
+
+    def _log_transmission_results(
+        self,
+        url: str,
+        client_id: str,
+        success: bool,
+        error_msg: Optional[str] = None
+    ) -> None:
+        """Log transmission results for each data item.
+
+        Args:
+            url: The API URL used.
+            client_id: The client ID.
+            success: Whether transmission was successful.
+            error_msg: Error message if failed.
+        """
+        if not self._log_values:
+            return
+
+        status = "Success" if success else "Failed"
+        log_fn = logging.Logger.info if success else logging.Logger.error
+
+        # Log data logs
+        for data_log in self._data_logs:
+            value_logger = self._get_api_value_logger({
+                "type": data_log.get("logType"),
+                "value": data_log.get("value"),
+                "timestamp": data_log.get("logDate")
+            })
+            if success:
+                value_logger.info(f"Data log sent to API: {json.dumps(data_log)}")
+            else:
+                value_logger.error(f"Error sending data log: {error_msg}")
+            value_logger.info(f"API URL: {url}")
+            value_logger.info(f"Client ID: {client_id}")
+            value_logger.info(f"Status: {status}")
+
+        # Log problems
+        for problem in self._problems:
+            value_logger = self._get_api_value_logger({
+                "type": problem.get("type"),
+                "status": problem.get("status"),
+                "description": problem.get("description")
+            })
+            if success:
+                value_logger.info(f"Problem sent to API: {json.dumps(problem)}")
+            else:
+                value_logger.error(f"Error sending problem: {error_msg}")
+            value_logger.info(f"API URL: {url}")
+            value_logger.info(f"Client ID: {client_id}")
+            value_logger.info(f"Status: {status}")
+
+        # Log actions
+        for action in self._actions:
+            value_logger = self._get_api_value_logger({
+                "action": action.get("id"),
+                "received": action.get("received"),
+                "resolved": action.get("resolved")
+            })
+            if success:
+                value_logger.info(f"Action response sent to API: {json.dumps(action)}")
+            else:
+                value_logger.error(f"Error sending action: {error_msg}")
+            value_logger.info(f"API URL: {url}")
+            value_logger.info(f"Client ID: {client_id}")
+            value_logger.info(f"Status: {status}")
+
+    def _clear_sent_data(self) -> Tuple[int, int, int]:
+        """Clear sent data and return counts.
+
+        Returns:
+            Tuple of (data_logs_count, problems_count, actions_count).
+        """
+        counts = (len(self._data_logs), len(self._problems), len(self._actions))
+        self._data_logs = []
+        self._problems = []
+        self._actions = []
+        return counts
+
     def _detect_problems_from_data(self, data_points: List[Dict[str, Any]]):
         """Detect problems from data points.
 
@@ -287,11 +393,11 @@ class ApiClient:
         }
 
         ranges = {
-            "TEMPERATURE": {"min": -10, "max": 50},
-            "HUMIDITY": {"min": 0, "max": 100},
-            "PH": {"min": 0, "max": 14},
-            "PH_VALUE": {"min": 0, "max": 14},
-            "TANK_ML": {"min": 0, "max": None},
+            "TEMPERATURE": {"min": SensorRanges.TEMPERATURE_MIN, "max": SensorRanges.TEMPERATURE_MAX},
+            "HUMIDITY": {"min": SensorRanges.HUMIDITY_MIN, "max": SensorRanges.HUMIDITY_MAX},
+            "PH": {"min": SensorRanges.PH_MIN, "max": SensorRanges.PH_MAX},
+            "PH_VALUE": {"min": SensorRanges.PH_MIN, "max": SensorRanges.PH_MAX},
+            "TANK_ML": {"min": SensorRanges.TANK_ML_MIN, "max": SensorRanges.TANK_ML_MAX},
         }
 
         for point in data_points:
@@ -312,7 +418,7 @@ class ApiClient:
                     problem_type=problem_type,
                     status=ProblemStatus.CONNECTION,  # Sensor failure is a connection issue
                     description=f"Sensor failure detected for {data_type} from {integration}",
-                    priority=70,
+                    priority=ProblemPriority.HIGH,
                     user_can_resolve=False,
                     resolved=False
                 )
@@ -334,7 +440,7 @@ class ApiClient:
                             problem_type=problem_type,
                             status=ProblemStatus.RANGE,
                             description=f"{data_type} value {numeric_value} is out of range from {integration}",
-                            priority=50,
+                            priority=ProblemPriority.MEDIUM,
                             user_can_resolve=True,
                             resolved=False
                         )
@@ -345,180 +451,75 @@ class ApiClient:
     
     async def send_data(self, data_points: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, str]:
         """Send data to the API.
-        
+
         Args:
-            data_points: Optional legacy data points (for backward compatibility)
-            
+            data_points: Optional legacy data points (for backward compatibility).
+
         Returns:
             Tuple[bool, str]: (success, message) tuple.
         """
-        if not self._client:
-            return False, "API client not started"
-            
-        # Ensure we're authenticated
-        if not auth_manager.is_authenticated():
-            return False, "Not authenticated with API"
-            
-        # Check if the client is ready to send data (space created)
+        # Validate preconditions
+        valid, error_msg, client_id = self._validate_send_preconditions()
+        if not valid:
+            return False, error_msg
+
+        # Check if ready for data transmission
         if not auth_manager.is_ready_for_data():
-            # Check the current status
             connected, status = await auth_manager.check_connection_status()
             if connected and status == "connected":
-                logger.info("Client is connected but space not created yet, queuing data for later transmission")
-                return False, "Client connected but space not created yet, data queued for later transmission"
-            elif not connected:
+                logger.info("Client connected but space not created yet, queuing data")
+                return False, "Client connected but space not created yet"
+            if not connected:
                 return False, "Not connected to API"
-            
-        client_id = auth_manager.get_client_id()
-        if not client_id:
-            return False, "No client ID available"
-            
+
         url = f"{self._base_url}/client/{client_id}"
-        
-        # Process legacy data points if provided (backward compatibility)
+
+        # Process legacy data points if provided
         if data_points:
-            # Detect problems from the data points first
-            self._detect_problems_from_data(data_points)
+            self._process_legacy_data_points(data_points)
 
-            for point in data_points:
-                # Convert legacy data points to new format
-                log_type = point.get("type", "SYSTEM")
-                value = point.get("value", "")
-                timestamp = point.get("timestamp")
-                if timestamp:
-                    log_date = datetime.fromtimestamp(timestamp / 1000)  # Convert from milliseconds
-                else:
-                    log_date = None
-
-                # Extract pumpNum if present (only for pump-related data)
-                pump_num = point.get("pumpNum") or point.get("pump_num")
-
-                self.add_data_log(log_type, value, log_date, pump_num)
-
-        # Prepare payload in the new format
+        # Prepare payload
         payload = {
             "dataLogs": self._data_logs,
             "problems": self._problems,
             "actions": self._actions
         }
-        
+
         try:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
-                stop=stop_after_attempt(config.get("api.retry_max_attempts", 5)),
+                stop=stop_after_attempt(config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)),
                 wait=wait_exponential(
-                    min=config.get("api.retry_min_backoff", 1),
-                    max=config.get("api.retry_max_backoff", 60),
+                    min=config.get("api.retry_min_backoff", DEFAULT_RETRY_MIN_BACKOFF),
+                    max=config.get("api.retry_max_backoff", DEFAULT_RETRY_MAX_BACKOFF),
                 ),
             ):
                 with attempt:
-                    logger.debug(f"Sending data to API: {len(self._data_logs)} logs, "
-                                f"{len(self._problems)} problems, {len(self._actions)} actions")
+                    logger.debug(
+                        f"Sending data to API: {len(self._data_logs)} logs, "
+                        f"{len(self._problems)} problems, {len(self._actions)} actions"
+                    )
                     response = await self._client.post(url, json=payload, headers=self._get_headers())
                     response.raise_for_status()
-                    
-                    # Process response to extract actions
-                    response_data = response.json()
-                    await self._process_response(response_data)
-            
-            # Log each data point individually to its own file
-            if self._log_values:
-                # Log data logs
-                for data_log in self._data_logs:
-                    value_logger = self._get_api_value_logger({
-                        "type": data_log.get("logType"),
-                        "value": data_log.get("value"),
-                        "timestamp": data_log.get("logDate")
-                    })
-                    value_logger.info(f"Data log sent to API: {json.dumps(data_log)}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Success")
-                
-                # Log problems
-                for problem in self._problems:
-                    value_logger = self._get_api_value_logger({
-                        "type": problem.get("type"),
-                        "status": problem.get("status"),
-                        "description": problem.get("description")
-                    })
-                    value_logger.info(f"Problem sent to API: {json.dumps(problem)}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Success")
-                
-                # Log actions
-                for action in self._actions:
-                    value_logger = self._get_api_value_logger({
-                        "action": action.get("id"),
-                        "received": action.get("received"),
-                        "resolved": action.get("resolved")
-                    })
-                    value_logger.info(f"Action response sent to API: {json.dumps(action)}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Success")
-                
-            # Clear sent data
-            data_logs_count = len(self._data_logs)
-            problems_count = len(self._problems)
-            actions_count = len(self._actions)
-            
-            self._data_logs = []
-            self._problems = []
-            self._actions = []
-            
-            logger.info(f"Successfully sent {data_logs_count} data logs, {problems_count} problems, and {actions_count} actions to API")
+                    await self._process_response(response.json())
+
+            # Log success and clear data
+            self._log_transmission_results(url, client_id, success=True)
+            logs, problems, actions = self._clear_sent_data()
+            logger.info(f"Successfully sent {logs} data logs, {problems} problems, and {actions} actions")
             return True, "Data sent successfully"
-            
+
         except httpx.HTTPStatusError as e:
-            # Log error for each data type
-            if self._log_values:
-                # Log data logs errors
-                for data_log in self._data_logs:
-                    value_logger = self._get_api_value_logger({
-                        "type": data_log.get("logType"),
-                        "value": data_log.get("value")
-                    })
-                    value_logger.error(f"HTTP error sending data log: {e.response.status_code} - {e.response.text}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Failed")
-                
-                # Similar logging for problems and actions
-                for problem in self._problems:
-                    value_logger = self._get_api_value_logger({
-                        "type": problem.get("type"),
-                        "status": problem.get("status"),
-                        "description": problem.get("description")
-                    })
-                    value_logger.error(f"HTTP error sending problem: {e.response.status_code} - {e.response.text}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Failed")
-                for action in self._actions:
-                    value_logger = self._get_api_value_logger({
-                        "action": action.get("id"),
-                        "received": action.get("received"),
-                        "resolved": action.get("resolved")
-                    })
-                    value_logger.error(f"HTTP error sending action: {e.response.status_code} - {e.response.text}")
-                    value_logger.info(f"API URL: {url}")
-                    value_logger.info(f"Client ID: {client_id}")
-                    value_logger.info(f"Status: Failed")
-                    
-                    
-                
-            logger.error(f"HTTP error sending data: {e.response.status_code} - {e.response.text}")
+            error_msg = f"{e.response.status_code} - {e.response.text}"
+            self._log_transmission_results(url, client_id, success=False, error_msg=error_msg)
+            logger.error(f"HTTP error sending data: {error_msg}")
             return False, f"HTTP error: {e.response.status_code}"
-            
+
         except (httpx.RequestError, asyncio.TimeoutError) as e:
-            # Similar error handling to current implementation
             logger.error(f"Error sending data: {str(e)}")
             return False, f"Request error: {str(e)}"
-            
+
         except Exception as e:
-            # Similar error handling to current implementation
             logger.exception(f"Unexpected error sending data: {str(e)}")
             return False, f"Unexpected error: {str(e)}"
     

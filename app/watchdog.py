@@ -14,52 +14,38 @@ import threading
 import time
 from typing import Optional, List, Callable
 
+from app.utils.singleton import SingletonMeta
+
+
 logger = logging.getLogger(__name__)
 
-class WatchdogManager:
+
+class WatchdogManager(metaclass=SingletonMeta):
     """Watchdog manager that monitors the application and restarts it if it crashes.
-    
+
     This watchdog starts a separate process that monitors the main application process.
     If the main process crashes, the watchdog will restart it.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the WatchdogManager.
         _watchdog_process: The subprocess running the watchdog.
         _running: Whether the watchdog is running.
         _pid: The process ID of the main application.
         _restart_requested: Whether a restart has been requested.
     """
-    
-    _instance = None
-    _lock = threading.Lock()
-    
-    def __new__(cls):
-        """Create or return the singleton instance.
-        
-        Returns:
-            WatchdogManager: The singleton instance.
-        """
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super(WatchdogManager, cls).__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
-    
+
     def __init__(self):
         """Initialize the watchdog manager."""
-        if self._initialized:
-            return
-            
         self._running = False
         self._watchdog_process: Optional[subprocess.Popen] = None
         self._restart_requested = False
         self._pid = os.getpid()  # Current process PID
-        self._initialized = True
         self._exit_handlers: List[Callable] = []
-        
+
         # Register an exit handler to clean up the watchdog
         atexit.register(self._cleanup_watchdog)
-        
+
         logger.info("Watchdog manager initialized")
     
     def start(self):

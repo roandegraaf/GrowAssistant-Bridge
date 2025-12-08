@@ -15,47 +15,32 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import config
+from app.utils.singleton import SingletonMeta
 
 
 logger = logging.getLogger(__name__)
 
 
-class QueueManager:
+class QueueManager(metaclass=SingletonMeta):
     """Manager for queuing data points with persistence.
-    
+
     This class provides a queue for buffering data points before sending them to the API,
     with persistence to ensure data is not lost if the application crashes.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the QueueManager.
         _queue: Asyncio queue for storing data points in memory.
         _db_conn: SQLite connection for persistence.
         _flush_task: Task that periodically flushes the queue to persistence.
     """
-    
-    _instance = None
-    
-    def __new__(cls):
-        """Create or return the singleton instance.
-        
-        Returns:
-            QueueManager: The singleton instance.
-        """
-        if cls._instance is None:
-            cls._instance = super(QueueManager, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self):
         """Initialize the queue manager."""
-        if self._initialized:
-            return
-            
         self._queue = asyncio.Queue(maxsize=config.get("queue.max_queue_size", 10000))
         self._db_conn = None
         self._flush_task = None
-        self._initialized = True
-        
+
         logger.info("Queue Manager initialized")
     
     async def start(self):

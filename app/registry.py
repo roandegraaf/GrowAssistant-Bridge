@@ -8,48 +8,36 @@ mapping them to the integrations that can handle them.
 import logging
 from typing import Dict, List, Optional, Set, Any
 
+from app.utils.singleton import SingletonMeta
+
+
 logger = logging.getLogger(__name__)
 
 
-class DeviceRegistry:
+class DeviceRegistry(metaclass=SingletonMeta):
     """Registry of sensors and actuators.
-    
+
     This class manages the mapping between sensors/actuators and the integrations
     that can handle them. It allows looking up which integration to use
     for a specific device.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the DeviceRegistry.
         _sensors: Dictionary mapping sensor names to integration names.
         _actuators: Dictionary mapping actuator names to integration names.
     """
-    
-    _instance = None
-    
-    def __new__(cls):
-        """Create or return the singleton instance.
-        
-        Returns:
-            DeviceRegistry: The singleton instance.
-        """
-        if cls._instance is None:
-            cls._instance = super(DeviceRegistry, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self):
         """Initialize the device registry."""
-        if self._initialized:
-            return
-            
         # Maps sensor names to integration names
         # Example: {"temperature": "mqtt", "humidity": "http"}
         self._sensors: Dict[str, str] = {}
-        
+
         # Maps actuator names to integration names
         # Example: {"pump": "gpio", "light": "mqtt"}
         self._actuators: Dict[str, str] = {}
-        
+
         # Maps device types to common actions they support
         # These actions should match what the GrowAssistant API actually supports
         self._device_type_actions: Dict[str, List[str]] = {
@@ -62,8 +50,7 @@ class DeviceRegistry:
             "water_level": [],  # Sensor, no actions
             "light_sensor": [],  # Sensor, no actions
         }
-        
-        self._initialized = True
+
         logger.info("Device Registry initialized")
     
     def register_sensor(self, sensor_name: str, integration_name: str) -> None:

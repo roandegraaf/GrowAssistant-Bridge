@@ -351,84 +351,87 @@ class Application:
     
     def _register_integration_capabilities(self, integration: Integration, config: Dict[str, Any]):
         """Register integration capabilities with the registry.
-        
+
         Args:
             integration: Integration instance.
             config: Integration configuration.
         """
         integration_name = integration.name
-        
+
         # Check for devices configuration - common in external integrations
         if "devices" in config:
-            # Use the new helper method for device-based integrations
             registry.register_integration_by_devices(integration_name, config.get("devices", {}))
             return
-            
-        # Handle built-in integrations with their specific configurations
-        if integration_name == "GPIOIntegration":
-            # Register each pin as a capability
-            pins_config = config.get("pins", {})
-            for _, pin_config in pins_config.items():
-                if not isinstance(pin_config, dict):
-                    continue
-                    
-                pin_name = pin_config.get("name")
-                pin_direction = pin_config.get("direction")
-                
-                if pin_name and pin_direction:
-                    if pin_direction.upper() == "OUT":
-                        registry.register_actuator(pin_name, integration_name)
-                    elif pin_direction.upper() == "IN":
-                        registry.register_sensor(pin_name, integration_name)
-                        
-        # For MQTT:
-        elif integration_name == "MQTTIntegration":
-            # Register topics as capabilities
-            topics_config = config.get("topics", {})
-            for _, topic_config in topics_config.items():
-                if not isinstance(topic_config, dict):
-                    continue
-                    
-                topic_name = topic_config.get("name")
-                topic_type = topic_config.get("type")
-                
-                if topic_name and topic_type:
-                    # Determine if the topic is for sensors or actuators
-                    if topic_name.startswith("sensors/"):
-                        registry.register_sensor(topic_type, integration_name)
-                    elif topic_name.startswith("controls/"):
-                        registry.register_actuator(topic_type, integration_name)
-                        
-        # For HTTP:
-        elif integration_name == "HTTPIntegration":
-            # Register endpoints as capabilities
-            endpoints_config = config.get("endpoints", {})
-            for _, endpoint_config in endpoints_config.items():
-                if not isinstance(endpoint_config, dict):
-                    continue
-                    
-                endpoint_name = endpoint_config.get("name")
-                endpoint_method = endpoint_config.get("method", "GET")
-                
-                if endpoint_name:
-                    # Typically GET endpoints are sensors, POST/PUT are actuators
-                    if endpoint_method.upper() == "GET":
-                        registry.register_sensor(endpoint_name, integration_name)
-                    else:
-                        registry.register_actuator(endpoint_name, integration_name)
-        
-        # For Serial:
-        elif integration_name == "SerialIntegration":
-            # Register serial devices
-            devices_config = config.get("devices", {})
-            registry.register_integration_by_devices(integration_name, devices_config)
-                        
-        # For any other integration type, log warning
+
+        # Strategy pattern: map integration names to their registration handlers
+        handlers = {
+            "GPIOIntegration": self._register_gpio_capabilities,
+            "MQTTIntegration": self._register_mqtt_capabilities,
+            "HTTPIntegration": self._register_http_capabilities,
+            "SerialIntegration": self._register_serial_capabilities,
+        }
+
+        handler = handlers.get(integration_name)
+        if handler:
+            handler(integration_name, config)
         else:
             logger.warning(f"Unknown integration type for registration: {integration_name}")
-            # Try to use device configuration if available
             if "devices" in config:
                 registry.register_integration_by_devices(integration_name, config.get("devices", {}))
+
+    def _register_gpio_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
+        """Register GPIO pin capabilities."""
+        pins_config = config.get("pins", {})
+        for _, pin_config in pins_config.items():
+            if not isinstance(pin_config, dict):
+                continue
+
+            pin_name = pin_config.get("name")
+            pin_direction = pin_config.get("direction", "").upper()
+
+            if pin_name and pin_direction:
+                if pin_direction == "OUT":
+                    registry.register_actuator(pin_name, integration_name)
+                elif pin_direction == "IN":
+                    registry.register_sensor(pin_name, integration_name)
+
+    def _register_mqtt_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
+        """Register MQTT topic capabilities."""
+        topics_config = config.get("topics", {})
+        for _, topic_config in topics_config.items():
+            if not isinstance(topic_config, dict):
+                continue
+
+            topic_name = topic_config.get("name", "")
+            topic_type = topic_config.get("type")
+
+            if topic_name and topic_type:
+                if topic_name.startswith("sensors/"):
+                    registry.register_sensor(topic_type, integration_name)
+                elif topic_name.startswith("controls/"):
+                    registry.register_actuator(topic_type, integration_name)
+
+    def _register_http_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
+        """Register HTTP endpoint capabilities."""
+        endpoints_config = config.get("endpoints", {})
+        for _, endpoint_config in endpoints_config.items():
+            if not isinstance(endpoint_config, dict):
+                continue
+
+            endpoint_name = endpoint_config.get("name")
+            endpoint_method = endpoint_config.get("method", "GET").upper()
+
+            if endpoint_name:
+                # GET endpoints are typically sensors, POST/PUT are actuators
+                if endpoint_method == "GET":
+                    registry.register_sensor(endpoint_name, integration_name)
+                else:
+                    registry.register_actuator(endpoint_name, integration_name)
+
+    def _register_serial_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
+        """Register serial device capabilities."""
+        devices_config = config.get("devices", {})
+        registry.register_integration_by_devices(integration_name, devices_config)
     
     def _create_tasks(self):
         """Create and start asyncio tasks."""

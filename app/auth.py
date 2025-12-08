@@ -22,18 +22,29 @@ from tenacity import (
 )
 
 from app.config import config
+from app.constants import (
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_RETRY_MAX_ATTEMPTS,
+    DEFAULT_RETRY_MIN_BACKOFF,
+    DEFAULT_RETRY_MAX_BACKOFF,
+    AUTH_POLL_INTERVAL,
+    SPACE_CREATION_POLL_INTERVAL,
+)
+from app.utils.singleton import SingletonMeta
+from app.utils.http_utils import build_auth_headers
 
 
 logger = logging.getLogger(__name__)
 
 
-class AuthManager:
+class AuthManager(metaclass=SingletonMeta):
     """Authentication manager for the GrowAssistant Spring API.
-    
+
     This class handles client registration, authentication, and credential management.
-    
+
+    Uses SingletonMeta to ensure only one instance exists.
+
     Attributes:
-        _instance: Singleton instance of the AuthManager.
         _client: HTTP client for making requests.
         _base_url: Base URL of the API.
         _credentials: Authentication credentials.
@@ -41,49 +52,38 @@ class AuthManager:
         _auth_code: Authentication code for connecting client to environment.
         _client_id: The client ID for API authentication.
     """
-    
-    _instance = None
-    
-    def __new__(cls):
-        """Create or return the singleton instance.
-        
-        Returns:
-            AuthManager: The singleton instance.
-        """
-        if cls._instance is None:
-            cls._instance = super(AuthManager, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
+
     def __init__(self):
         """Initialize the authentication manager."""
-        if self._initialized:
-            return
-            
         self._client: Optional[httpx.AsyncClient] = None
         self._base_url = config.get("api.url", "http://localhost:8080")
-        
+
         # Credentials storage
         data_dir = config.get("general.data_dir", "data")
         os.makedirs(data_dir, exist_ok=True)
         self._credentials_file = os.path.join(data_dir, "credentials.json")
-        
+
         # State variables
         self._credentials = None
         self._auth_code = None
         self._client_id = None
-        self._initialized = True
-        
+
         logger.info("Authentication manager initialized")
     
     async def start(self):
         """Start the authentication manager.
-        
+
         This initializes the HTTP client and loads saved credentials.
+        SSL verification is enabled by default for HTTPS connections.
         """
+        # Get SSL verification setting (default: True for production security)
+        verify_ssl = config.get("api.verify_ssl", True)
+        timeout = config.get("api.timeout", DEFAULT_HTTP_TIMEOUT)
+
         self._client = httpx.AsyncClient(
-            timeout=30.0,
+            timeout=timeout,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
+            verify=verify_ssl,
         )
         
         # Load saved credentials
@@ -182,19 +182,12 @@ class AuthManager:
     
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers for API requests.
-        
+
         Returns:
             Dict[str, str]: Authentication headers.
         """
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        
-        if self._credentials and "token" in self._credentials:
-            headers["Authorization"] = f"Bearer {self._credentials['token']}"
-            
-        return headers
+        token = self._credentials.get("token") if self._credentials else None
+        return build_auth_headers(token=token)
     
     async def register_client(self) -> bool:
         """Register a new client with the API.
@@ -218,10 +211,10 @@ class AuthManager:
         try:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
-                stop=stop_after_attempt(config.get("api.retry_max_attempts", 5)),
+                stop=stop_after_attempt(config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)),
                 wait=wait_exponential(
-                    min=config.get("api.retry_min_backoff", 1),
-                    max=config.get("api.retry_max_backoff", 60),
+                    min=config.get("api.retry_min_backoff", DEFAULT_RETRY_MIN_BACKOFF),
+                    max=config.get("api.retry_max_backoff", DEFAULT_RETRY_MAX_BACKOFF),
                 ),
             ):
                 with attempt:
@@ -354,15 +347,15 @@ class AuthManager:
     
     async def wait_for_connection(self, timeout: Optional[float] = None) -> bool:
         """Wait for the client to be connected to an environment (204 or 200).
-        
+
         Args:
             timeout: Timeout in seconds, or None to wait indefinitely.
-            
+
         Returns:
             bool: True if connected within the timeout, False otherwise.
         """
         start_time = asyncio.get_event_loop().time()
-        poll_interval = 5  # seconds
+        poll_interval = AUTH_POLL_INTERVAL
         
         while True:
             connected, status = await self.check_connection_status()
@@ -382,18 +375,18 @@ class AuthManager:
     
     async def wait_for_space_creation(self, timeout: Optional[float] = None) -> bool:
         """Wait for a space to be created for this client (status code 200).
-        
-        This method polls the API every 30 seconds until it receives a 200 status code,
+
+        This method polls the API until it receives a 200 status code,
         indicating that a space has been created and the client is ready to send data.
-        
+
         Args:
             timeout: Timeout in seconds, or None to wait indefinitely.
-            
+
         Returns:
             bool: True if space was created within the timeout, False otherwise.
         """
         start_time = asyncio.get_event_loop().time()
-        poll_interval = 30
+        poll_interval = SPACE_CREATION_POLL_INTERVAL
         
         while True:
             connected, status = await self.check_connection_status()
