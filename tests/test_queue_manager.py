@@ -17,7 +17,7 @@ class TestQueueManager:
     """Tests for the QueueManager class."""
 
     @pytest.fixture
-    def queue_manager(self, mock_config):
+    async def queue_manager(self, mock_config):
         """Create a fresh QueueManager instance."""
         with patch("app.queue_manager.config", mock_config):
             from app.queue_manager import QueueManager
@@ -28,6 +28,8 @@ class TestQueueManager:
                 del SingletonMeta._instances[QueueManager]
 
             qm = QueueManager()
+            # Reinitialize the queue in the current event loop
+            qm._queue = asyncio.Queue(maxsize=10000)
             yield qm
 
     @pytest.mark.asyncio
@@ -276,7 +278,7 @@ class TestQueueManagerConcurrency:
     """Tests for QueueManager concurrent operations."""
 
     @pytest.fixture
-    def queue_manager(self, mock_config):
+    async def queue_manager(self, mock_config):
         """Create a fresh QueueManager instance."""
         with patch("app.queue_manager.config", mock_config):
             from app.queue_manager import QueueManager
@@ -286,6 +288,8 @@ class TestQueueManagerConcurrency:
                 del SingletonMeta._instances[QueueManager]
 
             qm = QueueManager()
+            # Reinitialize the queue in the current event loop
+            qm._queue = asyncio.Queue(maxsize=10000)
             yield qm
 
     @pytest.mark.asyncio

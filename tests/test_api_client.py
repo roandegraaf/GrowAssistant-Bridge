@@ -273,7 +273,7 @@ class TestApiClientPollCommands:
     """Tests for ApiClient command polling."""
 
     @pytest.fixture
-    def api_client(self, mock_config, mock_httpx_response):
+    async def api_client(self, mock_config, mock_httpx_response):
         """Create a configured ApiClient instance."""
         with patch("app.api_client.config", mock_config), patch(
             "app.api_client.auth_manager"
@@ -292,6 +292,7 @@ class TestApiClientPollCommands:
             # Set up mock HTTP client
             mock_client = AsyncMock()
             client._client = mock_client
+            # Create queue in the current event loop
             client._command_queue = asyncio.Queue()
             client._mock_httpx_response = mock_httpx_response
 
