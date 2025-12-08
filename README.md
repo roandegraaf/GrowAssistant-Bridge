@@ -22,7 +22,7 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 - Raspberry Pi (3B+ or newer recommended)
 - Raspberry Pi OS (64-bit recommended)
-- Python 3.8+
+- Python 3.9+
 - Dependencies listed in `requirements.txt`
 
 ## Installation on Raspberry Pi
