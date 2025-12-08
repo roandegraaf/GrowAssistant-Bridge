@@ -1,110 +1,190 @@
 # External Integrations for GrowAssistant Bridge
 
-This directory is where you can add your own custom integrations for the GrowAssistant Bridge.
+This directory is where you can add custom integrations for the GrowAssistant Bridge.
 
-## How to Create a Custom Integration
+## Quick Start
 
-1. **Start by copying the sample integration**:
-   - Use `sample_integration.py` as a template for your new integration
-   - Rename the file to something descriptive of your integration (e.g., `my_sensor.py`)
+### 1. Copy the Template
 
-2. **Implement your integration class**:
-   - Your class must inherit from `Integration` base class
-   - You must implement all required methods:
-     - `connect()`: Establish connection to your device/service
-     - `send_data()`: Send commands/data to your device/service
-     - `receive_data()`: Receive data from your device/service
-     - `get_device_data()`: Get current state for all devices
-     - `disconnect()`: Clean up resources when integration is stopped
-   - Optional methods you can implement:
-     - `apply_settings(settings)`: Receive and apply settings from the API
-     - `handle_action(action_data)`: Handle actions requested by the API
-   - Decorate your class with `@register_integration`
+```bash
+cp sample_integration.py my_integration.py
+```
 
-3. **Create configuration for your integration**:
-   - Add a section for your integration in `config.yaml`
-   - See `sample_config.yaml` for an example configuration
-
-## Installation
-
-1. Save your integration Python file in this directory.
-2. Add configuration for your integration in the main `config.yaml` file.
-3. Restart the GrowAssistant Bridge application.
-
-## Tips for Development
-
-- **Integration Name**: The integration name in the configuration should match the Python module name (without the .py extension).
-- **Logging**: Use the `logger` to provide useful debug and error messages.
-- **Error Handling**: Add proper error handling for robustness.
-- **Dependencies**: If your integration requires external libraries, make sure to include them in your requirements.
-- **Testing**: Test your integration thoroughly before deploying to production.
-- **API Communication**: Use the helper methods provided by the Integration base class:
-  - `self.log_data(LogType, value, pump_num=None)`: Send sensor readings to the API
-  - `self.report_problem(ProblemType, status, description, ...)`: Report issues to the API
-  - `self.register_action_handler(ActionType, handler)`: Register handlers for API actions
-  - `self.acknowledge_action(action_id, received, resolved)`: Acknowledge actions from the API
-- **Automatic Problem Detection**: The system automatically detects common problems (out-of-range values, sensor failures) from your data logs.
-
-## Example Integration Structure
+### 2. Implement Your Integration
 
 ```python
+from typing import Any, Dict, Generator, TYPE_CHECKING
 from app.integrations import Integration, register_integration
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
+
 
 @register_integration
 class MyIntegration(Integration):
-    def __init__(self, config):
+    """My custom integration."""
+
+    def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        # Initialize your integration
-        
-    async def connect(self):
-        # Connect to your device/service
-        return True
-        
-    async def send_data(self, data):
-        # Send data to your device/service
-        return True
-        
-    async def receive_data(self):
-        # Yield data from your device/service
-        yield {"device": "my_device", "value": 123}
-        
-    async def get_device_data(self):
-        # Return current state of all devices
-        return {"my_device": {"value": 123}}
+        self.devices = self.config.get("devices", {})
 
-    async def apply_settings(self, settings):
-        # Optional: Apply settings from API
-        # Implement only if your integration needs to respond to settings
-        climate = settings.get("climate", {})
-        if climate.get("temperature"):
-            await self._set_target_temperature(climate["temperature"])
+    async def connect(self) -> bool:
+        return self.config.get("enabled", False)
+
+    async def send_data(self, data: Dict[str, Any]) -> bool:
         return True
 
-    async def disconnect(self):
-        # Clean up resources
-        pass
+    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+        yield {"device": "my_device", "value": 42}
+
+    async def get_device_data(self) -> Dict[str, Any]:
+        return {"my_device": {"value": 42}}
+
+    # NEW: Self-registration
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        for name, device in self.devices.items():
+            if device["type"] in ["temperature", "humidity"]:
+                registry.register_sensor(name, self.name, domain="my", device_type=device["type"])
+            else:
+                registry.register_actuator(name, self.name, domain="my", device_type=device["type"])
+
+    # NEW: Unified commands
+    async def execute_command(self, target_id: str, action: str, payload: Dict[str, Any]) -> bool:
+        return await self.send_data({"device": target_id, "action": action, **payload})
 ```
 
-## Example Configuration
+### 3. Add Configuration
+
+In `config.yaml`:
 
 ```yaml
 integrations:
-  myintegration:  # Module name (without .py)
+  my:  # Must match get_config_key() return value (default: class name without 'Integration', lowercase)
     enabled: true
-    # Add your custom configuration parameters here
     devices:
       '0':
-        name: my_device
+        name: my_sensor
         type: temperature
 ```
 
+### 4. Restart
+
+Restart GrowAssistant Bridge. Your integration will be auto-discovered.
+
+---
+
+## New Architecture (Home Assistant-style)
+
+The integration system now uses **self-registration**:
+
+| Feature | Description |
+|---------|-------------|
+| **Auto-discovery** | Integrations are found by config key, no code changes needed |
+| **Self-registration** | Implement `register_capabilities()` to register your devices |
+| **Domain-based IDs** | Entity IDs like `mqtt.temperature`, `gpio.pump1` |
+| **Config validation** | Optional Pydantic schemas for type-safe config |
+| **Unified commands** | `execute_command()` replaces direct `send_data()` calls |
+
+---
+
+## Key Methods
+
+### Required
+
+| Method | Description |
+|--------|-------------|
+| `__init__(config)` | Initialize with config dict |
+| `connect()` | Connect to device, return `True` on success |
+| `send_data(data)` | Send command, return `True` on success |
+| `receive_data()` | Yield data from devices |
+| `get_device_data()` | Return current state dict |
+
+### New Optional Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_config_key()` | Return config key (default: class name without 'Integration', lowercase) |
+| `register_capabilities(registry)` | Self-register sensors/actuators |
+| `execute_command(target_id, action, payload)` | Handle commands from API |
+| `disconnect()` | Clean up resources |
+| `apply_settings(settings)` | Apply settings from API |
+
+---
+
+## API Communication
+
+```python
+from app.api_types import LogType, ActionType, ProblemType, ProblemStatus
+
+# Log sensor data
+self.log_data(LogType.TEMPERATURE, 25.5)
+self.log_data(LogType.TANK_ML, 500, pump_num=1)
+
+# Report problems
+self.report_problem(ProblemType.TEMPERATURE, ProblemStatus.RANGE, "Temperature high", priority=70)
+
+# Handle actions (register in connect())
+self.register_action_handler(ActionType.TEMPERATURE, self._handle_temp)
+
+# Acknowledge actions
+self.acknowledge_action(action_id, received=True, resolved=True)
+```
+
+---
+
+## Config Validation (Optional)
+
+```python
+from pydantic import BaseModel, Field
+
+class MyConfig(BaseModel):
+    enabled: bool = False
+    host: str = "localhost"
+    port: int = Field(default=8080, ge=1, le=65535)
+
+@register_integration
+class MyIntegration(Integration):
+    CONFIG_SCHEMA = MyConfig  # Validated in __init__
+```
+
+---
+
+## Device Registration
+
+```python
+def register_capabilities(self, registry):
+    # Register a sensor
+    registry.register_sensor(
+        sensor_name="temp1",
+        integration_name=self.name,
+        domain="my",  # Entity ID: my.temp1
+        device_type="temperature",
+    )
+
+    # Register an actuator
+    registry.register_actuator(
+        actuator_name="pump1",
+        integration_name=self.name,
+        domain="my",  # Entity ID: my.pump1
+        device_type="pump",
+    )
+```
+
+---
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `sample_integration.py` | Complete documented template |
+| `sample_config.yaml` | Example configuration |
+| `dht_sensor.py` | DHT sensor example (if present) |
+
+---
+
 ## Additional Resources
 
-- Check the existing built-in integrations in the `app/integrations/` directory for more examples.
-- See `sample_integration.py` in this directory for a complete, documented example.
-- Read the [Custom Integrations Guide](../docs/custom_integrations.md) for detailed documentation on:
-  - API data format (dataLogs, problems, actions, settings)
-  - Problem detection and reporting
-  - Action handling
-  - Settings application
-  - Best practices and troubleshooting 
+- [Custom Integrations Guide](../docs/custom_integrations.md) - Full documentation
+- [Developer Guide](../docs/developer_guide.md) - Architecture details
+- [Built-in integrations](../app/integrations/) - GPIO, MQTT, HTTP, Serial examples
+- [Config schemas](../app/schemas/config_schemas.py) - Pydantic schema examples

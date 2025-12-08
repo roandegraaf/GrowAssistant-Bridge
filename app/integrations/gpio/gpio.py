@@ -7,9 +7,13 @@ It's designed to work with Raspberry Pi but gracefully degrades when not on a Pi
 
 import asyncio
 import logging
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional, TYPE_CHECKING
 
 from app.integrations import Integration, register_integration
+from app.schemas.config_schemas import GPIOIntegrationConfig
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,9 @@ except ImportError:
 @register_integration
 class GPIOIntegration(Integration):
     """Integration for GPIO pins on Raspberry Pi."""
-    
+
+    CONFIG_SCHEMA = GPIOIntegrationConfig
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize the GPIO integration.
         
@@ -180,6 +186,60 @@ class GPIOIntegration(Integration):
                 except Exception as e:
                     logger.error(f"Failed to read GPIO pin {name}: {e}")
                     
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register GPIO pin capabilities with the device registry.
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        for pin_name, pin_config in self.pins.items():
+            pin_direction = pin_config.get("direction", "").upper()
+
+            if pin_direction == "OUT":
+                registry.register_actuator(
+                    actuator_name=pin_name,
+                    integration_name=self.name,
+                    domain="gpio",
+                    device_type="gpio_output",
+                )
+            elif pin_direction == "IN":
+                registry.register_sensor(
+                    sensor_name=pin_name,
+                    integration_name=self.name,
+                    domain="gpio",
+                    device_type="gpio_input",
+                )
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command on a GPIO pin.
+
+        Args:
+            target_id: The pin name.
+            action: The action (e.g., "on", "off", "HIGH", "LOW").
+            payload: Additional parameters.
+
+        Returns:
+            bool: True if successful.
+        """
+        # Map common actions to GPIO states
+        state_map = {
+            "on": "HIGH",
+            "off": "LOW",
+            "high": "HIGH",
+            "low": "LOW",
+        }
+        state = state_map.get(action.lower(), action.upper())
+
+        return await self.send_data({
+            "pin_name": target_id,
+            "state": state,
+        })
+
     def __del__(self):
         """Clean up GPIO resources when the object is destroyed."""
         if GPIO_AVAILABLE and self.initialized:

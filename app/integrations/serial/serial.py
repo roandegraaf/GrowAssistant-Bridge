@@ -9,12 +9,16 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional, TYPE_CHECKING
 
 import serial
 import serial.tools.list_ports
 
 from app.integrations import Integration, register_integration
+from app.schemas.config_schemas import SerialIntegrationConfig
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,9 @@ logger = logging.getLogger(__name__)
 @register_integration
 class SerialIntegration(Integration):
     """Integration for serial communication."""
-    
+
+    CONFIG_SCHEMA = SerialIntegrationConfig
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize the Serial integration.
         
@@ -240,6 +246,44 @@ class SerialIntegration(Integration):
                 
         self.serial_connected = False
     
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register serial device capabilities with the device registry.
+
+        Uses the default implementation that handles 'devices' config.
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        # Use the default implementation from base class
+        # which handles the 'devices' configuration pattern
+        super().register_capabilities(registry)
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command via serial.
+
+        Args:
+            target_id: The target device identifier.
+            action: The action to perform.
+            payload: Additional command parameters.
+
+        Returns:
+            bool: True if successful.
+        """
+        serial_payload = {
+            "target": target_id,
+            "action": action,
+            **payload,
+        }
+
+        return await self.send_data({
+            "payload": serial_payload,
+        })
+
     def __del__(self):
         """Clean up serial resources when the object is destroyed."""
         if self.serial and self.serial.is_open:

@@ -4,293 +4,673 @@ This guide provides details on how to create custom integrations for the GrowAss
 
 ## Integration Architecture
 
-The system is built around the following key components:
+The system is built around a **self-registering, Home Assistant-style modular architecture**:
 
-1. **Integration Base Class**: Abstract class that all integrations must inherit from
-2. **Device Type Registry**: Central registry for mapping device types to integrations and actions
-3. **Dynamic Module Loading**: System for auto-discovering and loading integration modules
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         GrowAssistant Bridge                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                   Integration Discovery                      │    │
+│  │  discover_integrations() → @register_integration decorator   │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                               │                                      │
+│         ┌─────────────────────┼─────────────────────┐               │
+│         ▼                     ▼                     ▼               │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐        │
+│  │    MQTT      │     │    GPIO      │     │   Custom     │        │
+│  │ Integration  │     │ Integration  │     │ Integration  │        │
+│  │              │     │              │     │              │        │
+│  │ CONFIG_SCHEMA│     │ CONFIG_SCHEMA│     │ CONFIG_SCHEMA│        │
+│  └──────┬───────┘     └──────┬───────┘     └──────┬───────┘        │
+│         │                    │                    │                 │
+│         └────────────────────┼────────────────────┘                 │
+│                              ▼                                      │
+│                    ┌──────────────────┐                             │
+│                    │  Device Registry │                             │
+│                    │  (domain.name)   │                             │
+│                    │                  │                             │
+│                    │ mqtt.temperature │                             │
+│                    │ gpio.pump1       │                             │
+│                    │ custom.sensor1   │                             │
+│                    └────────┬─────────┘                             │
+│                             │                                       │
+│                             ▼                                       │
+│                    ┌──────────────────┐                             │
+│                    │    API Client    │                             │
+│                    └──────────────────┘                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Integration Base Class | `app/integrations/__init__.py` | Abstract base class for all integrations |
+| Device Registry | `app/registry.py` | Central registry with domain-qualified entity IDs |
+| Config Schemas | `app/schemas/config_schemas.py` | Pydantic models for config validation |
+| Dynamic Module Loading | `app/integrations/__init__.py` | Auto-discovers and loads integration modules |
+
+---
 
 ## Creating a New Integration
 
-### Step 1: Set Up the Integration Directory
+### Step 1: Choose Your Location
 
-Create a new directory under `app/integrations/` for your integration:
-
+**Built-in integrations** (shipped with the application):
 ```
-app/integrations/my_custom_integration/
+app/integrations/my_integration/
+├── __init__.py  # Contains your integration class
+└── (other files)
 ```
 
-### Step 2: Create the Integration Module
+**External integrations** (user-created):
+```
+external_integrations/
+└── my_integration.py
+```
 
-Create an `__init__.py` file in your integration directory with your integration class that inherits from the `Integration` base class:
+### Step 2: Create the Integration Class
 
 ```python
+"""My Custom Integration."""
+import logging
+from typing import Any, Dict, Generator, Optional, TYPE_CHECKING
+
+from pydantic import BaseModel, Field
+
 from app.integrations import Integration, register_integration
+from app.api_types import LogType, ActionType, ProblemType, ProblemStatus
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
+
+logger = logging.getLogger(__name__)
+
+
+# Step 2a: Define config schema (optional but recommended)
+class MyDeviceConfig(BaseModel):
+    name: str
+    type: str
+    address: Optional[str] = None
+
+class MyIntegrationConfig(BaseModel):
+    enabled: bool = False
+    host: str = "localhost"
+    port: int = Field(default=8080, ge=1, le=65535)
+    devices: Dict[str, MyDeviceConfig] = {}
+
 
 @register_integration
-class MyCustomIntegration(Integration):
-    """
-    My custom integration that supports [description of what it does].
-    """
-    
-    def __init__(self, config):
-        super().__init__(config)
-        # Initialize any instance variables here
-        self.connection = None
-        self.custom_config = self.config.get("integrations.my_custom_integration", {})
-    
-    async def connect(self):
-        """
-        Establish connection to the device or service.
-        
-        Returns:
-            bool: True if connection successful, False otherwise.
-        """
+class MyIntegration(Integration):
+    """Integration for my custom devices."""
+
+    # Step 2b: Set config schema for validation
+    CONFIG_SCHEMA = MyIntegrationConfig
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)  # Validates config if CONFIG_SCHEMA is set
+
+        if not self.config.get("enabled", False):
+            logger.info("My Integration is disabled")
+            return
+
+        # Access validated config
+        self.host = self.config.get("host", "localhost")
+        self.port = self.config.get("port", 8080)
+        self.devices = {}
+
+        # Parse device configurations
+        for device_id, device_config in self.config.get("devices", {}).items():
+            if isinstance(device_config, dict):
+                self.devices[device_config.get("name")] = device_config
+
+        logger.info(f"My Integration initialized with {len(self.devices)} devices")
+
+    # Step 2c: Override get_config_key() for custom config key
+    @classmethod
+    def get_config_key(cls) -> str:
+        """Return 'my' to match config.yaml section 'integrations.my:'"""
+        return "my"
+
+    async def connect(self) -> bool:
+        """Establish connection to devices."""
+        if not self.config.get("enabled", False):
+            return False
+
         try:
-            # Implement connection logic here
-            self.connection = await self._establish_connection()
+            # Connect to your device/service
+            # Example: self.client = await connect_to_service(self.host, self.port)
+
+            # Register action handlers
+            self.register_action_handler(ActionType.TEMPERATURE, self._handle_temp_action)
+
+            logger.info("My Integration connected")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to connect: {str(e)}")
+            logger.error(f"Failed to connect: {e}")
             return False
-    
-    async def send_data(self, data):
-        """
-        Send data to the device or service.
-        
-        Args:
-            data (dict): Data to send.
-            
-        Returns:
-            bool: True if send successful, False otherwise.
-        """
+
+    async def send_data(self, data: Dict[str, Any]) -> bool:
+        """Send command to device."""
+        device_name = data.get("device")
+        value = data.get("value")
+
+        if not device_name or value is None:
+            return False
+
         try:
-            # Implement data sending logic here
+            # Send to your device
+            logger.debug(f"Sent {value} to {device_name}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to send data: {str(e)}")
+            logger.error(f"Send failed: {e}")
             return False
-    
-    async def receive_data(self):
-        """
-        Receive data from the device or service.
-        
-        Yields:
-            dict: Data received from the device.
-        """
-        try:
-            # Implement data receiving logic here
-            # Use 'yield' to return data incrementally
-            yield {"value": 42, "unit": "C"}
-        except Exception as e:
-            self.logger.error(f"Failed to receive data: {str(e)}")
+
+    async def receive_data(self) -> Generator[Dict[str, Any], None, None]:
+        """Receive data from devices."""
+        for name, device in self.devices.items():
+            # Read from your device
+            value = 25.0  # Example
+
+            # Log to API
+            if device.get("type") == "temperature":
+                self.log_data(LogType.TEMPERATURE, value)
+
+            yield {"device": name, "type": device.get("type"), "value": value}
+
+    async def get_device_data(self) -> Dict[str, Any]:
+        """Return current state of all devices."""
+        return {name: {"type": d.get("type"), "value": 0} for name, d in self.devices.items()}
+
+    # Step 2d: Implement self-registration
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register sensors and actuators with the registry."""
+        sensor_types = {"temperature", "humidity", "ph", "ec"}
+
+        for name, device in self.devices.items():
+            device_type = device.get("type")
+            domain = "my"  # Your integration's domain
+
+            if device_type in sensor_types:
+                registry.register_sensor(
+                    sensor_name=name,
+                    integration_name=self.name,
+                    domain=domain,
+                    device_type=device_type,
+                )
+            else:
+                registry.register_actuator(
+                    actuator_name=name,
+                    integration_name=self.name,
+                    domain=domain,
+                    device_type=device_type,
+                )
+
+        logger.info(f"Registered {len(self.devices)} devices")
+
+    # Step 2e: Implement unified command interface
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute command on target device."""
+        if target_id not in self.devices:
+            logger.error(f"Unknown device: {target_id}")
+            return False
+
+        # Handle common actions
+        if action.lower() in ("on", "off"):
+            value = 1 if action.lower() == "on" else 0
+        elif action.lower() == "set":
+            value = payload.get("value")
+        else:
+            value = payload.get("value")
+
+        return await self.send_data({"device": target_id, "value": value})
+
+    async def _handle_temp_action(self, action_data: Dict[str, Any]) -> bool:
+        """Handle temperature action from API."""
+        action_id = action_data.get("id")
+        value = float(action_data.get("value", 0))
+
+        # Find temperature device and set value
+        for name, device in self.devices.items():
+            if device.get("type") == "temperature":
+                success = await self.send_data({"device": name, "value": value})
+                if success:
+                    self.acknowledge_action(action_id, received=True, resolved=True)
+                return success
+
+        return False
+
+    async def disconnect(self):
+        """Clean up resources."""
+        # Close connections, cancel tasks, etc.
+        logger.info("My Integration disconnected")
 ```
 
-### Step 3: Configuration
+### Step 3: Add Configuration
 
-Add your integration's configuration to `config.yaml`:
+In `config.yaml`:
 
 ```yaml
 integrations:
-  my_custom_integration:
+  my:  # Matches get_config_key() return value
     enabled: true
-    parameter1: value1
-    parameter2: value2
+    host: "192.168.1.100"
+    port: 8080
+    devices:
+      '0':
+        name: temp_sensor
+        type: temperature
+      '1':
+        name: main_pump
+        type: pump
 ```
 
-### Step 4: Register Device Types
-
-Register your device types in your application startup code or in a separate function:
-
-```python
-def register_device_types(registry, integrations):
-    # Find your integration instance
-    my_integration = next((i for i in integrations if isinstance(i, MyCustomIntegration)), None)
-    
-    if my_integration:
-        # Register device types with the registry
-        registry.register_device_type(
-            "my_sensor",
-            my_integration,
-            receive_actions=["read_temperature", "read_humidity"],
-            send_actions=["set_limits", "calibrate"]
-        )
-```
-
-## Integration Base Class API
-
-The `Integration` base class provides the following methods and attributes:
-
-### Methods to Implement
-
-| Method | Description |
-|--------|-------------|
-| `connect()` | Establish a connection to the underlying hardware or service. |
-| `send_data(data)` | Send data to the device or service. |
-| `receive_data()` | Asynchronous generator that yields data from the device or service. |
-| `get_device_data()` | Return the current state of all devices managed by this integration. |
-| `apply_settings(settings)` | (Optional) Apply settings received from the API. Raises NotImplementedError by default. |
-| `handle_action(action_data)` | (Optional) Handle actions requested by the API. Returns False by default. |
-| `disconnect()` | Clean up resources when shutting down. |
-
-### Available Attributes and Methods
-
-| Attribute/Method | Description |
-|------------------|-------------|
-| `self.config` | Access to the application configuration. |
-| `self.logger` | Logger for the integration. |
-| `self.name` | Name of the integration (derived from class name). |
-
-### Helper Methods for API Communication
-
-The Integration base class provides convenient methods for communicating with the GrowAssistant API:
-
-| Method | Description |
-|--------|-------------|
-| `log_data(log_type, value, log_date=None, pump_num=None)` | Send a data log to the API. |
-| `report_problem(problem_type, status, description, priority, ...)` | Report a problem to the API. |
-| `register_action_handler(action_type, handler)` | Register a handler for a specific action type. |
-| `acknowledge_action(action_id, received, resolved)` | Acknowledge an action from the API. |
-
-Example usage:
-
-```python
-from app.api_types import LogType, ProblemType, ProblemStatus, ActionType
-
-# Log data
-self.log_data(LogType.TEMPERATURE, 25.5)
-self.log_data(LogType.TANK_ML, 500, pump_num=1)  # 500ml from pump 1
-
-# Report a problem
-self.report_problem(
-    ProblemType.TEMPERATURE,
-    ProblemStatus.CONNECTION,
-    "Temperature sensor not responding",
-    priority=80,
-    user_can_resolve=False
-)
-
-# Register action handlers (typically in connect method)
-self.register_action_handler(ActionType.TEMPERATURE, self.handle_temperature_action)
-```
-
-## Testing Your Integration
-
-Create a test file in the `tests/` directory to verify your integration works correctly:
+### Step 4: Test Your Integration
 
 ```python
 import pytest
-from unittest.mock import MagicMock, patch
-from app.integrations.my_custom_integration import MyCustomIntegration
+from unittest.mock import MagicMock, AsyncMock
+from my_integration import MyIntegration
+
 
 @pytest.fixture
-def mock_config():
-    config = MagicMock()
-    config.get.return_value = {
-        "parameter1": "test_value1",
-        "parameter2": "test_value2"
+def config():
+    return {
+        "enabled": True,
+        "host": "localhost",
+        "port": 8080,
+        "devices": {
+            "0": {"name": "test_device", "type": "temperature"}
+        }
     }
-    return config
+
 
 @pytest.mark.asyncio
-async def test_my_custom_integration(mock_config):
-    integration = MyCustomIntegration(mock_config)
-    
-    # Test connection
-    with patch.object(integration, '_establish_connection', return_value=True):
-        assert await integration.connect() is True
-    
-    # Test sending data
-    test_data = {"command": "test"}
-    assert await integration.send_data(test_data) is True
-    
-    # Test receiving data
-    data_items = []
-    async for data in integration.receive_data():
-        data_items.append(data)
-    
-    assert len(data_items) > 0
-    assert "value" in data_items[0]
+async def test_connect(config):
+    integration = MyIntegration(config)
+    result = await integration.connect()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_send_data(config):
+    integration = MyIntegration(config)
+    await integration.connect()
+    result = await integration.send_data({"device": "test_device", "value": 25.0})
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_execute_command(config):
+    integration = MyIntegration(config)
+    await integration.connect()
+    result = await integration.execute_command("test_device", "set", {"value": 30.0})
+    assert result is True
 ```
 
-## Advanced Features
+---
 
-### Integration Lifecycle Events
+## Integration Base Class API
 
-You can implement these optional methods to handle lifecycle events:
+### Class Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `CONFIG_SCHEMA` | `Optional[Type[BaseModel]]` | Pydantic model for config validation |
+
+### Instance Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `config` | `Dict[str, Any]` | Raw configuration dictionary |
+| `name` | `str` | Integration class name |
+| `validated_config` | `Optional[BaseModel]` | Validated config (if CONFIG_SCHEMA set) |
+
+### Required Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `connect()` | `async () -> bool` | Establish connection, return True on success |
+| `send_data(data)` | `async (Dict) -> bool` | Send data/command to device |
+| `receive_data()` | `async () -> Generator` | Yield data from devices |
+| `get_device_data()` | `async () -> Dict` | Return current state of all devices |
+
+### Optional Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get_config_key()` | `classmethod () -> str` | Return config key (default: class name without 'Integration', lowercase) |
+| `register_capabilities(registry)` | `(DeviceRegistry) -> None` | Self-register sensors/actuators |
+| `execute_command(target_id, action, payload)` | `async () -> bool` | Unified command interface |
+| `disconnect()` | `async () -> None` | Clean up resources |
+| `apply_settings(settings)` | `async (Dict) -> bool` | Apply settings from API |
+| `handle_action(action_data)` | `async (Dict) -> bool` | Handle action from API |
+
+### API Communication Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `log_data(log_type, value, log_date, pump_num)` | `(LogType, value, ...) -> None` | Log sensor reading to API |
+| `report_problem(problem_type, status, description, ...)` | `(...) -> None` | Report problem to API |
+| `register_action_handler(action_type, handler)` | `(ActionType, Callable) -> None` | Register action handler |
+| `acknowledge_action(action_id, received, resolved)` | `(str, bool, bool) -> None` | Acknowledge API action |
+
+---
+
+## Device Registry
+
+### Entity ID Format
+
+Devices are identified by domain-qualified entity IDs:
+
+```
+Format: domain.device_name
+
+Examples:
+  - mqtt.temperature
+  - gpio.pump1
+  - my_integration.sensor1
+```
+
+### Registration Methods
 
 ```python
-async def disconnect(self):
-    """Called when the application stops."""
-    # Clean up resources
-    if self.connection:
-        await self.connection.close()
+from app.registry import registry, DeviceCategory
 
-async def apply_settings(self, settings: Dict[str, Any]) -> bool:
-    """Called when settings are received from the API.
+# Register sensor (convenience method)
+registry.register_sensor(
+    sensor_name="temp1",
+    integration_name=self.name,
+    domain="my_domain",
+    device_type="temperature",
+)
 
-    The settings dict contains:
-    - rdh_mode: bool
-    - status: str
-    - light: dict with 'day' and 'night' schedules
-    - climate: dict with 'temperature', 'humidity', 'baseFanSpeed'
-    - tank: dict with 'waters', 'ph', 'amountML'
-    """
-    try:
-        # Apply climate settings
-        climate = settings.get("climate", {})
-        if climate:
-            temp = climate.get("temperature")
-            if temp is not None:
-                await self._set_target_temperature(temp)
+# Register actuator (convenience method)
+registry.register_actuator(
+    actuator_name="pump1",
+    integration_name=self.name,
+    domain="my_domain",
+    device_type="pump",
+)
 
-        # Apply light settings
-        light = settings.get("light", {})
-        if light:
-            day_schedule = light.get("day")
-            night_schedule = light.get("night")
-            # Configure light schedules
-
-        # Apply tank/pump settings
-        tank = settings.get("tank", {})
-        if tank:
-            waters = tank.get("waters", [])
-            for water in waters:
-                pump_num = water.get("pumpNum")
-                schedules = water.get("waterSchedules", [])
-                # Configure pump schedules
-
-        return True
-    except Exception as e:
-        logger.error(f"Error applying settings: {e}")
-        return False
+# Full control registration
+registry.register_device(
+    name="smart_pump",
+    domain="my_domain",
+    device_type="dosing_pump",
+    category=DeviceCategory.ACTUATOR,
+    integration_name=self.name,
+    capabilities=["dispense", "calibrate"],
+    metadata={"max_flow": 100},
+)
 ```
 
-If your integration doesn't need to respond to settings updates, don't implement this method (it will raise NotImplementedError by default, which is handled gracefully by the system).
-
-### Error Handling and Retries
-
-Implement robust error handling in your integrations:
+### Query Methods
 
 ```python
-from tenacity import retry, stop_after_attempt, wait_exponential
+# Get device by entity ID
+device = registry.get_device("mqtt.temperature")
 
-class MyCustomIntegration(Integration):
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=10))
-    async def _api_call_with_retry(self, *args, **kwargs):
-        # Implement API call that will retry on failure
-        pass
+# Find device by name (searches all domains)
+device = registry.find_device("temperature")
+
+# Get all devices in a domain
+devices = registry.get_devices_by_domain("gpio")
+
+# Get all devices of a type
+pumps = registry.get_devices_by_type("pump")
+
+# Get devices for an integration
+my_devices = registry.get_devices_by_integration("MyIntegration")
+
+# Get all devices
+all_devices = registry.get_all_devices()
 ```
+
+---
+
+## Configuration Validation
+
+### Defining Schemas
+
+```python
+from pydantic import BaseModel, Field
+from typing import Dict, Optional, Literal
+from enum import Enum
+
+class PinDirection(str, Enum):
+    IN = "IN"
+    OUT = "OUT"
+
+class DeviceConfig(BaseModel):
+    name: str = Field(..., min_length=1)
+    type: str
+    address: Optional[str] = None
+
+class MyIntegrationConfig(BaseModel):
+    enabled: bool = False
+    host: str = Field(default="localhost")
+    port: int = Field(default=8080, ge=1, le=65535)
+    timeout: float = Field(default=30.0, gt=0)
+    devices: Dict[str, DeviceConfig] = {}
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+```
+
+### Using Validated Config
+
+```python
+@register_integration
+class MyIntegration(Integration):
+    CONFIG_SCHEMA = MyIntegrationConfig
+
+    def __init__(self, config):
+        super().__init__(config)  # Validation happens here
+
+        # Access typed config
+        if self.validated_config:
+            self.host = self.validated_config.host
+            self.port = self.validated_config.port
+            for device in self.validated_config.devices.values():
+                print(f"Device: {device.name}, Type: {device.type}")
+```
+
+---
+
+## API Data Format
+
+### Log Types
+
+```python
+from app.api_types import LogType
+
+# Available log types
+LogType.TEMPERATURE    # Temperature readings
+LogType.HUMIDITY       # Humidity readings
+LogType.LIGHT          # Light level
+LogType.PH             # pH value
+LogType.EC             # Electrical conductivity
+LogType.TANK_ML        # Tank water level (include pump_num)
+LogType.SUPPLEMENT_ML  # Nutrient dosing (include pump_num)
+LogType.PH_ML          # pH adjustment (include pump_num)
+```
+
+### Problem Types
+
+```python
+from app.api_types import ProblemType, ProblemStatus
+
+# Problem types
+ProblemType.TEMPERATURE
+ProblemType.HUMIDITY
+ProblemType.LIGHT
+ProblemType.WATER
+ProblemType.PH
+ProblemType.EC
+
+# Problem statuses
+ProblemStatus.RANGE       # Value out of range
+ProblemStatus.CONNECTION  # Connection issue
+ProblemStatus.SENSOR      # Sensor failure
+```
+
+### Action Types
+
+```python
+from app.api_types import ActionType
+
+# Available action types
+ActionType.TEMPERATURE     # Set temperature
+ActionType.HUMIDITY        # Set humidity
+ActionType.LIGHT           # Light on/off
+ActionType.FAN             # Fan control
+ActionType.TANK_ML         # Tank water amount
+ActionType.PH_VALUE        # Target pH
+ActionType.PH_ML           # Dispense pH adjuster
+ActionType.SUPPLEMENT_ML   # Dispense nutrients
+```
+
+---
 
 ## Best Practices
 
-1. **Error Handling**: Always wrap I/O operations in try-except blocks with appropriate logging.
-2. **Resource Management**: Properly clean up resources in `disconnect()` method.
-3. **Configuration**: Make your integration configurable via the `config.yaml` file.
-4. **Logging**: Use the provided logger (`self.logger`) for all messages.
-5. **Documentation**: Document your integration's capabilities and configuration options.
-6. **Testing**: Write comprehensive tests for your integration.
-7. **Data Logging**: Use `log_data()` method for all sensor readings. Include `pump_num` parameter for water/nutrient-related data.
-8. **Problem Reporting**: While the system automatically detects common issues (out-of-range values, sensor failures), you can report integration-specific problems using `report_problem()`.
-9. **Settings Support**: If your integration controls devices that can be remotely configured, implement `apply_settings()` to respond to API configuration updates.
-10. **Action Handling**: Register action handlers in your `connect()` method and implement proper error handling in handler functions. 
+### 1. Configuration Validation
+
+Always define a `CONFIG_SCHEMA` to catch configuration errors early:
+
+```python
+CONFIG_SCHEMA = MyIntegrationConfig
+```
+
+### 2. Domain-Qualified Registration
+
+Use explicit domains to prevent naming collisions:
+
+```python
+registry.register_sensor("temp", self.name, domain="my_integration", device_type="temperature")
+```
+
+### 3. Error Handling
+
+Wrap I/O operations in try-except blocks:
+
+```python
+async def send_data(self, data):
+    try:
+        # ... operation
+        return True
+    except ConnectionError as e:
+        logger.error(f"Connection failed: {e}")
+        return False
+```
+
+### 4. Resource Cleanup
+
+Always implement `disconnect()` for proper cleanup:
+
+```python
+async def disconnect(self):
+    if self._task:
+        self._task.cancel()
+        await asyncio.gather(self._task, return_exceptions=True)
+    if self._client:
+        await self._client.close()
+```
+
+### 5. Logging
+
+Use appropriate log levels:
+
+```python
+logger.debug("Detailed debugging info")
+logger.info("Normal operation events")
+logger.warning("Potential issues")
+logger.error("Errors requiring attention")
+```
+
+### 6. Action Handlers
+
+Register handlers in `connect()` and acknowledge actions:
+
+```python
+async def connect(self):
+    self.register_action_handler(ActionType.TEMPERATURE, self._handle_temp)
+    return True
+
+async def _handle_temp(self, action_data):
+    action_id = action_data.get("id")
+    # ... handle action
+    self.acknowledge_action(action_id, received=True, resolved=True)
+    return True
+```
+
+---
+
+## Advanced Features
+
+### Background Tasks
+
+```python
+async def connect(self) -> bool:
+    self._polling_task = asyncio.create_task(self._poll_devices())
+    return True
+
+async def _poll_devices(self):
+    while True:
+        try:
+            # Poll your devices
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            break
+
+async def disconnect(self):
+    if self._polling_task:
+        self._polling_task.cancel()
+        await asyncio.gather(self._polling_task, return_exceptions=True)
+```
+
+### Settings Updates
+
+```python
+async def apply_settings(self, settings: Dict[str, Any]) -> bool:
+    """Called when API sends settings updates."""
+    try:
+        climate = settings.get("climate", {})
+        if climate:
+            temp = climate.get("temperature")
+            humidity = climate.get("humidity")
+
+        light = settings.get("light", {})
+        if light:
+            day = light.get("day")     # e.g., "06:00-18:00"
+            night = light.get("night")
+
+        tank = settings.get("tank", {})
+        if tank:
+            for water in tank.get("waters", []):
+                pump_num = water.get("pumpNum")
+                schedules = water.get("waterSchedules", [])
+
+        return True
+    except Exception as e:
+        logger.error(f"Settings error: {e}")
+        return False
+```
+
+---
+
+## See Also
+
+- [Custom Integrations Guide](custom_integrations.md) - Detailed integration development guide
+- [Sample Integration](../external_integrations/sample_integration.py) - Complete working example
+- [Config Schemas](../app/schemas/config_schemas.py) - Built-in Pydantic schemas
+- [Device Registry](../app/registry.py) - Registry implementation

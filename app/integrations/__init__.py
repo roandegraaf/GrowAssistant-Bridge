@@ -12,7 +12,9 @@ import logging
 import os
 import pkgutil
 import sys
-from typing import Any, Dict, Generator, List, Optional, Type, Callable, Union
+from typing import Any, ClassVar, Dict, Generator, List, Optional, Type, Callable, Union, TYPE_CHECKING
+
+from pydantic import BaseModel, ValidationError
 
 from app.api_types import (
     ActionType, LogType, ProblemType, ProblemStatus,
@@ -20,25 +22,127 @@ from app.api_types import (
 )
 from app.api_client import api_client
 
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
+
 
 logger = logging.getLogger(__name__)
 
 
+class ConfigurationError(Exception):
+    """Raised when configuration validation fails."""
+    pass
+
+
 class Integration(abc.ABC):
     """Base class for all integrations.
-    
+
     All device integrations should inherit from this class and implement
     the required methods.
+
+    Class Attributes:
+        CONFIG_SCHEMA: Optional Pydantic model for config validation.
+                       If set, config will be validated on instantiation.
     """
-    
+
+    # Subclasses can override this with a Pydantic model for config validation
+    CONFIG_SCHEMA: ClassVar[Optional[Type[BaseModel]]] = None
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize the integration with configuration.
-        
+
         Args:
             config: Configuration dictionary specific to this integration.
+
+        Raises:
+            ConfigurationError: If config validation fails and CONFIG_SCHEMA is set.
         """
         self.config = config
         self.name = self.__class__.__name__
+        self._validated_config: Optional[BaseModel] = None
+
+        # Validate config if schema is defined
+        if self.CONFIG_SCHEMA is not None:
+            try:
+                self._validated_config = self.CONFIG_SCHEMA.model_validate(config)
+            except ValidationError as e:
+                logger.error(f"Configuration validation failed for {self.name}: {e}")
+                raise ConfigurationError(f"Invalid configuration for {self.name}: {e}") from e
+
+    @classmethod
+    def get_config_key(cls) -> str:
+        """Get the configuration key for this integration.
+
+        This is the key used in config.yaml under 'integrations:'.
+        Default implementation derives from class name:
+            - HTTPIntegration -> "http"
+            - MQTTIntegration -> "mqtt"
+            - GPIOIntegration -> "gpio"
+
+        Subclasses can override for custom mapping.
+
+        Returns:
+            str: The configuration key (lowercase).
+        """
+        name = cls.__name__
+        if name.endswith("Integration"):
+            name = name[:-11]  # Remove "Integration" suffix
+        return name.lower()
+
+    @property
+    def validated_config(self) -> Optional[BaseModel]:
+        """Get the validated configuration object.
+
+        Returns:
+            The validated Pydantic model if CONFIG_SCHEMA was set, else None.
+        """
+        return self._validated_config
+
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register this integration's capabilities with the device registry.
+
+        This method is called after connect() succeeds. Subclasses should
+        override this to register their sensors and actuators.
+
+        The default implementation handles integrations with a 'devices' config
+        by calling registry.register_integration_by_devices().
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        # Default implementation for integrations with 'devices' config
+        if "devices" in self.config:
+            registry.register_integration_by_devices(
+                self.name,
+                self.config.get("devices", {})
+            )
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command on a target device.
+
+        This is the unified command interface that properly wraps send_data().
+        It fixes the signature mismatch in the original command processing.
+
+        Subclasses can override for custom command handling.
+
+        Args:
+            target_id: The target device identifier.
+            action: The action to perform (e.g., "on", "off", "set").
+            payload: Additional command parameters.
+
+        Returns:
+            bool: True if command executed successfully, False otherwise.
+        """
+        return await self.send_data({
+            "target_id": target_id,
+            "action": action,
+            **payload
+        })
     
     @abc.abstractmethod
     async def connect(self) -> bool:
@@ -179,42 +283,80 @@ class Integration(abc.ABC):
         pass
 
 
+# Registry: class name -> class
 _integration_classes: Dict[str, Type[Integration]] = {}
+
+# Registry: config key -> class (for lookup by config.yaml key)
+_integration_by_config_key: Dict[str, Type[Integration]] = {}
 
 
 def register_integration(cls: Type[Integration]) -> Type[Integration]:
     """Decorator to register an integration class.
-    
+
+    Registers the class by both class name and config key for flexible lookup.
+    This enables looking up integrations by their config.yaml key without
+    hardcoding the mapping.
+
     Args:
         cls: Integration class to register.
-        
+
     Returns:
         Type[Integration]: The registered class.
     """
+    # Register by class name
     _integration_classes[cls.__name__] = cls
-    logger.info(f"Registered integration: {cls.__name__}")
+
+    # Register by config key
+    config_key = cls.get_config_key()
+    _integration_by_config_key[config_key] = cls
+
+    logger.info(f"Registered integration: {cls.__name__} (config_key: {config_key})")
     return cls
 
 
 def get_integration_class(name: str) -> Optional[Type[Integration]]:
-    """Get an integration class by name.
-    
+    """Get an integration class by class name.
+
     Args:
-        name: Name of the integration class.
-        
+        name: Name of the integration class (e.g., "MQTTIntegration").
+
     Returns:
         Optional[Type[Integration]]: The integration class, or None if not found.
     """
     return _integration_classes.get(name)
 
 
+def get_integration_class_by_config_key(config_key: str) -> Optional[Type[Integration]]:
+    """Get an integration class by its configuration key.
+
+    This is the primary way to look up integrations when loading from config.
+    The config key is the key used in config.yaml (e.g., "mqtt", "http", "gpio").
+
+    Args:
+        config_key: The configuration key (e.g., "mqtt", "http").
+
+    Returns:
+        Optional[Type[Integration]]: The integration class, or None if not found.
+    """
+    return _integration_by_config_key.get(config_key.lower())
+
+
 def get_all_integration_classes() -> Dict[str, Type[Integration]]:
     """Get all registered integration classes.
-    
+
     Returns:
         Dict[str, Type[Integration]]: Dictionary of integration class names to classes.
     """
     return _integration_classes.copy()
+
+
+def get_all_config_keys() -> List[str]:
+    """Get all registered config keys.
+
+    Returns:
+        List[str]: List of all registered configuration keys.
+    """
+    return list(_integration_by_config_key.keys())
 
 
 def _load_from_directory(directory_path: str) -> List[str]:

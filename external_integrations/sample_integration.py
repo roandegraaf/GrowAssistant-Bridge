@@ -9,11 +9,19 @@ Your integration must:
 2. Create a class that inherits from Integration
 3. Implement all required abstract methods
 4. Register your class with the @register_integration decorator
+5. Implement register_capabilities() for self-registration (NEW!)
 
 To install your integration:
 1. Save your Python file in the 'external_integrations' directory
 2. Add configuration for your integration in config.yaml
 3. Restart the application
+
+NEW SELF-REGISTRATION PATTERN:
+- Integrations now self-register their devices with the registry
+- No changes to main.py are needed when adding new integrations
+- Override get_config_key() if you want a custom config key
+- Override register_capabilities() to register your sensors/actuators
+- Override execute_command() for custom command handling
 """
 
 import asyncio
@@ -21,13 +29,16 @@ import json
 import logging
 import time
 import random
-from typing import Any, Dict, Generator
+from typing import Any, Dict, Generator, TYPE_CHECKING
 
 # Import the Integration base class and register_integration decorator
 from app.integrations import Integration, register_integration
 
 # Import API types
 from app.api_types import ActionType, LogType, ProblemType, ProblemStatus
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
 
 # Set up logging - always use this to provide diagnostic information
 logger = logging.getLogger(__name__)
@@ -700,7 +711,7 @@ class SampleIntegration(Integration):
 
     async def disconnect(self):
         """Disconnect from the devices/service and clean up resources.
-        
+
         IMPLEMENT THIS METHOD: Clean up resources when shutting down
         """
         # PATTERN: Cancel any background tasks
@@ -710,6 +721,105 @@ class SampleIntegration(Integration):
                 await self.update_task
             except asyncio.CancelledError:
                 pass
-            
+
         # PATTERN: Close any connections, cleanup hardware, etc.
-        logger.debug("Sample Integration disconnected") 
+        logger.debug("Sample Integration disconnected")
+
+    # =========================================================================
+    # NEW: Self-Registration Methods (Home Assistant-style modularity)
+    # =========================================================================
+
+    @classmethod
+    def get_config_key(cls) -> str:
+        """Return the config key for this integration.
+
+        This is the key used in config.yaml under 'integrations:'.
+        Default implementation removes 'Integration' suffix and lowercases.
+
+        Override this if you want a custom config key.
+
+        Returns:
+            str: The configuration key (e.g., "sample").
+        """
+        # Default: SampleIntegration -> "sample"
+        return "sample"
+
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register this integration's capabilities with the device registry.
+
+        NEW PATTERN: This method is called after connect() succeeds.
+        Register all your sensors and actuators here.
+
+        This replaces the old hardcoded _register_*_capabilities() methods
+        that were in main.py. Now each integration handles its own registration!
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        sensor_types = {"temperature", "humidity", "light", "ph", "ec", "water_level"}
+
+        for name, device in self.devices.items():
+            device_type = device.get("type")
+
+            if device_type in sensor_types:
+                registry.register_sensor(
+                    sensor_name=name,
+                    integration_name=self.name,
+                    domain="sample",  # Use your integration's domain
+                    device_type=device_type,
+                )
+            else:
+                registry.register_actuator(
+                    actuator_name=name,
+                    integration_name=self.name,
+                    domain="sample",
+                    device_type=device_type,
+                )
+
+        logger.info(f"Registered {len(self.devices)} devices with registry")
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command on a target device.
+
+        NEW PATTERN: This is the unified command interface that replaces
+        the old signature mismatch bug. Commands from the API are routed
+        through this method.
+
+        Args:
+            target_id: The target device name.
+            action: The action to perform (e.g., "on", "off", "set").
+            payload: Additional command parameters.
+
+        Returns:
+            bool: True if command executed successfully.
+        """
+        if target_id not in self.devices:
+            logger.error(f"Unknown device: {target_id}")
+            return False
+
+        # Handle common actions
+        if action.lower() in ("on", "off"):
+            value = 1 if action.lower() == "on" else 0
+            return await self.send_data({
+                "device": target_id,
+                "value": value,
+            })
+        elif action.lower() == "set":
+            value = payload.get("value")
+            if value is not None:
+                return await self.send_data({
+                    "device": target_id,
+                    "value": value,
+                })
+        else:
+            # Pass through for custom actions
+            return await self.send_data({
+                "device": target_id,
+                "action": action,
+                **payload,
+            }) 

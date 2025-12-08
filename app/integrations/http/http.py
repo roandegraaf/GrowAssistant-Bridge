@@ -9,11 +9,15 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, TYPE_CHECKING
 
 import httpx
 
 from app.integrations import Integration, register_integration
+from app.schemas.config_schemas import HTTPIntegrationConfig
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +25,9 @@ logger = logging.getLogger(__name__)
 @register_integration
 class HTTPIntegration(Integration):
     """Integration for HTTP communication."""
-    
+
+    CONFIG_SCHEMA = HTTPIntegrationConfig
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize the HTTP integration.
         
@@ -282,6 +288,55 @@ class HTTPIntegration(Integration):
             await self.client.aclose()
             logger.debug("HTTP client closed.")
     
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register HTTP endpoint capabilities with the device registry.
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        for endpoint_name, endpoint_config in self.endpoints.items():
+            method = endpoint_config.get("method", "GET").upper()
+
+            # GET endpoints are typically sensors, POST/PUT are actuators
+            if method == "GET":
+                registry.register_sensor(
+                    sensor_name=endpoint_name,
+                    integration_name=self.name,
+                    domain="http",
+                    device_type="http_endpoint",
+                )
+            else:
+                registry.register_actuator(
+                    actuator_name=endpoint_name,
+                    integration_name=self.name,
+                    domain="http",
+                    device_type="http_endpoint",
+                )
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command via HTTP.
+
+        Args:
+            target_id: The endpoint name.
+            action: The action to perform.
+            payload: Additional command parameters.
+
+        Returns:
+            bool: True if successful.
+        """
+        return await self.send_data({
+            "endpoint_name": target_id,
+            "payload": {
+                "action": action,
+                **payload,
+            },
+        })
+
     def __del__(self):
         """Clean up HTTP resources when the object is destroyed."""
         if self.client:

@@ -23,7 +23,12 @@ from typing import Any, Dict, List, Optional, Set, Type
 from app.api_client import api_client
 from app.auth import auth_manager
 from app.config import config, init_logging
-from app.integrations import Integration, discover_integrations, get_integration_class
+from app.integrations import (
+    Integration,
+    discover_integrations,
+    get_integration_class,
+    get_integration_class_by_config_key,
+)
 from app.queue_manager import queue_manager
 from app.registry import registry
 
@@ -296,142 +301,64 @@ class Application:
                 logger.error(f"Error applying settings to integration {name}: {e}")
 
     async def _load_integrations(self):
-        """Load and initialize integrations."""
+        """Load and initialize integrations.
+
+        This method uses the new self-registration pattern where integrations
+        register their own capabilities instead of hardcoded handlers.
+        """
         logger.info("Loading integrations")
-        
+
         # Discover available integration modules
         module_names = discover_integrations()
         logger.info(f"Discovered integration modules: {module_names}")
-        
+
         # Load configured integrations
         integrations_config = config.get_section("integrations")
-        
+
         for integration_type, integration_config in integrations_config.items():
             if not integration_config.get("enabled", False):
                 logger.info(f"Integration '{integration_type}' is disabled, skipping")
                 continue
-                
+
             try:
-                # Get the integration class with proper capitalization
-                class_name = None
-                if integration_type.lower() == "http":
-                    class_name = "HTTPIntegration"
-                elif integration_type.lower() == "mqtt":
-                    class_name = "MQTTIntegration"
-                else:
-                    # Default capitalization for other integrations
+                # Get integration class by config key (no hardcoding!)
+                integration_class = get_integration_class_by_config_key(integration_type)
+
+                if not integration_class:
+                    # Fallback to legacy class name lookup for backward compatibility
                     class_name = f"{integration_type.capitalize()}Integration"
-                
-                integration_class = get_integration_class(class_name)
+                    integration_class = get_integration_class(class_name)
+
                 if not integration_class:
                     logger.warning(f"Integration class for '{integration_type}' not found")
                     continue
-                    
+
                 # Create the integration instance
                 integration = integration_class(integration_config)
-                
+
                 # Connect to the integration
                 success = await integration.connect()
                 if not success:
                     logger.error(f"Failed to connect to integration '{integration.name}'")
                     continue
-                    
+
                 # Store the integration
                 self._integrations[integration.name] = integration
-                
-                # Register the integration with the registry
-                self._register_integration_capabilities(integration, integration_config)
-                
+
+                # Self-registration: integration registers its own capabilities
+                integration.register_capabilities(registry)
+
                 logger.info(f"Loaded integration: {integration.name}")
-                
+
             except Exception as e:
                 logger.exception(f"Error loading integration '{integration_type}': {e}")
-        
+
         logger.info(f"Loaded {len(self._integrations)} integrations")
     
-    def _register_integration_capabilities(self, integration: Integration, config: Dict[str, Any]):
-        """Register integration capabilities with the registry.
-
-        Args:
-            integration: Integration instance.
-            config: Integration configuration.
-        """
-        integration_name = integration.name
-
-        # Check for devices configuration - common in external integrations
-        if "devices" in config:
-            registry.register_integration_by_devices(integration_name, config.get("devices", {}))
-            return
-
-        # Strategy pattern: map integration names to their registration handlers
-        handlers = {
-            "GPIOIntegration": self._register_gpio_capabilities,
-            "MQTTIntegration": self._register_mqtt_capabilities,
-            "HTTPIntegration": self._register_http_capabilities,
-            "SerialIntegration": self._register_serial_capabilities,
-        }
-
-        handler = handlers.get(integration_name)
-        if handler:
-            handler(integration_name, config)
-        else:
-            logger.warning(f"Unknown integration type for registration: {integration_name}")
-            if "devices" in config:
-                registry.register_integration_by_devices(integration_name, config.get("devices", {}))
-
-    def _register_gpio_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
-        """Register GPIO pin capabilities."""
-        pins_config = config.get("pins", {})
-        for _, pin_config in pins_config.items():
-            if not isinstance(pin_config, dict):
-                continue
-
-            pin_name = pin_config.get("name")
-            pin_direction = pin_config.get("direction", "").upper()
-
-            if pin_name and pin_direction:
-                if pin_direction == "OUT":
-                    registry.register_actuator(pin_name, integration_name)
-                elif pin_direction == "IN":
-                    registry.register_sensor(pin_name, integration_name)
-
-    def _register_mqtt_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
-        """Register MQTT topic capabilities."""
-        topics_config = config.get("topics", {})
-        for _, topic_config in topics_config.items():
-            if not isinstance(topic_config, dict):
-                continue
-
-            topic_name = topic_config.get("name", "")
-            topic_type = topic_config.get("type")
-
-            if topic_name and topic_type:
-                if topic_name.startswith("sensors/"):
-                    registry.register_sensor(topic_type, integration_name)
-                elif topic_name.startswith("controls/"):
-                    registry.register_actuator(topic_type, integration_name)
-
-    def _register_http_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
-        """Register HTTP endpoint capabilities."""
-        endpoints_config = config.get("endpoints", {})
-        for _, endpoint_config in endpoints_config.items():
-            if not isinstance(endpoint_config, dict):
-                continue
-
-            endpoint_name = endpoint_config.get("name")
-            endpoint_method = endpoint_config.get("method", "GET").upper()
-
-            if endpoint_name:
-                # GET endpoints are typically sensors, POST/PUT are actuators
-                if endpoint_method == "GET":
-                    registry.register_sensor(endpoint_name, integration_name)
-                else:
-                    registry.register_actuator(endpoint_name, integration_name)
-
-    def _register_serial_capabilities(self, integration_name: str, config: Dict[str, Any]) -> None:
-        """Register serial device capabilities."""
-        devices_config = config.get("devices", {})
-        registry.register_integration_by_devices(integration_name, devices_config)
+    # NOTE: The old _register_integration_capabilities and its handlers
+    # (_register_gpio_capabilities, _register_mqtt_capabilities, etc.)
+    # have been removed. Integrations now self-register via their
+    # register_capabilities() method, which is called after connect().
     
     def _create_tasks(self):
         """Create and start asyncio tasks."""
@@ -658,10 +585,11 @@ class Application:
                 
             # Get the integration
             integration = self._integrations[integration_name]
-            
-            # Send the command to the integration
-            success = await integration.send_data(target_id, action, payload)
-            
+
+            # Execute the command using the unified interface
+            # (This fixes the signature mismatch bug in the original code)
+            success = await integration.execute_command(target_id, action, payload)
+
             # Send the result back to the API
             result_message = "Command executed successfully" if success else "Command execution failed"
             await api_client.send_command_result(command_id, success, result_message)

@@ -9,11 +9,15 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, TYPE_CHECKING
 
 import paho.mqtt.client as mqtt
 
 from app.integrations import Integration, register_integration
+from app.schemas.config_schemas import MQTTIntegrationConfig
+
+if TYPE_CHECKING:
+    from app.registry import DeviceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +25,9 @@ logger = logging.getLogger(__name__)
 @register_integration
 class MQTTIntegration(Integration):
     """Integration for MQTT communication."""
-    
+
+    CONFIG_SCHEMA = MQTTIntegrationConfig
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize the MQTT integration.
         
@@ -283,6 +289,72 @@ class MQTTIntegration(Integration):
         except Exception as e:
             logger.error(f"Failed to clean up MQTT resources: {e}")
     
+    def register_capabilities(self, registry: "DeviceRegistry") -> None:
+        """Register MQTT topic capabilities with the device registry.
+
+        Args:
+            registry: The DeviceRegistry instance to register with.
+        """
+        for topic_name, topic_info in self.topics.items():
+            topic_type = topic_info.get("type")
+
+            if not topic_type:
+                continue
+
+            # Determine if sensor or actuator based on topic naming convention
+            if topic_name.startswith("sensors/"):
+                registry.register_sensor(
+                    sensor_name=topic_type,
+                    integration_name=self.name,
+                    domain="mqtt",
+                    device_type=topic_type,
+                )
+            elif topic_name.startswith("controls/"):
+                registry.register_actuator(
+                    actuator_name=topic_type,
+                    integration_name=self.name,
+                    domain="mqtt",
+                    device_type=topic_type,
+                )
+            else:
+                # Default to sensor if can't determine from topic name
+                registry.register_sensor(
+                    sensor_name=topic_type,
+                    integration_name=self.name,
+                    domain="mqtt",
+                    device_type=topic_type,
+                )
+
+    async def execute_command(
+        self,
+        target_id: str,
+        action: str,
+        payload: Dict[str, Any]
+    ) -> bool:
+        """Execute a command via MQTT.
+
+        Args:
+            target_id: The target device/topic identifier.
+            action: The action to perform.
+            payload: Additional command parameters.
+
+        Returns:
+            bool: True if successful.
+        """
+        # Build the control topic
+        control_topic = f"controls/{target_id}"
+
+        # Build the payload
+        mqtt_payload = {
+            "action": action,
+            **payload,
+        }
+
+        return await self.send_data({
+            "topic": control_topic,
+            "payload": mqtt_payload,
+        })
+
     def __del__(self):
         """Clean up MQTT resources when the object is destroyed."""
         if self.client:
