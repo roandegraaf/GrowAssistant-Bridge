@@ -18,6 +18,8 @@ from flask import Response
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for, abort, flash, current_app
 from werkzeug.security import check_password_hash, generate_password_hash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from app.config import config
 from app.registry import registry
@@ -26,12 +28,31 @@ from app.auth import auth_manager
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, 
+app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), "templates"),
             static_folder=os.path.join(os.path.dirname(__file__), "static"))
 
+# Initialize rate limiter
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
 
 # Security middleware
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses."""
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    return response
+
+
 def login_required(f):
     """Decorator to require login for routes."""
     @wraps(f)
@@ -39,7 +60,7 @@ def login_required(f):
         # Skip auth check if auth is disabled in config
         if not config.get("web.auth_enabled", False):
             return f(*args, **kwargs)
-            
+
         if not session.get("logged_in"):
             return redirect(url_for("login", next=request.url))
         return f(*args, **kwargs)
@@ -68,6 +89,7 @@ def internal_server_error(e):
 
 
 @app.route("/setup", methods=["GET", "POST"])
+@limiter.limit("3 per minute")
 def setup():
     """First-time setup page to set password."""
     # If password is already set, redirect to login
@@ -80,9 +102,11 @@ def setup():
         username = request.form.get("username", "admin")
         password = request.form.get("password")
         confirm_password = request.form.get("confirm_password")
-        
+
         if not password:
             error = "Password is required"
+        elif len(password) < 8:
+            error = "Password must be at least 8 characters long"
         elif password != confirm_password:
             error = "Passwords do not match"
         else:
@@ -120,6 +144,7 @@ def setup():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
 def login():
     """Login page."""
     # Skip auth if disabled in config
@@ -141,12 +166,17 @@ def login():
         stored_password_hash = config.get("web.password_hash", "")
         
         if username == stored_username and check_password_hash(stored_password_hash, password):
+            # Regenerate session to prevent session fixation attacks
+            session.clear()
             session["logged_in"] = True
             next_url = request.args.get("next", url_for("index"))
             return redirect(next_url)
         else:
             error = "Invalid username or password"
-            logger.warning(f"Failed login attempt for user: {username}")
+            # Log failed login attempt with IP address and timestamp
+            client_ip = request.remote_addr
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            logger.warning(f"Failed login attempt - IP: {client_ip}, Username: {username}, Time: {timestamp}")
     
     return render_template("login.html", error=error)
 
@@ -644,9 +674,41 @@ def start_web_server(passed_app_instance):
     host = config.get("web.host", "0.0.0.0")
     port = config.get("web.port", 5000)
     debug = config.get("web.debug", False)
-    
+
+    # Auto-generate and persist secret key if not set or insecure
+    secret_key = config.get("web.secret_key", "")
+    if not secret_key or secret_key == "change-this-to-a-random-secret-key":
+        # Generate a new secure secret key
+        secret_key = os.urandom(32).hex()
+        logger.info("Generated new secret key for session security")
+
+        # Save to config file for persistence
+        try:
+            with open(config.config_file, "r") as f:
+                config_data = yaml.safe_load(f)
+
+            if "web" not in config_data:
+                config_data["web"] = {}
+
+            config_data["web"]["secret_key"] = secret_key
+
+            with open(config.config_file, "w") as f:
+                yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+            # Reload config in memory
+            config.reload()
+            logger.info("Secret key saved to configuration file")
+        except Exception as e:
+            logger.error(f"Error saving secret key to config: {e}")
+
     # Set secret key for session
-    app.secret_key = config.get("web.secret_key", os.urandom(24))
+    app.secret_key = secret_key
+
+    # Configure secure session cookies
+    ssl_enabled = config.get("web.ssl_enabled", False)
+    app.config['SESSION_COOKIE_SECURE'] = ssl_enabled  # Only send cookie over HTTPS if SSL is enabled
+    app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevent JavaScript access to session cookie
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # CSRF protection
     
     # Configure logging for production
     if not debug:

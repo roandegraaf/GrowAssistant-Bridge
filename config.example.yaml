@@ -1,0 +1,106 @@
+# GrowAssistant Bridge Configuration Example
+# Copy this file to config.yaml and customize for your environment
+# IMPORTANT: Never commit config.yaml with real credentials to version control
+
+api:
+  batch_size: 100
+  connection_timeout: 300
+  log_values: true
+  poll_interval: 5
+  retry_max_attempts: 5
+  retry_max_backoff: 60
+  retry_min_backoff: 1
+  transmission_interval: 10
+  url: https://api.growassistant.app/prod  # Change to your API URL
+
+general:
+  api_logs_dir: logs/api
+  collection_interval: 10
+  data_dir: data
+  external_integrations_dir: external_integrations
+  log_file: logs/app.log
+  log_level: INFO
+
+integrations:
+  gpio:
+    enabled: false
+    pins:
+      '0':
+        direction: OUT
+        initial: LOW
+        name: pump_relay
+        pin: 17
+      '1':
+        direction: OUT
+        initial: LOW
+        name: light_relay
+        pin: 18
+      '2':
+        direction: IN
+        name: temperature_sensor
+        pin: 4
+        pull_up_down: UP
+
+  http:
+    enabled: false
+    endpoints:
+      '0':
+        headers: null
+        interval: 300
+        method: GET
+        name: example_endpoint
+        url: https://api.example.com/data
+
+  mqtt:
+    broker: localhost
+    client_id: growassistant
+    enabled: false
+    password: ''  # Set your MQTT password
+    port: 1883
+    topics:
+      '0':
+        name: sensors/temperature
+        type: temperature
+      '1':
+        name: sensors/humidity
+        type: humidity
+    username: ''  # Set your MQTT username
+
+  sample:
+    devices:
+      '0':
+        name: sample_temperature
+        type: temperature
+      '1':
+        name: sample_humidity
+        type: humidity
+    enabled: true  # Enable for testing without hardware
+    update_interval: 10
+
+  serial:
+    baudrate: 9600
+    bytesize: 8
+    enabled: false
+    parity: N
+    port: /dev/ttyUSB0
+    stopbits: 1
+    timeout: 1
+
+queue:
+  flush_interval: 300
+  max_queue_size: 10000
+  persistence_enabled: true
+  persistence_file: data/queue.db
+
+web:
+  auth_enabled: true
+  debug: false
+  enabled: true
+  host: 127.0.0.1  # Use 0.0.0.0 to allow external access (configure firewall!)
+  password_hash: ''  # Will be set on first setup via web interface
+  port: 5000
+  secret_key: ''  # Will be auto-generated on first run if empty
+  ssl_cert: ''  # Path to SSL certificate for HTTPS
+  ssl_enabled: false  # Enable HTTPS (recommended for production)
+  ssl_key: ''  # Path to SSL private key
+  username: admin
