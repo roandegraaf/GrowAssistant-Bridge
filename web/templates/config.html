@@ -1,370 +1,362 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Configuration - GrowAssistant Bridge</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/theme/monokai.min.css">
-    <style>
-        body {
-            padding-top: 2rem;
-            background-color: #f8f9fa;
-        }
-        .header {
-            margin-bottom: 2rem;
-            border-bottom: 1px solid #e5e5e5;
-            padding-bottom: 1rem;
-        }
-        .card {
-            margin-bottom: 1rem;
-            border-radius: 0.5rem;
-            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
-        }
-        .card-header {
-            background-color: #28a745;
-            color: white;
-            font-weight: bold;
-            border-top-left-radius: 0.5rem !important;
-            border-top-right-radius: 0.5rem !important;
-        }
-        .CodeMirror {
-            height: 600px;
-            border: 1px solid #dee2e6;
-            border-radius: 0.25rem;
-        }
-        .btn-toolbar {
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-        }
-        .loading {
-            text-align: center;
-            padding: 2rem;
-        }
-        .CodeMirror-line.line-420,
-        .CodeMirror pre.line-420 {
-            background-color: rgba(13, 232, 64, 0.2) !important;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Configuration</h1>
-            <p class="lead">Edit the configuration for your GrowAssistant Bridge</p>
-            <nav aria-label="breadcrumb">
-                <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/">Home</a></li>
-                    <li class="breadcrumb-item active" aria-current="page">Configuration</li>
-                </ol>
-            </nav>
-        </div>
+{% extends "base.html" %}
 
-        <div class="row">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">Edit Configuration</div>
-                    <div class="card-body">
-                        <div class="alert alert-warning" role="alert">
-                            <h4 class="alert-heading">Warning!</h4>
-                            <p>Editing the configuration directly can break your system if done incorrectly. Make sure you understand what you're changing.</p>
-                            <p>Changes to the configuration require restarting the application to take effect.</p>
-                        </div>
-                        
-                        <div id="editor-container">
-                            <div class="loading" id="loading-indicator">
-                                <div class="spinner-border text-success" role="status">
-                                    <span class="visually-hidden">Loading...</span>
-                                </div>
-                                <p>Loading configuration...</p>
-                            </div>
-                            <textarea id="config-editor" style="display: none;"></textarea>
-                        </div>
-                        
-                        <div class="btn-toolbar">
-                            <button type="button" class="btn btn-success me-2" id="save-btn">Save Configuration</button>
-                            <button type="button" class="btn btn-secondary me-2" id="reset-btn">Reset Changes</button>
-                            <button type="button" class="btn btn-warning me-2" id="restart-btn">Restart Server</button>
-                            <a href="/" class="btn btn-outline-secondary">Cancel</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+{% block title %}Configuration{% endblock %}
 
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">Configuration Sections</div>
-                    <div class="card-body">
-                        <div class="accordion" id="configSections">
-                            <div class="accordion-item">
-                                <h2 class="accordion-header" id="headingGeneral">
-                                    <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGeneral" aria-expanded="true" aria-controls="collapseGeneral">
-                                        General Configuration
-                                    </button>
-                                </h2>
-                                <div id="collapseGeneral" class="accordion-collapse collapse show" aria-labelledby="headingGeneral" data-bs-parent="#configSections">
-                                    <div class="accordion-body">
-                                        <p>The general section contains basic settings for the application.</p>
-                                        <ul>
-                                            <li><strong>log_level</strong>: Controls the verbosity of logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)</li>
-                                            <li><strong>log_file</strong>: Path where log files will be stored</li>
-                                            <li><strong>data_dir</strong>: Directory for storing application data</li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="accordion-item">
-                                <h2 class="accordion-header" id="headingApi">
-                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseApi" aria-expanded="false" aria-controls="collapseApi">
-                                        API Configuration
-                                    </button>
-                                </h2>
-                                <div id="collapseApi" class="accordion-collapse collapse" aria-labelledby="headingApi" data-bs-parent="#configSections">
-                                    <div class="accordion-body">
-                                        <p>The API section configures communication with the Spring backend.</p>
-                                        <ul>
-                                            <li><strong>url</strong>: URL of the Spring API</li>
-                                            <li><strong>auth_token</strong>: Authentication token for the API</li>
-                                            <li><strong>batch_size</strong>: Number of data points to send in one batch</li>
-                                            <li><strong>retry_max_attempts</strong>: Maximum number of retry attempts</li>
-                                            <li><strong>retry_min_backoff</strong>: Minimum backoff time in seconds</li>
-                                            <li><strong>retry_max_backoff</strong>: Maximum backoff time in seconds</li>
-                                            <li><strong>poll_interval</strong>: Interval in seconds to poll for commands</li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="accordion-item">
-                                <h2 class="accordion-header" id="headingIntegrations">
-                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseIntegrations" aria-expanded="false" aria-controls="collapseIntegrations">
-                                        Integrations Configuration
-                                    </button>
-                                </h2>
-                                <div id="collapseIntegrations" class="accordion-collapse collapse" aria-labelledby="headingIntegrations" data-bs-parent="#configSections">
-                                    <div class="accordion-body">
-                                        <p>The integrations section configures all available device integrations.</p>
-                                        <p>Each integration has its own configuration section:</p>
-                                        <ul>
-                                            <li><strong>gpio</strong>: Configuration for GPIO pins</li>
-                                            <li><strong>mqtt</strong>: Configuration for MQTT broker connections</li>
-                                            <li><strong>http</strong>: Configuration for HTTP endpoints</li>
-                                            <li><strong>serial</strong>: Configuration for serial port connections</li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+{% block head %}
+<!-- CodeMirror CSS -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/theme/material-darker.min.css">
+<style>
+    .CodeMirror {
+        height: calc(100vh - 400px);
+        min-height: 400px;
+        background: var(--bg-base) !important;
+        border: 1px solid var(--border-default);
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+    }
+    .CodeMirror-gutters {
+        background: var(--bg-elevated) !important;
+        border-right: 1px solid var(--border-subtle) !important;
+    }
+    .CodeMirror-linenumber {
+        color: var(--text-tertiary) !important;
+    }
+    .CodeMirror-cursor {
+        border-left-color: var(--accent-primary) !important;
+    }
+    .CodeMirror-selected {
+        background: rgba(34, 197, 94, 0.15) !important;
+    }
+    .CodeMirror-focused .CodeMirror-selected {
+        background: rgba(34, 197, 94, 0.2) !important;
+    }
+    .cm-s-material-darker .CodeMirror-activeline-background {
+        background: rgba(255, 255, 255, 0.05) !important;
+    }
+</style>
+{% endblock %}
 
-        <footer class="mt-5 text-muted text-center">
-            <p>&copy; 2025 GrowAssistant Bridge</p>
-        </footer>
-    </div>
+{% block content %}
+<!-- Breadcrumb -->
+<nav class="mb-6" aria-label="Breadcrumb">
+    <ol class="flex items-center gap-2 text-sm">
+        <li>
+            <a href="/" class="text-zinc-400 hover:text-zinc-100 transition-colors">Dashboard</a>
+        </li>
+        <li class="text-zinc-600">/</li>
+        <li class="text-zinc-100">Configuration</li>
+    </ol>
+</nav>
 
-    <!-- Result Modal -->
-    <div class="modal fade" id="resultModal" tabindex="-1" aria-labelledby="resultModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="resultModalLabel">Operation Result</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body" id="result-message">
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                </div>
-            </div>
+<!-- Warning Banner -->
+<div class="alert alert-warning mb-6">
+    <div class="flex gap-3">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+            <path d="M12 9v4"></path>
+            <path d="M12 17h.01"></path>
+        </svg>
+        <div>
+            <strong class="font-semibold">Warning</strong>
+            <p class="text-sm opacity-90 mt-1">Editing the configuration directly can break your system if done incorrectly. Changes require restarting the application to take effect.</p>
         </div>
     </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/mode/yaml/yaml.min.js"></script>
-    <!-- JS-YAML for parsing YAML -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
-    <script>
-        let editor;
-        let originalConfig;
-        let resultModal;
+<!-- Editor Card -->
+<div class="card mb-6">
+    <div class="card-header">
+        <h2 class="card-title">Edit Configuration</h2>
+        <span class="badge badge-info">YAML</span>
+    </div>
+    <div class="card-body p-0">
+        <div id="editor-container">
+            <div class="loading flex items-center justify-center py-16" id="loading-indicator">
+                <div class="spinner mr-3"></div>
+                <span class="text-zinc-400">Loading configuration...</span>
+            </div>
+            <textarea id="config-editor" class="hidden"></textarea>
+        </div>
+    </div>
+    <div class="px-5 py-4 border-t border-border-subtle flex flex-wrap items-center gap-3">
+        <button type="button" class="btn btn-primary" id="save-btn">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save Configuration
+        </button>
+        <button type="button" class="btn btn-secondary" id="reset-btn">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+            </svg>
+            Reset Changes
+        </button>
+        <button type="button" class="btn btn-secondary" id="restart-btn" style="border-color: var(--status-warning); color: var(--status-warning);">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+                <path d="M16 16h5v5"></path>
+            </svg>
+            Restart Server
+        </button>
+        <a href="/" class="btn btn-ghost ml-auto">Cancel</a>
+    </div>
+</div>
 
-        document.addEventListener('DOMContentLoaded', function() {
-            // Check if jsyaml is loaded
+<!-- Help Section -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Configuration Reference</h2>
+    </div>
+    <div class="card-body">
+        <div class="space-y-4">
+            <!-- General -->
+            <details class="group">
+                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
+                    <span class="font-medium text-zinc-200">General Configuration</span>
+                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </summary>
+                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
+                    <p>The general section contains basic settings for the application.</p>
+                    <ul class="list-disc list-inside space-y-1 ml-2">
+                        <li><code class="text-zinc-300">log_level</code>: Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL)</li>
+                        <li><code class="text-zinc-300">log_file</code>: Path where log files will be stored</li>
+                        <li><code class="text-zinc-300">data_dir</code>: Directory for storing application data</li>
+                    </ul>
+                </div>
+            </details>
+
+            <!-- API -->
+            <details class="group">
+                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
+                    <span class="font-medium text-zinc-200">API Configuration</span>
+                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </summary>
+                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
+                    <p>The API section configures communication with the Spring backend.</p>
+                    <ul class="list-disc list-inside space-y-1 ml-2">
+                        <li><code class="text-zinc-300">url</code>: URL of the Spring API</li>
+                        <li><code class="text-zinc-300">batch_size</code>: Number of data points per batch</li>
+                        <li><code class="text-zinc-300">retry_max_attempts</code>: Maximum retry attempts</li>
+                        <li><code class="text-zinc-300">poll_interval</code>: Command polling interval (seconds)</li>
+                    </ul>
+                </div>
+            </details>
+
+            <!-- Integrations -->
+            <details class="group">
+                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
+                    <span class="font-medium text-zinc-200">Integrations Configuration</span>
+                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </summary>
+                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
+                    <p>Configure device integrations:</p>
+                    <ul class="list-disc list-inside space-y-1 ml-2">
+                        <li><code class="text-zinc-300">gpio</code>: Raspberry Pi GPIO pins</li>
+                        <li><code class="text-zinc-300">mqtt</code>: MQTT broker connections</li>
+                        <li><code class="text-zinc-300">http</code>: HTTP endpoints</li>
+                        <li><code class="text-zinc-300">serial</code>: Serial port connections</li>
+                    </ul>
+                </div>
+            </details>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block modals %}
+<!-- Result Modal -->
+<div id="resultModal-backdrop" class="modal-backdrop"></div>
+<div id="resultModal" class="modal">
+    <div class="modal-header">
+        <h3 class="modal-title">Operation Result</h3>
+        <button onclick="Modal.hide('resultModal')" class="btn btn-ghost btn-icon">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+    </div>
+    <div class="modal-body" id="result-message">
+    </div>
+    <div class="modal-footer">
+        <button onclick="Modal.hide('resultModal')" class="btn btn-secondary">Close</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- CodeMirror JS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/mode/yaml/yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+
+<script>
+    let editor;
+    let originalConfig;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Check if jsyaml is loaded
+        if (typeof jsyaml === 'undefined') {
+            console.error('js-yaml library is not loaded properly');
+            document.getElementById('loading-indicator').innerHTML = `
+                <div class="alert alert-error">
+                    Error: Required YAML library not available. Please refresh the page.
+                </div>
+            `;
+            return;
+        }
+
+        // Load the configuration
+        loadConfig();
+
+        // Set up event listeners
+        document.getElementById('save-btn').addEventListener('click', saveConfig);
+        document.getElementById('reset-btn').addEventListener('click', resetConfig);
+        document.getElementById('restart-btn').addEventListener('click', restartServer);
+    });
+
+    async function loadConfig() {
+        try {
+            const response = await fetch('/api/config?format=raw');
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+
+            const yamlText = await response.text();
+
+            // Parse the YAML for originalConfig
+            try {
+                originalConfig = jsyaml.load(yamlText, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
+            } catch (error) {
+                console.error('Error parsing YAML:', error);
+            }
+
+            // Clean up existing editor if it exists
+            if (editor) {
+                editor.toTextArea();
+            }
+
+            // Set up CodeMirror editor
+            const textArea = document.getElementById('config-editor');
+            textArea.value = yamlText;
+            textArea.classList.remove('hidden');
+
+            editor = CodeMirror.fromTextArea(textArea, {
+                mode: 'yaml',
+                theme: 'material-darker',
+                lineNumbers: true,
+                indentUnit: 2,
+                tabSize: 2,
+                lineWrapping: true,
+                styleActiveLine: true
+            });
+
+            // Hide loading indicator
+            document.getElementById('loading-indicator').classList.add('hidden');
+        } catch (error) {
+            console.error('Error loading configuration:', error);
+            document.getElementById('loading-indicator').innerHTML = `
+                <div class="alert alert-error m-4">
+                    Error loading configuration: ${Utils.escapeHtml(error.message)}
+                </div>
+            `;
+        }
+    }
+
+    async function saveConfig() {
+        try {
             if (typeof jsyaml === 'undefined') {
-                console.error('js-yaml library is not loaded properly');
-                document.getElementById('loading-indicator').innerHTML = 
-                    `<div class="alert alert-danger">Error: Required YAML library not available. Please refresh the page.</div>`;
+                showResult('Error: YAML parsing library not available. Please refresh the page.', 'error');
                 return;
             }
 
-            // Initialize the modal
-            resultModal = new bootstrap.Modal(document.getElementById('resultModal'));
-            
-            // Load the configuration
-            loadConfig();
-            
-            // Set up event listeners
-            document.getElementById('save-btn').addEventListener('click', saveConfig);
-            document.getElementById('reset-btn').addEventListener('click', resetConfig);
-            document.getElementById('restart-btn').addEventListener('click', restartServer);
-        });
+            const yamlStr = editor.getValue();
+            let parsedConfig;
 
-        // Load the configuration from the API
-        function loadConfig() {
-            fetch('/api/config?format=raw')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.text();
-                })
-                .then(yamlText => {
-                    // Parse the YAML for originalConfig to use in resetConfig
-                    try {
-                        originalConfig = jsyaml.load(yamlText, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
-                    } catch (error) {
-                        console.error('Error parsing YAML:', error);
-                        // Continue even if parsing fails
-                    }
-                    
-                    // Clean up existing editor if it exists
-                    if (editor) {
-                        editor.toTextArea();
-                    }
-                    
-                    // Set up CodeMirror editor with the raw YAML text
-                    const textArea = document.getElementById('config-editor');
-                    textArea.value = yamlText;
-                    textArea.style.display = 'block';
-                    
-                    editor = CodeMirror.fromTextArea(textArea, {
-                        mode: 'yaml',
-                        theme: 'monokai',
-                        lineNumbers: true,
-                        indentUnit: 2,
-                        tabSize: 2
-                    });
-                    
-                    const line420 = editor.getLineHandle(419);
-                    if (line420) {
-                        editor.addLineClass(419, 'wrap', 'line-420');
-                    }
-                    
-                    // Hide loading indicator
-                    document.getElementById('loading-indicator').style.display = 'none';
-                })
-                .catch(error => {
-                    console.error('Error loading configuration:', error);
-                    document.getElementById('loading-indicator').innerHTML = 
-                        `<div class="alert alert-danger">Error loading configuration: ${error.message}</div>`;
-                });
-        }
-
-
-        // Save the configuration
-        function saveConfig() {
             try {
-                // Make sure jsyaml is available
-                if (typeof jsyaml === 'undefined') {
-                    showResult('Error: YAML parsing library not available. Please refresh the page.', 'danger');
-                    return;
-                }
-                
-                const yamlStr = editor.getValue();
-                let parsedConfig;
-                
-                // Try to parse the YAML
-                try {
-                    parsedConfig = jsyaml.load(yamlStr, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
-                } catch (yamlError) {
-                    console.error('YAML parsing error:', yamlError);
-                    showResult(`Error parsing YAML: ${yamlError.message}`, 'danger');
-                    return;
-                }
-                
-                // Send the configuration to the API
-                fetch('/api/config', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(parsedConfig)
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        showResult(`Error: ${data.error}`, 'danger');
-                    } else {
-                        showResult(data.message, 'success');
-                        // Update originalConfig with the new parsed config
-                        originalConfig = parsedConfig;
-                    }
-                })
-                .catch(error => {
-                    showResult(`Error saving configuration: ${error.message}`, 'danger');
-                });
-            } catch (error) {
-                console.error('Unexpected error in saveConfig:', error);
-                showResult(`Unexpected error: ${error.message}`, 'danger');
+                parsedConfig = jsyaml.load(yamlStr, { schema: jsyaml.DEFAULT_SAFE_SCHEMA });
+            } catch (yamlError) {
+                console.error('YAML parsing error:', yamlError);
+                showResult(`Error parsing YAML: ${yamlError.message}`, 'error');
+                return;
             }
-        }
 
-        // Reset the configuration to the original
-        function resetConfig() {
-            // Fetch the raw YAML again to reset
-            fetch('/api/config?format=raw')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.text();
-                })
-                .then(yamlText => {
-                    editor.setValue(yamlText);
-                    showResult('Configuration reset to last saved state', 'info');
-                })
-                .catch(error => {
-                    console.error('Error resetting configuration:', error);
-                    showResult(`Error resetting configuration: ${error.message}`, 'danger');
-                });
-        }
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(parsedConfig)
+            });
 
-        // Restart the server
-        function restartServer() {
-            if (confirm('Are you sure you want to restart the server? This will temporarily interrupt the service.')) {
-                fetch('/api/restart', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        showResult(`Error restarting server: ${data.error}`, 'danger');
-                    } else {
-                        showResult(data.message || 'Server restart initiated successfully.', 'success');
-                        // Optionally, you could redirect or disable buttons after restart
-                    }
-                })
-                .catch(error => {
-                    showResult(`Error sending restart request: ${error.message}`, 'danger');
-                });
+            const data = await response.json();
+
+            if (data.error) {
+                showResult(`Error: ${data.error}`, 'error');
+            } else {
+                showResult(data.message, 'success');
+                originalConfig = parsedConfig;
             }
+        } catch (error) {
+            console.error('Unexpected error in saveConfig:', error);
+            showResult(`Unexpected error: ${error.message}`, 'error');
+        }
+    }
+
+    async function resetConfig() {
+        try {
+            const response = await fetch('/api/config?format=raw');
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+            const yamlText = await response.text();
+            editor.setValue(yamlText);
+            Toast.show({ message: 'Configuration reset to last saved state', type: 'info' });
+        } catch (error) {
+            console.error('Error resetting configuration:', error);
+            showResult(`Error resetting configuration: ${error.message}`, 'error');
+        }
+    }
+
+    async function restartServer() {
+        if (!confirm('Are you sure you want to restart the server? This will temporarily interrupt the service.')) {
+            return;
         }
 
-        // Show a result message
-        function showResult(message, type) {
-            const resultElement = document.getElementById('result-message');
-            resultElement.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
-            resultModal.show();
+        try {
+            const response = await fetch('/api/restart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                showResult(`Error restarting server: ${data.error}`, 'error');
+            } else {
+                showResult(data.message || 'Server restart initiated successfully.', 'success');
+            }
+        } catch (error) {
+            showResult(`Error sending restart request: ${error.message}`, 'error');
         }
-    </script>
-</body>
-</html> 
+    }
+
+    function showResult(message, type) {
+        const resultElement = document.getElementById('result-message');
+        const alertClass = type === 'success' ? 'alert-success' : type === 'error' ? 'alert-error' : 'alert-info';
+        resultElement.innerHTML = `<div class="alert ${alertClass}">${Utils.escapeHtml(message)}</div>`;
+        Modal.show('resultModal');
+    }
+</script>
+{% endblock %}

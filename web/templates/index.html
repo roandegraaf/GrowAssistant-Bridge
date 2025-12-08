@@ -1,1085 +1,251 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Growassistant Bridge</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
-    <style>
-        body {
-            padding-top: 2rem;
-            background-color: #f8f9fa;
-        }
-        .header {
-            margin-bottom: 2rem;
-            border-bottom: 1px solid #e5e5e5;
-            padding-bottom: 1rem;
-        }
-        .card {
-            margin-bottom: 1rem;
-            border-radius: 0.5rem;
-            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
-        }
-        .card-header {
-            background-color: #28a745;
-            color: white;
-            font-weight: bold;
-            border-top-left-radius: 0.5rem !important;
-            border-top-right-radius: 0.5rem !important;
-        }
-        .status-badge {
-            float: right;
-        }
-        .device-action {
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
-        }
-        .loading {
-            text-align: center;
-            padding: 2rem;
-        }
-        #status-banner {
-            border-radius: 0.5rem;
-            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
-            transition: all 0.3s ease;
-        }
-        #status-banner.alert-info {
-            background-color: #cff4fc;
-            border-color: #b6effb;
-        }
-        #status-banner.alert-warning {
-            background-color: #fff3cd;
-            border-color: #ffecb5;
-        }
-        #status-banner.alert-danger {
-            background-color: #f8d7da;
-            border-color: #f5c2c7;
-        }
-        #status-banner.alert-success {
-            background-color: #d1e7dd;
-            border-color: #badbcc;
-        }
-    </style>
-</head>
-<body>
-    <div id="registration-alert" class="alert alert-warning text-center mb-0 rounded-0 d-none" role="alert">
-        <strong>Registration Required!</strong> This device needs to be connected to your GrowAssistant account.
-        <button type="button" class="btn btn-sm btn-primary ms-3" onclick="showConnectionStatusModal()">
-            View Registration Code
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block head %}
+<style>
+    /* Page-specific animations */
+    @keyframes slideUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-slide-up {
+        animation: slideUp 0.4s ease-out forwards;
+    }
+    .delay-1 { animation-delay: 50ms; }
+    .delay-2 { animation-delay: 100ms; }
+    .delay-3 { animation-delay: 150ms; }
+    .delay-4 { animation-delay: 200ms; }
+    .delay-5 { animation-delay: 250ms; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Status Banner (shows when not ready) -->
+<div id="status-banner" class="hidden mb-6 animate-slide-up">
+    <div class="alert alert-info flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                <circle cx="12" cy="20" r="1"></circle>
+            </svg>
+            <span id="status-banner-message">Loading status...</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-secondary" id="status-banner-action">Details</button>
+    </div>
+</div>
+
+<!-- Stats Grid -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <!-- Queue Size -->
+    <div class="stat-widget animate-slide-up delay-1">
+        <div class="stat-icon info">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+            </svg>
+        </div>
+        <p class="stat-label">Queue Size</p>
+        <p class="stat-value" id="queue-size">--</p>
+    </div>
+
+    <!-- API Status -->
+    <div class="stat-widget animate-slide-up delay-2">
+        <div class="stat-icon success" id="api-status-icon">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+        </div>
+        <p class="stat-label">API Connection</p>
+        <p class="stat-value text-lg" id="api-status">Checking...</p>
+    </div>
+
+    <!-- Connection State -->
+    <div class="stat-widget animate-slide-up delay-3 cursor-pointer hover:border-brand/30" onclick="showConnectionStatusModal()">
+        <div class="stat-icon warning" id="connection-state-icon">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                <line x1="12" y1="20" x2="12.01" y2="20"></line>
+            </svg>
+        </div>
+        <p class="stat-label">Connection State</p>
+        <p class="stat-value text-lg" id="connection-state">Initializing</p>
+    </div>
+
+    <!-- Integrations Count -->
+    <div class="stat-widget animate-slide-up delay-4">
+        <div class="stat-icon success">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22v-5"></path>
+                <path d="M9 8V2"></path>
+                <path d="M15 8V2"></path>
+                <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path>
+            </svg>
+        </div>
+        <p class="stat-label">Active Integrations</p>
+        <p class="stat-value" id="integrations-count">--</p>
+    </div>
+</div>
+
+<!-- Device Data Section -->
+<section id="devices" class="mb-6 animate-slide-up delay-5">
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Device Data</h2>
+            <span class="badge badge-success">
+                <span class="badge-dot pulse"></span>
+                Live
+            </span>
+        </div>
+        <div class="card-body" id="device-data-container">
+            <div class="flex items-center justify-center py-12">
+                <div class="spinner mr-3"></div>
+                <span class="text-zinc-400">Loading device data...</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Two Column Layout: Integrations + Control -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <!-- Integrations -->
+    <section id="integrations" class="animate-slide-up">
+        <div class="card h-full">
+            <div class="card-header">
+                <h2 class="card-title">Integrations</h2>
+            </div>
+            <div class="card-body" id="integrations-container">
+                <div class="flex items-center justify-center py-8">
+                    <div class="spinner mr-3"></div>
+                    <span class="text-zinc-400">Loading integrations...</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Manual Control -->
+    <section id="control" class="animate-slide-up">
+        <div class="card h-full">
+            <div class="card-header">
+                <h2 class="card-title">Manual Control</h2>
+            </div>
+            <div class="card-body">
+                <form id="control-form" class="space-y-4">
+                    <div>
+                        <label for="control-target" class="form-label">Target Device</label>
+                        <select class="form-select" id="control-target" required>
+                            <option value="" selected disabled>Select a device</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="control-action" class="form-label">Action</label>
+                        <select class="form-select" id="control-action" required>
+                            <option value="" selected disabled>Select an action</option>
+                        </select>
+                    </div>
+                    <div id="payload-container" class="hidden">
+                        <label for="control-payload" class="form-label">Payload (JSON)</label>
+                        <textarea class="form-textarea font-mono text-sm" id="control-payload" rows="3" placeholder="{}">{}</textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-full">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        Send Command
+                    </button>
+                </form>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Device Types Section -->
+<section class="mb-6 animate-slide-up">
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Device Types</h2>
+        </div>
+        <div class="card-body" id="devices-container">
+            <div class="flex items-center justify-center py-8">
+                <div class="spinner mr-3"></div>
+                <span class="text-zinc-400">Loading device types...</span>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block modals %}
+<!-- Command Result Modal -->
+<div id="commandModal-backdrop" class="modal-backdrop"></div>
+<div id="commandModal" class="modal">
+    <div class="modal-header">
+        <h3 class="modal-title">Command Result</h3>
+        <button onclick="Modal.hide('commandModal')" class="btn btn-ghost btn-icon">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
         </button>
     </div>
-
-    <div class="container">
-        <div class="header">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h1>Growassistant Bridge</h1>
-                    <p class="lead">Monitor and control your grow environment</p>
-                </div>
-                <div>
-                    <a href="/config" class="btn btn-outline-success">
-                        <i class="bi bi-gear"></i> Configuration
-                    </a>
-                </div>
-            </div>
-        </div>
-
-        <div id="status-banner" class="alert mb-4 d-none">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <span id="status-banner-message">Loading status...</span>
-                </div>
-                <div>
-                    <button type="button" class="btn btn-sm" id="status-banner-action"></button>
-                </div>
-            </div>
-        </div>
-
-        <div class="row">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header">System Status</div>
-                    <div class="card-body">
-                        <p><strong>Queue Size:</strong> <span id="queue-size">Loading...</span></p>
-                        <p><strong>API Connection:</strong> <span id="api-status">Loading...</span></p>
-                        <p><strong>Connection State:</strong> <span id="connection-state">Loading...</span> 
-                            <button type="button" class="btn btn-sm btn-outline-info ms-2" id="show-connection-details">
-                                Details
-                            </button>
-                        </p>
-                        <p><strong>Active Integrations:</strong> <span id="integrations-count">Loading...</span></p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header">Integrations</div>
-                    <div class="card-body" id="integrations-container">
-                        <div class="loading">
-                            <div class="spinner-border text-success" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p>Loading integrations...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">Device Data</div>
-                    <div class="card-body" id="device-data-container">
-                        <div class="loading">
-                            <div class="spinner-border text-success" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p>Loading device data...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">Device Types</div>
-                    <div class="card-body" id="devices-container">
-                        <div class="loading">
-                            <div class="spinner-border text-success" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p>Loading device types...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">Manual Control</div>
-                    <div class="card-body">
-                        <form id="control-form">
-                            <div class="mb-3">
-                                <label for="control-target" class="form-label">Target Device</label>
-                                <select class="form-select" id="control-target" required>
-                                    <option value="" selected disabled>Select a device</option>
-                                </select>
-                            </div>
-                            <div class="mb-3">
-                                <label for="control-action" class="form-label">Action</label>
-                                <select class="form-select" id="control-action" required>
-                                    <option value="" selected disabled>Select an action</option>
-                                </select>
-                            </div>
-                            <div class="mb-3" id="payload-container" style="display:none;">
-                                <label for="control-payload" class="form-label">Payload (JSON)</label>
-                                <textarea class="form-control" id="control-payload" rows="3" placeholder="{}">{}</textarea>
-                            </div>
-                            <button type="submit" class="btn btn-success">Send Command</button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <footer class="mt-5 text-muted text-center">
-            <p>&copy; 2025 Growassistant Bridge</p>
-        </footer>
+    <div class="modal-body" id="command-result">
+        <!-- Command result will be inserted here -->
     </div>
+    <div class="modal-footer">
+        <button onclick="Modal.hide('commandModal')" class="btn btn-secondary">Close</button>
+    </div>
+</div>
 
-    <div class="modal fade" id="commandModal" tabindex="-1" aria-labelledby="commandModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="commandModalLabel">Command Result</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body" id="command-result">
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                </div>
-            </div>
+<!-- Connection Status Modal -->
+<div id="connectionStatusModal-backdrop" class="modal-backdrop"></div>
+<div id="connectionStatusModal" class="modal" style="max-width: 480px;">
+    <div class="modal-header">
+        <h3 class="modal-title">Connection Status</h3>
+        <button onclick="closeConnectionModal()" class="btn btn-ghost btn-icon">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+    </div>
+    <div class="modal-body" id="connection-status-content">
+        <div class="flex flex-col items-center py-8">
+            <div class="spinner mb-4" style="width: 32px; height: 32px;"></div>
+            <p class="text-zinc-400">Checking connection status...</p>
         </div>
     </div>
-
-    <div class="modal fade" id="connectionStatusModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="connectionStatusModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="connectionStatusModalLabel">Connection Status</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body" id="connection-status-content">
-                    <div class="text-center mb-4">
-                        <div class="spinner-border text-success" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mt-2">Checking connection status...</p>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="refresh-connection-status">Refresh Status</button>
-                </div>
-            </div>
-        </div>
+    <div class="modal-footer">
+        <button onclick="closeConnectionModal()" class="btn btn-secondary">Close</button>
+        <button onclick="refreshConnectionStatus()" class="btn btn-primary" id="refresh-connection-status">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+                <path d="M16 16h5v5"></path>
+            </svg>
+            Refresh
+        </button>
     </div>
+</div>
+{% endblock %}
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        let deviceTypes = {};
-        let commandModal;
-        let connectionStatusModal;
-        let connectionStatus = null;
-        let modalIsOpen = false;
-        let lastModalUpdateTime = null;
-        let modalRefreshInterval = null;
-        let isRefreshing = false;
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script>
+    // Server-provided variables
+    const showOnboarding = {{ 'true' if show_onboarding else 'false' }};
+    const rawAuthCode = "{{ auth_code|default('') }}";
+    const serverIsAuthenticated = {{ 'true' if is_authenticated else 'false' }};
+    const serverAuthCode = serverIsAuthenticated ? '' : rawAuthCode;
 
-        document.addEventListener('DOMContentLoaded', function() {
-            commandModal = new bootstrap.Modal(document.getElementById('commandModal'));
-            connectionStatusModal = new bootstrap.Modal(document.getElementById('connectionStatusModal'));
-            
-            const setupBanner = document.createElement('div');
-            setupBanner.id = 'setup-banner';
-            setupBanner.className = 'alert alert-info text-center mb-3';
-            setupBanner.innerHTML = `
-                <div class="d-flex align-items-center justify-content-center">
-                    <div class="spinner-border spinner-border-sm me-2" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <span>GrowAssistant Bridge is initializing...</span>
-                </div>
-            `;
-            document.querySelector('.container').prepend(setupBanner);
-            
-            if (serverAuthCode && serverAuthCode.trim() !== '') {
-                connectionStatus = {
-                    status: 'registration',
-                    auth_code: serverAuthCode,
-                    authenticated: false,
-                    connected: false,
-                    ready: false
-                };
-                
-                updateConnectionState();
-                updateStatusBanner();
-                const alertBanner = document.getElementById('registration-alert');
-                alertBanner.classList.add('d-none');
-            }
-            
-            loadConnectionStatus().then(status => {
-                if (status && status.status !== 'initializing' && status.status !== 'busy') {
-                    const setupBanner = document.getElementById('setup-banner');
-                    if (setupBanner) {
-                        setupBanner.remove();
-                    }
-                }
-                
-                console.log(status);
-                if (status && status.status !== 'ready') {
-                    console.log('showConnectionStatusModal');
-                    if ((status.status === 'registration' && status.auth_code) || 
-                        (serverAuthCode && serverAuthCode.trim() !== '')) {
-                        showConnectionStatusModal();
-                    }
-                }
-                
-                loadQueueInfo();
-                loadIntegrations();
-                loadDeviceTypes();
-                loadDeviceData();
-            })
-            .catch(error => {
-                console.error('Error loading initial connection status:', error);
-                loadQueueInfo();
-                loadIntegrations();
-                loadDeviceTypes();
-                loadDeviceData();
-            });
-            
-            window.deviceDataRequestActive = false;
-            
-            setInterval(function() {
-                loadConnectionStatus().then(status => {
-                    if (status && status.status !== 'initializing' && status.status !== 'busy') {
-                        const setupBanner = document.getElementById('setup-banner');
-                        if (setupBanner) {
-                            setupBanner.remove();
-                        }
-                    }
-                    
-                    if (modalIsOpen) {
-                        updateConnectionStatusModal();
-                    }
-                });
-            }, 10000);
-            
-            setInterval(function() {
-                if (!window.deviceDataRequestActive) {
-                    loadDeviceData();
-                }
-            }, 5000);
-            
-            document.getElementById('control-form').addEventListener('submit', sendCommand);
-            document.getElementById('control-target').addEventListener('change', updateActionOptions);
-            document.getElementById('show-connection-details').addEventListener('click', showConnectionStatusModal);
-            document.getElementById('refresh-connection-status').addEventListener('click', () => {
-                loadConnectionStatus().then(() => {
-                    updateConnectionStatusModal();
-                });
-            });
-        });
-
-        async function loadConnectionStatus() {
-            try {
-                if (modalIsOpen) {
-                    isRefreshing = true;
-                    updateRefreshIndicator();
-                }
-                
-                const response = await fetch('/api/connection-status');
-                if (!response.ok) {
-                    throw new Error(`HTTP error ${response.status}`);
-                }
-                
-                connectionStatus = await response.json();
-                updateConnectionState();
-                const alertBanner = document.getElementById('registration-alert');
-                alertBanner.classList.add('d-none');
-                
-                if (modalIsOpen) {
-                    isRefreshing = false;
-                    updateRefreshIndicator();
-                }
-                
-                return connectionStatus;
-            } catch (error) {
-                console.error('Error fetching connection status:', error);
-                connectionStatus = { status: 'error', error: error.message };
-                updateConnectionState();
-                const alertBanner = document.getElementById('registration-alert');
-                alertBanner.classList.add('d-none');
-                
-                if (modalIsOpen) {
-                    isRefreshing = false;
-                    updateRefreshIndicator();
-                }
-                
-                return connectionStatus;
-            }
-        }
-
-        function updateConnectionState() {
-            const stateElement = document.getElementById('connection-state');
-            if (!connectionStatus) {
-                stateElement.textContent = 'Unknown';
-                return;
-            }
-            
-            let stateText = '';
-            let stateClass = '';
-            
-            switch (connectionStatus.status) {
-                case 'ready':
-                    stateText = 'Ready';
-                    stateClass = 'text-success';
-                    break;
-                case 'connected':
-                    stateText = 'Connected (awaiting space)';
-                    stateClass = 'text-warning';
-                    break;
-                case 'registration':
-                    stateText = 'Registration Pending';
-                    stateClass = 'text-danger';
-                    break;
-                case 'not_registered':
-                    stateText = 'Not Registered';
-                    stateClass = 'text-danger';
-                    break;
-                case 'not_connected':
-                    stateText = 'Not Connected';
-                    stateClass = 'text-danger';
-                    break;
-                case 'initializing':
-                    stateText = 'Initializing';
-                    stateClass = 'text-info';
-                    break;
-                case 'busy':
-                    stateText = 'Busy';
-                    stateClass = 'text-info';
-                    break;
-                case 'error':
-                    stateText = 'Error';
-                    stateClass = 'text-danger';
-                    break;
-                default:
-                    stateText = connectionStatus.status;
-                    stateClass = 'text-secondary';
-            }
-            
-            stateElement.textContent = stateText;
-            stateElement.className = stateClass;
-            updateStatusBanner();
-        }
-        
-        function updateStatusBanner() {
-            const banner = document.getElementById('status-banner');
-            const message = document.getElementById('status-banner-message');
-            const actionButton = document.getElementById('status-banner-action');
-            
-            if (!connectionStatus) {
-                banner.classList.add('d-none');
-                return;
-            }
-            
-            banner.className = 'alert mb-4';
-            actionButton.className = 'btn btn-sm';
-            
-            switch (connectionStatus.status) {
-                case 'ready':
-                    banner.classList.add('d-none');
-                    break;
-                    
-                case 'connected':
-                    banner.classList.add('alert-warning');
-                    message.innerHTML = '<strong>Almost There!</strong> Your device is connected, but waiting for space creation in the GrowAssistant app.';
-                    actionButton.textContent = 'Details';
-                    actionButton.classList.add('btn-outline-warning');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                case 'registration':
-                    banner.classList.add('alert-info');
-                    message.innerHTML = '<strong>Registration Required!</strong> This device needs to be connected to your GrowAssistant account.';
-                    actionButton.textContent = 'View Code';
-                    actionButton.classList.add('btn-outline-primary');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                case 'not_registered':
-                case 'not_connected':
-                    // Check both serverAuthCode and connectionStatus.auth_code
-                    const authCodeAvailable = serverAuthCode || (connectionStatus && connectionStatus.auth_code);
-                    if (authCodeAvailable) {
-                        banner.classList.add('alert-info');
-                        message.innerHTML = '<strong>Registration Required!</strong> This device needs to be connected to your GrowAssistant account.';
-                        actionButton.textContent = 'View Code';
-                        actionButton.classList.add('btn-outline-primary');
-                        actionButton.onclick = showConnectionStatusModal;
-                    } else {
-                        banner.classList.add('alert-danger');
-                        message.innerHTML = '<strong>Not Connected!</strong> Your device is not connected to the GrowAssistant service.';
-                        actionButton.textContent = 'Details';
-                        actionButton.classList.add('btn-outline-danger');
-                        actionButton.onclick = showConnectionStatusModal;
-                    }
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                case 'initializing':
-                    banner.classList.add('alert-info');
-                    message.innerHTML = '<strong>Starting Up!</strong> GrowAssistant Bridge is initializing...';
-                    actionButton.textContent = 'Details';
-                    actionButton.classList.add('btn-outline-info');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                case 'busy':
-                    banner.classList.add('alert-info');
-                    message.innerHTML = '<strong>System Busy!</strong> GrowAssistant Bridge is busy processing authentication.';
-                    actionButton.textContent = 'Details';
-                    actionButton.classList.add('btn-outline-info');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                case 'error':
-                    banner.classList.add('alert-danger');
-                    message.innerHTML = '<strong>Error!</strong> There was a problem connecting to the GrowAssistant service.';
-                    actionButton.textContent = 'Details';
-                    actionButton.classList.add('btn-outline-danger');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-                    break;
-                    
-                default:
-                    banner.classList.add('alert-secondary');
-                    message.innerHTML = `<strong>Status:</strong> ${connectionStatus.status}`;
-                    actionButton.textContent = 'Details';
-                    actionButton.classList.add('btn-outline-secondary');
-                    actionButton.onclick = showConnectionStatusModal;
-                    banner.classList.remove('d-none');
-            }
-        }
-
-        function showConnectionStatusModal() {
-            updateConnectionStatusModal();
-            connectionStatusModal.show();
-            modalIsOpen = true;
-            clearInterval(modalRefreshInterval);
-            modalRefreshInterval = setInterval(function() {
-                loadConnectionStatus().then(() => {
-                    if (modalIsOpen) {
-                        updateConnectionStatusModal();
-                    } else {
-                        clearInterval(modalRefreshInterval);
-                        modalRefreshInterval = null;
-                    }
-                });
-            }, 3000);
-        }
-
-        function updateRefreshIndicator() {
-            const indicator = document.getElementById('refresh-indicator');
-            if (!indicator) return;
-            
-            if (isRefreshing) {
-                indicator.innerHTML = `
-                    <div class="spinner-border spinner-border-sm text-success me-2" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    Refreshing...
-                `;
-            } else {
-                indicator.innerHTML = `Last updated: ${lastModalUpdateTime.toLocaleTimeString()}
-                <span class="ms-2">(Auto-refreshes every 3 seconds)</span>`;
-            }
-        }
-
-        function updateConnectionStatusModal() {
-            const modalContent = document.getElementById('connection-status-content');
-            lastModalUpdateTime = new Date();
-            
-            if (!connectionStatus) {
-                modalContent.innerHTML = `
-                    <div class="text-center mb-4">
-                        <div class="spinner-border text-success" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mt-2">Checking connection status...</p>
-                    </div>
-                `;
-                return;
-            }
-            
-            let content = '';
-            
-            switch (connectionStatus.status) {
-                case 'initializing':
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-info">
-                                <h4>Application Starting</h4>
-                                <p>The GrowAssistant Bridge is initializing...</p>
-                            </div>
-                            <div class="progress mb-3">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" 
-                                     role="progressbar" aria-valuenow="33" aria-valuemin="0" aria-valuemax="100" 
-                                     style="width: 33%"></div>
-                            </div>
-                            <p>${connectionStatus.message || 'Initializing authentication system...'}</p>
-                            <p>This process will continue automatically. You can close this window and check back later.</p>
-                        </div>
-                    `;
-                    break;
-                    
-                case 'busy':
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-info">
-                                <h4>System Busy</h4>
-                                <p>The GrowAssistant Bridge is busy processing authentication.</p>
-                            </div>
-                            <div class="progress mb-3">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" 
-                                     role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100" 
-                                     style="width: 50%"></div>
-                            </div>
-                            <p>${connectionStatus.message || 'Please wait while we set up the connection...'}</p>
-                        </div>
-                    `;
-                    break;
-                    
-                case 'registration':
-                    const authCode = connectionStatus.auth_code || serverAuthCode;
-                    if (authCode) {
-                        content = `
-                            <div class="text-center">
-                                <div class="alert alert-info">
-                                    <h4>Device Registration Required</h4>
-                                    <p>Please enter this code in the GrowAssistant app to connect this device to your environment:</p>
-                                </div>
-                                <div class="auth-code-display p-4 mb-3 bg-light rounded">
-                                    <h2 class="display-4 user-select-all">${authCode}</h2>
-                                </div>
-                                <p>Status: Waiting for connection...</p>
-                            </div>
-                        `;
-                    } else {
-                        content = `
-                            <div class="text-center">
-                                <div class="alert alert-warning">
-                                    <h4>Registration Required</h4>
-                                    <p>Device needs to be registered, but no authentication code is available.</p>
-                                </div>
-                                <p>Please restart the application or refresh the page.</p>
-                            </div>
-                        `;
-                    }
-                    break;
-                    
-                case 'connected':
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-warning">
-                                <h4>Device Connected!</h4>
-                                <p>Now waiting for a space to be created in the GrowAssistant app.</p>
-                            </div>
-                            <div class="progress mb-3">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" 
-                                     role="progressbar" aria-valuenow="66" aria-valuemin="0" aria-valuemax="100" 
-                                     style="width: 66%"></div>
-                            </div>
-                            <p>Your device is connected, but we're waiting for space creation in the app before we can start sending data.</p>
-                            <p>Continue the setup process in the GrowAssistant app. You can close this window and check back later.</p>
-                        </div>
-                    `;
-                    break;
-                    
-                case 'ready':
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-success">
-                                <h4>Device Ready!</h4>
-                                <p>Your device is connected and ready to send data.</p>
-                            </div>
-                            <div class="progress mb-3">
-                                <div class="progress-bar bg-success" 
-                                     role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" 
-                                     style="width: 100%"></div>
-                            </div>
-                            <p>Client ID: ${connectionStatus.client_id || 'Unknown'}</p>
-                            <p>All systems operational!</p>
-                        </div>
-                    `;
-                    break;
-                    
-                case 'not_connected':
-                case 'not_registered':
-                    // Check both serverAuthCode and connectionStatus.auth_code
-                    const modalAuthCode = serverAuthCode || (connectionStatus && connectionStatus.auth_code);
-                    if (modalAuthCode) {
-                        content = `
-                            <div class="text-center">
-                                <div class="alert alert-info">
-                                    <h4>Device Registration Required</h4>
-                                    <p>Please enter this code in the GrowAssistant app to connect this device to your environment:</p>
-                                </div>
-                                <div class="auth-code-display p-4 mb-3 bg-light rounded">
-                                    <h2 class="display-4 user-select-all">${modalAuthCode}</h2>
-                                </div>
-                                <p>Status: Device not connected to API. Enter this code to connect.</p>
-                            </div>
-                        `;
-                    } else {
-                        content = `
-                            <div class="text-center">
-                                <div class="alert alert-danger">
-                                    <h4>Not Connected</h4>
-                                    <p>Your device is not connected to the GrowAssistant service.</p>
-                                </div>
-                                <p>Please check your internet connection and server configuration.</p>
-                            </div>
-                        `;
-                    }
-                    break;
-                    
-                case 'error':
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-danger">
-                                <h4>Connection Error</h4>
-                                <p>There was an error checking the connection status.</p>
-                            </div>
-                            <p>Error: ${connectionStatus.error || 'Unknown error'}</p>
-                        </div>
-                    `;
-                    break;
-                    
-                default:
-                    content = `
-                        <div class="text-center">
-                            <div class="alert alert-secondary">
-                                <h4>Unknown Status</h4>
-                                <p>Current status: ${connectionStatus.status}</p>
-                            </div>
-                            <p>Please refresh the status to check again.</p>
-                        </div>
-                    `;
-            }
-            
-            content += `
-                <div class="text-center mt-3">
-                    <small class="text-muted" id="refresh-indicator">
-                        Last updated: ${lastModalUpdateTime.toLocaleTimeString()}
-                        <span class="ms-2">(Auto-refreshes every 3 seconds)</span>
-                    </small>
-                </div>
-            `;
-            
-            modalContent.innerHTML = content;
-            updateRefreshIndicator();
-        }
-
-        function loadQueueInfo() {
-            fetch('/api/queue')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('queue-size').textContent = data.size;
-                    checkApiStatus();
-                })
-                .catch(error => {
-                    console.error('Error fetching queue info:', error);
-                    document.getElementById('queue-size').textContent = 'Error';
-                    document.getElementById('api-status').innerHTML = '<span class="badge bg-danger">Offline</span>';
-                });
-        }
-
-        function checkApiStatus() {
-            if (connectionStatus) {
-                if (connectionStatus.ready) {
-                    document.getElementById('api-status').innerHTML = '<span class="badge bg-success">Online</span>';
-                } else if (connectionStatus.connected) {
-                    document.getElementById('api-status').innerHTML = '<span class="badge bg-warning">Connecting</span>';
-                } else {
-                    document.getElementById('api-status').innerHTML = '<span class="badge bg-danger">Offline</span>';
-                }
-            } else {
-                document.getElementById('api-status').innerHTML = '<span class="badge bg-success">Online</span>';
-            }
-        }
-
-        function loadIntegrations() {
-            fetch('/api/integrations')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const container = document.getElementById('integrations-container');
-                    container.innerHTML = '';
-                    
-                    if (!data || data.length === 0) {
-                        console.log("No integrations found, will retry shortly");
-                        container.innerHTML = '<p>No integrations loaded. Checking again shortly...</p>';
-                        document.getElementById('integrations-count').textContent = '0';
-                        setTimeout(loadIntegrations, 3000);
-                        return;
-                    }
-                    
-                    document.getElementById('integrations-count').textContent = data.length;
-                    
-                    const list = document.createElement('ul');
-                    list.className = 'list-group';
-                    
-                    data.forEach(integration => {
-                        const item = document.createElement('li');
-                        item.className = 'list-group-item d-flex justify-content-between align-items-center';
-                        item.textContent = integration.name;
-                        
-                        const badge = document.createElement('span');
-                        badge.className = 'badge bg-success rounded-pill';
-                        badge.textContent = integration.type;
-                        
-                        item.appendChild(badge);
-                        list.appendChild(item);
-                    });
-                    
-                    container.appendChild(list);
-                })
-                .catch(error => {
-                    console.error('Error fetching integrations:', error);
-                    document.getElementById('integrations-container').innerHTML = 
-                        '<p class="text-danger">Error loading integrations. Retrying...</p>';
-                    document.getElementById('integrations-count').textContent = 'Error';
-                    setTimeout(loadIntegrations, 5000);
-                });
-        }
-
-        function loadDeviceTypes() {
-            fetch('/api/device-types')
-                .then(response => response.json())
-                .then(data => {
-                    deviceTypes = data;
-                    const container = document.getElementById('devices-container');
-                    container.innerHTML = '';
-                    
-                    if (Object.keys(data).length === 0) {
-                        container.innerHTML = '<p>No device types registered.</p>';
-                        return;
-                    }
-                    
-                    const targetSelect = document.getElementById('control-target');
-                    targetSelect.innerHTML = '<option value="" selected disabled>Select a device</option>';
-                    
-                    for (const [deviceType, actions] of Object.entries(data)) {
-                        const card = document.createElement('div');
-                        card.className = 'card mb-3';
-                        
-                        const cardBody = document.createElement('div');
-                        cardBody.className = 'card-body';
-                        
-                        const title = document.createElement('h5');
-                        title.className = 'card-title';
-                        title.textContent = deviceType;
-                        
-                        const actionsList = document.createElement('div');
-                        actionsList.className = 'd-flex flex-wrap';
-                        
-                        if (Array.isArray(actions)) {
-                            actions.forEach(action => {
-                                const badge = document.createElement('span');
-                                badge.className = 'badge bg-secondary device-action';
-                                badge.textContent = action;
-                                actionsList.appendChild(badge);
-                            });
-                        } else {
-                            const badge = document.createElement('span');
-                            badge.className = 'badge bg-secondary device-action';
-                            badge.textContent = "No actions available";
-                            actionsList.appendChild(badge);
-                        }
-                        
-                        cardBody.appendChild(title);
-                        cardBody.appendChild(actionsList);
-                        card.appendChild(cardBody);
-                        container.appendChild(card);
-                        
-                        const option = document.createElement('option');
-                        option.value = deviceType;
-                        option.textContent = deviceType;
-                        targetSelect.appendChild(option);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching device types:', error);
-                    document.getElementById('devices-container').innerHTML = '<p class="text-danger">Error loading device types.</p>';
-                });
-        }
-
-        function updateActionOptions() {
-            const targetSelect = document.getElementById('control-target');
-            const actionSelect = document.getElementById('control-action');
-            const payloadContainer = document.getElementById('payload-container');
-            
-            actionSelect.innerHTML = '<option value="" selected disabled>Select an action</option>';
-            payloadContainer.style.display = 'none';
-            
-            if (targetSelect.value) {
-                const actions = deviceTypes[targetSelect.value] || [];
-                
-                if (Array.isArray(actions)) {
-                    actions.forEach(action => {
-                        const option = document.createElement('option');
-                        option.value = action;
-                        option.textContent = action;
-                        actionSelect.appendChild(option);
-                    });
-                    
-                    if (actions.length > 0) {
-                        payloadContainer.style.display = 'block';
-                    }
-                }
-            }
-        }
-
-        function sendCommand(event) {
-            event.preventDefault();
-            
-            const target = document.getElementById('control-target').value;
-            const action = document.getElementById('control-action').value;
-            let payload = {};
-            
-            try {
-                const payloadText = document.getElementById('control-payload').value;
-                if (payloadText.trim()) {
-                    payload = JSON.parse(payloadText);
-                }
-            } catch (error) {
-                document.getElementById('command-result').innerHTML = '<div class="alert alert-danger">Invalid JSON payload</div>';
-                commandModal.show();
-                return;
-            }
-            
-            const command = {
-                target: target,
-                action: action,
-                payload: payload
-            };
-            
-            fetch('/api/send-command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(command)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.getElementById('command-result').innerHTML = 
-                        '<div class="alert alert-success">Command sent successfully: ' + action + ' on ' + target + '</div>';
-                } else {
-                    document.getElementById('command-result').innerHTML = 
-                        '<div class="alert alert-danger">Error: ' + data.error + '</div>';
-                }
-                commandModal.show();
-            })
-            .catch(error => {
-                console.error('Error sending command:', error);
-                document.getElementById('command-result').innerHTML = 
-                    '<div class="alert alert-danger">Error sending command: ' + error.message + '</div>';
-                commandModal.show();
-            });
-        }
-
-        function loadDeviceData() {
-            window.deviceDataRequestActive = true;
-            
-            fetch('/api/devices', {
-                method: 'GET',
-                headers: {
-                    'Cache-Control': 'no-cache'
-                }
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const container = document.getElementById('device-data-container');
-                    container.innerHTML = '';
-
-                    if (data.error) {
-                        container.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
-                        return;
-                    }
-
-                    if (Object.keys(data).length === 0) {
-                        container.innerHTML = '<p>No device data available yet.</p>';
-                        return;
-                    }
-
-                    const list = document.createElement('dl');
-                    list.className = 'row';
-
-                    for (const deviceName in data) {
-                        const deviceInfo = data[deviceName];
-                        
-                        const dt = document.createElement('dt');
-                        dt.className = 'col-sm-3';
-                        dt.textContent = deviceName;
-                        
-                        const dd = document.createElement('dd');
-                        dd.className = 'col-sm-9';
-                        
-                        if (deviceInfo.error) {
-                            dd.innerHTML = `<span class="text-danger">Error: ${deviceInfo.error}</span>`;
-                        } else {
-                            let valueDisplay = '';
-                            
-                            if (deviceInfo.value !== undefined) {
-                                valueDisplay = `<strong>Value:</strong> ${deviceInfo.value}`;
-                            } else {
-                                valueDisplay = `<pre><code>${escapeHtml(JSON.stringify(deviceInfo, null, 2))}</code></pre>`;
-                            }
-                            
-                            if (deviceInfo.type) {
-                                valueDisplay = `<strong>Type:</strong> ${deviceInfo.type}<br>${valueDisplay}`;
-                            }
-                            
-                            dd.innerHTML = valueDisplay;
-                        }
-                        
-                        if (deviceInfo.timestamp) {
-                            const timestampSpan = document.createElement('span');
-                            timestampSpan.className = 'text-muted small ms-2';
-                            timestampSpan.textContent = `(Updated: ${formatTimestamp(deviceInfo.timestamp)})`;
-                            dd.appendChild(timestampSpan);
-                        }
-
-                        list.appendChild(dt);
-                        list.appendChild(dd);
-                    }
-
-                    container.appendChild(list);
-                })
-                .catch(error => {
-                    console.error('Error fetching device data:', error);
-                    const container = document.getElementById('device-data-container');
-                    container.innerHTML = '<p class="text-danger">Error loading device data.</p>';
-                })
-                .finally(() => {
-                    window.deviceDataRequestActive = false;
-                });
-        }
-
-        function escapeHtml(unsafe) {
-            if (!unsafe) return '';
-            if (typeof unsafe !== 'string') {
-                unsafe = JSON.stringify(unsafe);
-            }
-            return unsafe
-                 .replace(/&/g, "&amp;")
-                 .replace(/</g, "&lt;")
-                 .replace(/>/g, "&gt;")
-                 .replace(/"/g, "&quot;")
-                 .replace(/'/g, "&#039;");
-         }
-
-        function formatTimestamp(unixTimestamp) {
-            if (!unixTimestamp) return '';
-            if (unixTimestamp < 10000000000) {
-                unixTimestamp = unixTimestamp * 1000;
-            }
-            const date = new Date(unixTimestamp);
-            return date.toLocaleString();
-        }
-
-        const showOnboarding = "{{ 'true' if show_onboarding else 'false' }}" === "true";
-        const rawAuthCode = "{{ auth_code|default('') }}";
-        const serverIsAuthenticated = "{{ 'true' if is_authenticated else 'false' }}" === "true";
-        const serverAuthCode = serverIsAuthenticated ? '' : rawAuthCode;
-    </script>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const connectionStatusModalElement = document.getElementById('connectionStatusModal');
-            if (connectionStatusModalElement) {
-                connectionStatusModalElement.addEventListener('hidden.bs.modal', function () {
-                    modalIsOpen = false;
-                    if (modalRefreshInterval) {
-                        clearInterval(modalRefreshInterval);
-                        modalRefreshInterval = null;
-                    }
-                });
-            }
-        });
-    </script>
-</body>
-</html> 
+    // Initialize dashboard when DOM is ready
+    document.addEventListener('DOMContentLoaded', function() {
+        Dashboard.init();
+    });
+</script>
+{% endblock %}

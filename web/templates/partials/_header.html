@@ -1,0 +1,63 @@
+<!-- Header Bar -->
+<header class="sticky top-0 z-40 h-16 bg-surface-base/80 backdrop-blur-md border-b border-border-subtle">
+    <div class="h-full px-4 lg:px-6 flex items-center justify-between">
+        <!-- Left: Mobile Menu + Page Title -->
+        <div class="flex items-center gap-3">
+            <!-- Mobile Menu Button (injected from sidebar template) -->
+            <div id="mobile-menu-container" class="lg:hidden"></div>
+
+            <!-- Page Title / Breadcrumbs -->
+            <div>
+                <h1 class="text-lg font-semibold text-zinc-100">
+                    {% block page_title %}Dashboard{% endblock %}
+                </h1>
+                {% block breadcrumbs %}{% endblock %}
+            </div>
+        </div>
+
+        <!-- Right: Status & Actions -->
+        <div class="flex items-center gap-3">
+            <!-- Registration Alert (shown when not connected) -->
+            <div id="header-registration-alert" class="hidden">
+                <button onclick="showConnectionStatusModal()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+                        <path d="M12 9v4"></path>
+                        <path d="M12 17h.01"></path>
+                    </svg>
+                    <span class="hidden sm:inline">Registration Required</span>
+                    <span class="sm:hidden">Register</span>
+                </button>
+            </div>
+
+            <!-- Status Badge -->
+            <div id="header-status-badge" class="hidden sm:flex">
+                <span class="badge badge-success">
+                    <span class="badge-dot pulse"></span>
+                    <span id="header-status-text">Connected</span>
+                </span>
+            </div>
+
+            <!-- Refresh Button -->
+            <button id="refresh-btn" onclick="refreshData()" class="btn btn-ghost btn-icon" title="Refresh data">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                    <path d="M3 3v5h5"></path>
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+                    <path d="M16 16h5v5"></path>
+                </svg>
+            </button>
+
+            <!-- Connection Details Button -->
+            <button onclick="showConnectionStatusModal()" class="btn btn-secondary btn-sm hidden sm:flex" title="View connection details">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                    <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <circle cx="12" cy="20" r="1"></circle>
+                </svg>
+                <span>Connection</span>
+            </button>
+        </div>
+    </div>
+</header>
