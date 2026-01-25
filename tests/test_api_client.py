@@ -305,11 +305,11 @@ class TestApiClientPollCommands:
 
     @pytest.mark.asyncio
     async def test_poll_commands_returns_commands(self, api_client):
-        """Test polling commands returns command list."""
+        """Test polling commands returns action list."""
         mock_response = api_client._mock_httpx_response(
             status_code=200,
             json_data={
-                "commands": [
+                "actions": [
                     {"id": "cmd-1", "action": "on", "target": "pump1"},
                     {"id": "cmd-2", "action": "off", "target": "pump2"},
                 ]
@@ -317,10 +317,10 @@ class TestApiClientPollCommands:
         )
         api_client._client.get.return_value = mock_response
 
-        commands = await api_client.poll_commands()
+        actions = await api_client.poll_commands()
 
-        assert len(commands) == 2
-        assert commands[0]["id"] == "cmd-1"
+        assert len(actions) == 2
+        assert actions[0]["id"] == "cmd-1"
 
     @pytest.mark.asyncio
     async def test_poll_commands_204_returns_empty(self, api_client):

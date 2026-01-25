@@ -92,7 +92,25 @@ class SampleIntegration(Integration):
                 "last_updated": time.time(),
             }
 
+        # Add a heater actuator device
+        self.devices["heater"] = {
+            "name": "heater",
+            "type": "heater",
+            "value": "off",
+            "last_updated": time.time(),
+        }
+
         logger.info(f"Sample Integration initialized with {len(self.devices)} devices")
+
+        # Target values set by user via API settings
+        self.target_temperature: float | None = None
+        self.target_humidity: float | None = None
+
+        # Heater state
+        self.heater_on: bool = False
+
+        # Hysteresis to prevent rapid on/off cycling
+        self.hysteresis = config.get("hysteresis", 0.5)
 
         # PATTERN: You can add custom instance variables here
         self.update_task = None  # Will hold the background task
@@ -215,6 +233,9 @@ class SampleIntegration(Integration):
             elif device["type"] == "light":
                 self.log_data(LogType.LIGHT, device["value"])
 
+            elif device["type"] == "heater":
+                self.log_data(LogType.HEATER_STATE, device["value"], device_id="heater")
+
             # For compatibility with existing code, still yield the legacy format
             yield {
                 "device": name,
@@ -226,23 +247,40 @@ class SampleIntegration(Integration):
     async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all devices.
 
-        IMPLEMENT THIS METHOD: Return the current state of all devices
+        Returns current sensor readings, target values, and actuator states.
 
         Returns:
             Dict[str, Any]: Dictionary mapping device names to their current values/states.
         """
-        # PATTERN: Return a dictionary with device name as key
-        return {
-            name: {
+        result = {}
+
+        # Add all device readings
+        for name, device in self.devices.items():
+            result[name] = {
                 "type": device["type"],
                 "value": device["value"],
                 "timestamp": device["last_updated"],
             }
-            for name, device in self.devices.items()
-        }
+
+        # Add target values as separate entries so dashboard can display them
+        if self.target_temperature is not None:
+            result["target_temperature"] = {
+                "type": "target",
+                "value": f"{self.target_temperature}°C",
+                "timestamp": time.time(),
+            }
+
+        if self.target_humidity is not None:
+            result["target_humidity"] = {
+                "type": "target",
+                "value": f"{self.target_humidity}%",
+                "timestamp": time.time(),
+            }
+
+        return result
 
     async def _update_device_values(self):
-        """Background task to update device values.
+        """Background task to update device values and run control logic.
 
         This simulates device activity. In a real integration, this would read from hardware.
         """
@@ -252,18 +290,59 @@ class SampleIntegration(Integration):
         # PATTERN: Infinite loop for continuous updates
         while True:
             try:
+                current_temp = None
+
                 for _name, device in self.devices.items():
-                    # Only update sensor devices (not actuators)
+                    # Only update sensor devices (not actuators like heater)
                     if device["type"] in ["temperature", "humidity", "light"]:
                         # Generate a random value (simulate sensor reading)
                         if device["type"] == "temperature":
-                            device["value"] = round(random.uniform(18.0, 26.0), 1)
+                            # Simulate temperature affected by heater
+                            base_temp = random.uniform(18.0, 22.0)
+                            if self.heater_on:
+                                # Heater adds some warmth
+                                base_temp += random.uniform(2.0, 4.0)
+                            device["value"] = round(base_temp, 1)
+                            current_temp = device["value"]
                         elif device["type"] == "humidity":
                             device["value"] = round(random.uniform(40.0, 80.0), 1)
                         elif device["type"] == "light":
                             device["value"] = round(random.uniform(0.0, 100.0), 1)
 
                         device["last_updated"] = time.time()
+
+                # CONTROL LOGIC: Turn heater on/off based on temperature
+                logger.debug(
+                    f"Control check: current_temp={current_temp}, target={self.target_temperature}, heater_on={self.heater_on}"
+                )
+
+                if self.target_temperature is not None and current_temp is not None:
+                    temp_diff = self.target_temperature - current_temp
+                    logger.debug(f"Temp diff: {temp_diff}, hysteresis: {self.hysteresis}")
+
+                    if temp_diff > self.hysteresis and not self.heater_on:
+                        # Too cold, turn heater ON
+                        self.heater_on = True
+                        self.devices["heater"]["value"] = "on"
+                        self.devices["heater"]["last_updated"] = time.time()
+                        logger.info(
+                            f"Heater ON: current={current_temp}°C, target={self.target_temperature}°C"
+                        )
+
+                        # Report heater state to API
+                        self.log_data(LogType.HEATER_STATE, "on", device_id="heater")
+
+                    elif temp_diff < -self.hysteresis and self.heater_on:
+                        # Warm enough, turn heater OFF
+                        self.heater_on = False
+                        self.devices["heater"]["value"] = "off"
+                        self.devices["heater"]["last_updated"] = time.time()
+                        logger.info(
+                            f"Heater OFF: current={current_temp}°C, target={self.target_temperature}°C"
+                        )
+
+                        # Report heater state to API
+                        self.log_data(LogType.HEATER_STATE, "off", device_id="heater")
 
                 # PATTERN: Sleep between updates
                 await asyncio.sleep(update_interval)
@@ -625,30 +704,38 @@ class SampleIntegration(Integration):
                         )
                         # Here you would implement actual scheduling logic
 
-            # Apply climate settings
+            # Apply climate settings - store as TARGET values (not sensor readings!)
             climate_settings = settings.get("climate", {})
+            logger.info(f"Climate settings received: {climate_settings}")
+
             if climate_settings:
                 target_temp = climate_settings.get("temperature")
                 target_humidity = climate_settings.get("humidity")
                 fan_speed = climate_settings.get("baseFanSpeed")
 
                 logger.info(
-                    f"Climate settings - Temp: {target_temp}, Humidity: {target_humidity}, Fan: {fan_speed}"
+                    f"Climate settings - Target Temp: {target_temp}, Target Humidity: {target_humidity}, Fan: {fan_speed}"
                 )
 
-                # Apply temperature setting
+                # Store target temperature (control logic will turn heater on/off)
                 if target_temp is not None:
-                    for name, device in self.devices.items():
-                        if device["type"] == "temperature":
-                            await self.send_data({"device": name, "value": target_temp})
+                    old_target = self.target_temperature
+                    self.target_temperature = float(target_temp)
+                    if old_target != self.target_temperature:
+                        logger.info(
+                            f"Target temperature updated: {old_target} -> {self.target_temperature}°C"
+                        )
 
-                # Apply humidity setting
+                # Store target humidity
                 if target_humidity is not None:
-                    for name, device in self.devices.items():
-                        if device["type"] == "humidity":
-                            await self.send_data({"device": name, "value": target_humidity})
+                    old_target = self.target_humidity
+                    self.target_humidity = float(target_humidity)
+                    if old_target != self.target_humidity:
+                        logger.info(
+                            f"Target humidity updated: {old_target} -> {self.target_humidity}%"
+                        )
 
-                # Apply fan speed
+                # Apply fan speed directly (fan is an actuator, not a sensor)
                 if fan_speed is not None:
                     for name, device in self.devices.items():
                         if device["type"] == "fan":
@@ -756,6 +843,7 @@ class SampleIntegration(Integration):
             registry: The DeviceRegistry instance to register with.
         """
         sensor_types = {"temperature", "humidity", "light", "ph", "ec", "water_level"}
+        actuator_types = {"heater", "fan", "pump", "light_switch"}
 
         for name, device in self.devices.items():
             device_type = device.get("type")
@@ -764,10 +852,18 @@ class SampleIntegration(Integration):
                 registry.register_sensor(
                     sensor_name=name,
                     integration_name=self.name,
-                    domain="sample",  # Use your integration's domain
+                    domain="sample",
+                    device_type=device_type,
+                )
+            elif device_type in actuator_types:
+                registry.register_actuator(
+                    actuator_name=name,
+                    integration_name=self.name,
+                    domain="sample",
                     device_type=device_type,
                 )
             else:
+                # Default to actuator for unknown types
                 registry.register_actuator(
                     actuator_name=name,
                     integration_name=self.name,
@@ -795,6 +891,18 @@ class SampleIntegration(Integration):
         if target_id not in self.devices:
             logger.error(f"Unknown device: {target_id}")
             return False
+
+        device = self.devices[target_id]
+
+        # Special handling for heater
+        if device["type"] == "heater":
+            on = action.lower() == "on"
+            self.heater_on = on
+            device["value"] = "on" if on else "off"
+            device["last_updated"] = time.time()
+            logger.info(f"Heater manually set to {'ON' if on else 'OFF'}")
+            self.log_data(LogType.HEATER_STATE, "on" if on else "off", device_id="heater")
+            return True
 
         # Handle common actions
         if action.lower() in ("on", "off"):

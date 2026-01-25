@@ -471,8 +471,10 @@ class TestHandleAuthentication:
             mock_exit.assert_called_once_with(1)
 
     @pytest.mark.asyncio
-    async def test_connection_timeout_exits(self, reset_application_singleton, mock_dependencies):
-        """Test that connection timeout exits the application."""
+    async def test_connection_timeout_continues(
+        self, reset_application_singleton, mock_dependencies
+    ):
+        """Test that connection timeout lets the app continue running."""
         mock_dependencies["auth_manager"].is_authenticated.return_value = False
         mock_dependencies["auth_manager"].register_client.return_value = True
         mock_dependencies["auth_manager"].wait_for_connection.return_value = False
@@ -485,7 +487,8 @@ class TestHandleAuthentication:
             app = Application()
             await app._handle_authentication()
 
-            mock_exit.assert_called_once_with(1)
+            # App should continue running, not exit
+            mock_exit.assert_not_called()
 
 
 class TestLoadIntegrations:

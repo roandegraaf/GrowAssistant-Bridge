@@ -85,6 +85,23 @@ integrations:
         type: light
     enabled: true
     update_interval: 10
+  climatecontrol:
+    enabled: true
+    hysteresis: 0.5
+    update_interval: 30
+    devices:
+      heater:
+        name: main_heater
+        type: heater
+      fan:
+        name: exhaust_fan
+        type: fan
+      humidifier:
+        name: main_humidifier
+        type: humidifier
+      dehumidifier:
+        name: main_dehumidifier
+        type: dehumidifier
   serial:
     baudrate: 9600
     bytesize: 8

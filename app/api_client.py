@@ -128,9 +128,10 @@ class ApiClient(metaclass=SingletonMeta):
         value: Union[str, float, int],
         log_date: Optional[datetime] = None,
         pump_num: Optional[int] = None,
+        device_id: Optional[str] = None,
     ):
         """Add a data log entry."""
-        data_log = create_data_log(log_type, value, log_date)
+        data_log = create_data_log(log_type, value, log_date, device_id)
         if pump_num is not None:
             data_log["pumpNum"] = pump_num
         self._data_logs.append(data_log)

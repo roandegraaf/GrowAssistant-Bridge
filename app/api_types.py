@@ -49,6 +49,7 @@ class ProblemType(str, Enum):
 class LogType(str, Enum):
     """Data log types mapping to API's ValueType enum."""
 
+    # Sensor types
     TEMPERATURE = "TEMPERATURE"
     HUMIDITY = "HUMIDITY"
     LIGHT = "LIGHT"
@@ -62,19 +63,34 @@ class LogType(str, Enum):
     SUPPLEMENT_LEVEL = "SUPPLEMENT_LEVEL"
     PLANT_WATER = "PLANT_WATER"
 
+    # Binary actuator states
+    HEATER_STATE = "HEATER_STATE"
+    FAN_STATE = "FAN_STATE"
+    HUMIDIFIER_STATE = "HUMIDIFIER_STATE"
+    DEHUMIDIFIER_STATE = "DEHUMIDIFIER_STATE"
+    LIGHT_STATE = "LIGHT_STATE"
+
+    # Variable actuator states
+    FAN_SPEED = "FAN_SPEED"
+    LIGHT_LEVEL = "LIGHT_LEVEL"
+
 
 def create_data_log(
     log_type: Union[LogType, str],
     value: Union[str, float, int],
     log_date: Optional[datetime] = None,
+    device_id: Optional[str] = None,
 ) -> dict:
     """Create a data log entry for the API."""
     log_type_str = log_type if isinstance(log_type, str) else log_type.value
-    return {
+    log = {
         "logDate": (log_date or datetime.utcnow()).isoformat(),
         "logType": log_type_str.upper(),
         "value": str(value),
     }
+    if device_id:
+        log["deviceId"] = device_id
+    return log
 
 
 def create_problem(
