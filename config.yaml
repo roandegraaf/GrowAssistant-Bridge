@@ -2,15 +2,15 @@ api:
   batch_size: 100
   connection_timeout: 300
   log_values: true
-  poll_interval: 5
-  retry_max_attempts: 5
-  retry_max_backoff: 60
-  retry_min_backoff: 1
-  transmission_interval: 10
+  poll_interval: 30
+  retry_max_attempts: 3
+  retry_max_backoff: 120
+  retry_min_backoff: 5
+  transmission_interval: 30
   url: http://localhost:8080
 general:
   api_logs_dir: logs/api
-  collection_interval: 10
+  collection_interval: 30
   data_dir: data
   external_integrations_dir: external_integrations
   log_file: logs/app.log
@@ -83,12 +83,6 @@ integrations:
       '2':
         name: sample_light
         type: light
-      '3':
-        name: sample_pump
-        type: pump
-      '4':
-        name: sample_light_switch
-        type: light_switch
     enabled: true
     update_interval: 10
   serial:

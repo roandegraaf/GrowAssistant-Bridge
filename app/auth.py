@@ -112,7 +112,10 @@ class AuthManager(metaclass=SingletonMeta):
                 headers=self._get_auth_headers(),
             )
             if response.status_code == 200:
-                logger.info("Credentials validated successfully")
+                logger.info("Credentials validated successfully (space ready)")
+                return True
+            if response.status_code == 204:
+                logger.info("Credentials validated successfully (no space yet)")
                 return True
             logger.warning(f"Credentials validation failed: {response.status_code}")
             return False

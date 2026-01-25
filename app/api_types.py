@@ -69,9 +69,10 @@ def create_data_log(
     log_date: Optional[datetime] = None,
 ) -> dict:
     """Create a data log entry for the API."""
+    log_type_str = log_type if isinstance(log_type, str) else log_type.value
     return {
         "logDate": (log_date or datetime.utcnow()).isoformat(),
-        "logType": log_type if isinstance(log_type, str) else log_type.value,
+        "logType": log_type_str.upper(),
         "value": str(value),
     }
 

@@ -10,7 +10,6 @@ sqlite3-api>=2.0.4
 # Web interface
 flask>=2.3.0
 flask-wtf>=1.2.0
-flask-limiter>=3.5.0
 
 # MQTT integration
 paho-mqtt>=2.1.0
@@ -26,4 +25,4 @@ pyserial>=3.5
 # Testing
 pytest>=7.0.0
 pytest-asyncio>=0.20.0
-pytest-mock>=3.8.0 
+pytest-mock>=3.8.0

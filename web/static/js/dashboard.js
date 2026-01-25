@@ -7,42 +7,18 @@ const Dashboard = {
     // State
     deviceTypes: {},
     connectionStatus: null,
-    modalIsOpen: false,
-    lastModalUpdateTime: null,
-    modalRefreshInterval: null,
-    countdownInterval: null,
     deviceDataRequestActive: false,
-    codeGeneratedTime: null,
-    CODE_TIMEOUT_MS: 5 * 60 * 1000, // 5 minutes in milliseconds
 
     /**
      * Initialize the dashboard
      */
     init() {
-        // Check for server-provided auth code
-        if (typeof serverAuthCode !== 'undefined' && serverAuthCode && serverAuthCode.trim() !== '') {
-            this.connectionStatus = {
-                status: 'registration',
-                auth_code: serverAuthCode,
-                authenticated: false,
-                connected: false,
-                ready: false
-            };
-            // Set code generation time if not already set (initial page load)
-            if (!this.codeGeneratedTime) {
-                this.codeGeneratedTime = Date.now();
-            }
-            this.updateConnectionState();
-            this.updateStatusBanner();
-        }
-
         // Load initial data
         this.loadConnectionStatus().then(status => {
-            if (status && status.status !== 'ready') {
-                if ((status.status === 'registration' && status.auth_code) ||
-                    (typeof serverAuthCode !== 'undefined' && serverAuthCode && serverAuthCode.trim() !== '')) {
-                    showConnectionStatusModal();
-                }
+            // If not ready, redirect to onboarding
+            if (!status || !status.ready) {
+                window.location.href = '/onboarding';
+                return;
             }
 
             this.loadQueueInfo();
@@ -51,6 +27,7 @@ const Dashboard = {
             this.loadDeviceData();
         }).catch(error => {
             console.error('Error loading initial connection status:', error);
+            // On error, try loading other data anyway
             this.loadQueueInfo();
             this.loadIntegrations();
             this.loadDeviceTypes();
@@ -90,11 +67,6 @@ const Dashboard = {
         if (targetSelect) {
             targetSelect.addEventListener('change', () => this.updateActionOptions());
         }
-
-        const statusBannerAction = document.getElementById('status-banner-action');
-        if (statusBannerAction) {
-            statusBannerAction.addEventListener('click', () => showConnectionStatusModal());
-        }
     },
 
     /**
@@ -104,32 +76,13 @@ const Dashboard = {
         try {
             const data = await API.get('/api/connection-status');
 
-            // If we're in registration state and don't have a timer yet, start one
-            if (data.status === 'registration' && !this.codeGeneratedTime) {
-                this.codeGeneratedTime = Date.now();
-            }
-
-            // Check for client-side timeout when in registration state
-            if (data.status === 'registration' && this.codeGeneratedTime) {
-                const elapsed = Date.now() - this.codeGeneratedTime;
-                if (elapsed >= this.CODE_TIMEOUT_MS) {
-                    // Code has expired on client side
-                    data.status = 'connection_timeout';
-                    data.message = 'Connection polling timed out. Click "Get New Code" to try again.';
-                    this.codeGeneratedTime = null;
-                }
-            }
-
-            // Clear timer when no longer in registration state (except timeout)
-            if (data.status !== 'registration' && data.status !== 'connection_timeout') {
-                this.codeGeneratedTime = null;
-            }
-
             this.connectionStatus = data;
             this.updateConnectionState();
 
-            if (this.modalIsOpen) {
-                updateConnectionStatusModal();
+            // Redirect to onboarding if not ready
+            if (!data.ready) {
+                window.location.href = '/onboarding';
+                return data;
             }
 
             return data;
@@ -198,89 +151,7 @@ const Dashboard = {
             stateIcon.className = `stat-icon ${iconClass}`;
         }
 
-        this.updateStatusBanner();
         this.checkApiStatus();
-    },
-
-    /**
-     * Update the status banner
-     */
-    updateStatusBanner() {
-        const banner = document.getElementById('status-banner');
-        const message = document.getElementById('status-banner-message');
-        const actionButton = document.getElementById('status-banner-action');
-
-        if (!banner || !this.connectionStatus) return;
-
-        const alertDiv = banner.querySelector('.alert');
-        if (!alertDiv) return;
-
-        // Remove all alert classes
-        alertDiv.classList.remove('alert-info', 'alert-warning', 'alert-error', 'alert-success');
-
-        switch (this.connectionStatus.status) {
-            case 'ready':
-                banner.classList.add('hidden');
-                return;
-
-            case 'connected':
-                alertDiv.classList.add('alert-warning');
-                message.innerHTML = '<strong>Almost There!</strong> Device connected, waiting for space creation in the app.';
-                actionButton.textContent = 'Details';
-                break;
-
-            case 'registration':
-                alertDiv.classList.add('alert-info');
-                message.innerHTML = '<strong>Registration Required!</strong> Connect this device to your GrowAssistant account.';
-                actionButton.textContent = 'View Code';
-                break;
-
-            case 'connection_timeout':
-                alertDiv.classList.add('alert-warning');
-                message.innerHTML = '<strong>Connection Timed Out!</strong> The connection code has expired. Get a new code to try again.';
-                actionButton.textContent = 'Get New Code';
-                break;
-
-            case 'not_registered':
-            case 'not_connected':
-                const hasAuthCode = (typeof serverAuthCode !== 'undefined' && serverAuthCode) ||
-                                   (this.connectionStatus && this.connectionStatus.auth_code);
-                if (hasAuthCode) {
-                    alertDiv.classList.add('alert-info');
-                    message.innerHTML = '<strong>Registration Required!</strong> Connect this device to your GrowAssistant account.';
-                    actionButton.textContent = 'View Code';
-                } else {
-                    alertDiv.classList.add('alert-error');
-                    message.innerHTML = '<strong>Not Connected!</strong> Device is not connected to GrowAssistant service.';
-                    actionButton.textContent = 'Details';
-                }
-                break;
-
-            case 'initializing':
-                alertDiv.classList.add('alert-info');
-                message.innerHTML = '<strong>Starting Up!</strong> GrowAssistant Bridge is initializing...';
-                actionButton.textContent = 'Details';
-                break;
-
-            case 'busy':
-                alertDiv.classList.add('alert-info');
-                message.innerHTML = '<strong>System Busy!</strong> Processing authentication...';
-                actionButton.textContent = 'Details';
-                break;
-
-            case 'error':
-                alertDiv.classList.add('alert-error');
-                message.innerHTML = '<strong>Error!</strong> Problem connecting to GrowAssistant service.';
-                actionButton.textContent = 'Details';
-                break;
-
-            default:
-                alertDiv.classList.add('alert-info');
-                message.innerHTML = `<strong>Status:</strong> ${this.connectionStatus.status}`;
-                actionButton.textContent = 'Details';
-        }
-
-        banner.classList.remove('hidden');
     },
 
     /**
@@ -578,351 +449,3 @@ const Dashboard = {
         }
     }
 };
-
-// ============================================
-// Connection Status Modal Functions
-// ============================================
-
-function showConnectionStatusModal() {
-    updateConnectionStatusModal();
-    Modal.show('connectionStatusModal');
-    Dashboard.modalIsOpen = true;
-
-    clearInterval(Dashboard.modalRefreshInterval);
-    Dashboard.modalRefreshInterval = setInterval(() => {
-        Dashboard.loadConnectionStatus().then(() => {
-            if (Dashboard.modalIsOpen) {
-                updateConnectionStatusModal();
-            } else {
-                clearInterval(Dashboard.modalRefreshInterval);
-            }
-        });
-    }, 3000);
-}
-
-function closeConnectionModal() {
-    Modal.hide('connectionStatusModal');
-    Dashboard.modalIsOpen = false;
-    if (Dashboard.modalRefreshInterval) {
-        clearInterval(Dashboard.modalRefreshInterval);
-        Dashboard.modalRefreshInterval = null;
-    }
-    if (Dashboard.countdownInterval) {
-        clearInterval(Dashboard.countdownInterval);
-        Dashboard.countdownInterval = null;
-    }
-}
-
-function refreshConnectionStatus() {
-    Dashboard.loadConnectionStatus().then(() => {
-        updateConnectionStatusModal();
-    });
-}
-
-function ensureCountdownTimer() {
-    // Only start if not already running
-    if (Dashboard.countdownInterval) {
-        return;
-    }
-
-    // Update every second
-    Dashboard.countdownInterval = setInterval(() => {
-        if (!Dashboard.modalIsOpen || !Dashboard.codeGeneratedTime) {
-            clearInterval(Dashboard.countdownInterval);
-            Dashboard.countdownInterval = null;
-            return;
-        }
-        updateCountdownDisplay();
-    }, 1000);
-}
-
-function updateCountdownDisplay() {
-    const countdownEl = document.getElementById('code-countdown');
-    if (!countdownEl || !Dashboard.codeGeneratedTime) return;
-
-    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
-    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
-
-    if (remaining <= 0) {
-        countdownEl.innerHTML = '<span class="text-red-400">Code expired - click below for a new code</span>';
-        // Trigger a status refresh to show timeout state
-        Dashboard.loadConnectionStatus();
-        clearInterval(Dashboard.countdownInterval);
-        Dashboard.countdownInterval = null;
-        return;
-    }
-
-    const minutes = Math.floor(remaining / 60000);
-    const seconds = Math.floor((remaining % 60000) / 1000);
-    countdownEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-async function requestNewCode() {
-    const btn = document.getElementById('request-new-code-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner" style="width: 16px; height: 16px; margin-right: 8px;"></span> Generating...';
-    }
-
-    try {
-        const response = await API.post('/api/request-new-code', {});
-
-        if (response.success && response.auth_code) {
-            // Track when the code was generated for client-side timeout
-            Dashboard.codeGeneratedTime = Date.now();
-
-            // Update the connection status with the new code
-            Dashboard.connectionStatus = {
-                status: 'registration',
-                auth_code: response.auth_code,
-                authenticated: false,
-                connected: false,
-                ready: false
-            };
-            Dashboard.updateConnectionState();
-            updateConnectionStatusModal();
-        } else {
-            // Show error in modal
-            const modalContent = document.getElementById('connection-status-content');
-            modalContent.innerHTML = `
-                <div class="text-center">
-                    <div class="alert alert-error mb-4">
-                        <strong>Error</strong>
-                        <p class="text-sm opacity-80">${response.error || 'Failed to generate new code'}</p>
-                    </div>
-                    <button onclick="requestNewCode()" class="btn btn-primary">
-                        Try Again
-                    </button>
-                </div>
-            `;
-        }
-    } catch (error) {
-        console.error('Error requesting new code:', error);
-        const modalContent = document.getElementById('connection-status-content');
-        modalContent.innerHTML = `
-            <div class="text-center">
-                <div class="alert alert-error mb-4">
-                    <strong>Error</strong>
-                    <p class="text-sm opacity-80">${error.message || 'Failed to connect to server'}</p>
-                </div>
-                <button onclick="requestNewCode()" class="btn btn-primary">
-                    Try Again
-                </button>
-            </div>
-        `;
-    }
-}
-
-function updateConnectionStatusModal() {
-    const modalContent = document.getElementById('connection-status-content');
-    Dashboard.lastModalUpdateTime = new Date();
-    const status = Dashboard.connectionStatus;
-
-    if (!status) {
-        modalContent.innerHTML = `
-            <div class="flex flex-col items-center py-8">
-                <div class="spinner mb-4" style="width: 32px; height: 32px;"></div>
-                <p class="text-zinc-400">Checking connection status...</p>
-            </div>
-        `;
-        return;
-    }
-
-    let content = '';
-
-    switch (status.status) {
-        case 'initializing':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-info mb-4">
-                        <div class="flex items-center gap-3">
-                            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polyline points="12 6 12 12 16 14"></polyline>
-                            </svg>
-                            <div>
-                                <strong>Application Starting</strong>
-                                <p class="text-sm opacity-80">GrowAssistant Bridge is initializing...</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="progress-bar mb-4">
-                        <div class="progress-fill" style="width: 33%; background: var(--status-info);"></div>
-                    </div>
-                    <p class="text-zinc-400 text-sm">${status.message || 'Initializing authentication system...'}</p>
-                </div>
-            `;
-            break;
-
-        case 'busy':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-info mb-4">
-                        <strong>System Busy</strong>
-                        <p class="text-sm opacity-80">Processing authentication...</p>
-                    </div>
-                    <div class="progress-bar mb-4">
-                        <div class="progress-fill" style="width: 50%; background: var(--status-info);"></div>
-                    </div>
-                    <p class="text-zinc-400 text-sm">${status.message || 'Please wait...'}</p>
-                </div>
-            `;
-            break;
-
-        case 'registration':
-            const authCode = status.auth_code || (typeof serverAuthCode !== 'undefined' ? serverAuthCode : '');
-            if (authCode) {
-                // Calculate countdown inline to avoid flicker
-                let countdownText = '';
-                if (Dashboard.codeGeneratedTime) {
-                    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
-                    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
-                    const minutes = Math.floor(remaining / 60000);
-                    const seconds = Math.floor((remaining % 60000) / 1000);
-                    countdownText = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
-                }
-                content = `
-                    <div class="text-center">
-                        <div class="alert alert-info mb-6">
-                            <strong>Device Registration Required</strong>
-                            <p class="text-sm opacity-80">Enter this code in the GrowAssistant app</p>
-                        </div>
-                        <div class="auth-code mb-6">${authCode}</div>
-                        <p class="text-zinc-400 text-sm">Status: Waiting for connection...</p>
-                        <p id="code-countdown" class="text-amber-400 font-medium mt-4">${countdownText}</p>
-                    </div>
-                `;
-                // Ensure countdown timer is running (won't restart if already running)
-                ensureCountdownTimer();
-            } else {
-                content = `
-                    <div class="text-center">
-                        <div class="alert alert-warning mb-4">
-                            <strong>Registration Required</strong>
-                            <p class="text-sm opacity-80">No authentication code available</p>
-                        </div>
-                        <p class="text-zinc-400 text-sm">Please restart the application or refresh the page.</p>
-                    </div>
-                `;
-            }
-            break;
-
-        case 'connection_timeout':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-warning mb-6">
-                        <strong>Connection Timed Out</strong>
-                        <p class="text-sm opacity-80">The connection code has expired</p>
-                    </div>
-                    <p class="text-zinc-400 mb-6">The previous code is no longer valid. Click the button below to generate a new code and try again.</p>
-                    <button onclick="requestNewCode()" class="btn btn-primary" id="request-new-code-btn">
-                        Get New Code
-                    </button>
-                </div>
-            `;
-            break;
-
-        case 'connected':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-warning mb-4">
-                        <strong>Device Connected!</strong>
-                        <p class="text-sm opacity-80">Waiting for space creation in the app</p>
-                    </div>
-                    <div class="progress-bar mb-4">
-                        <div class="progress-fill" style="width: 66%; background: var(--status-warning);"></div>
-                    </div>
-                    <p class="text-zinc-400 text-sm">Continue setup in the GrowAssistant app.</p>
-                </div>
-            `;
-            break;
-
-        case 'ready':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-success mb-4">
-                        <strong>Device Ready!</strong>
-                        <p class="text-sm opacity-80">Connected and sending data</p>
-                    </div>
-                    <div class="progress-bar mb-4">
-                        <div class="progress-fill" style="width: 100%;"></div>
-                    </div>
-                    <p class="text-zinc-400 text-sm mb-2">Client ID: <code class="text-zinc-300">${status.client_id || 'Unknown'}</code></p>
-                    <p class="text-green-400 font-medium">All systems operational!</p>
-                </div>
-            `;
-            break;
-
-        case 'not_connected':
-        case 'not_registered':
-            const modalAuthCode = (typeof serverAuthCode !== 'undefined' ? serverAuthCode : '') || (status && status.auth_code);
-            if (modalAuthCode) {
-                // Calculate countdown inline to avoid flicker
-                let notConnectedCountdown = '';
-                if (Dashboard.codeGeneratedTime) {
-                    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
-                    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
-                    const minutes = Math.floor(remaining / 60000);
-                    const seconds = Math.floor((remaining % 60000) / 1000);
-                    notConnectedCountdown = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
-                }
-                content = `
-                    <div class="text-center">
-                        <div class="alert alert-info mb-6">
-                            <strong>Device Registration Required</strong>
-                            <p class="text-sm opacity-80">Enter this code in the GrowAssistant app</p>
-                        </div>
-                        <div class="auth-code mb-6">${modalAuthCode}</div>
-                        <p class="text-zinc-400 text-sm">Device not connected. Enter this code to connect.</p>
-                        <p id="code-countdown" class="text-amber-400 font-medium mt-4">${notConnectedCountdown}</p>
-                    </div>
-                `;
-                // Ensure countdown timer is running (won't restart if already running)
-                ensureCountdownTimer();
-            } else {
-                content = `
-                    <div class="text-center">
-                        <div class="alert alert-error mb-4">
-                            <strong>Not Connected</strong>
-                            <p class="text-sm opacity-80">Device is not connected to GrowAssistant</p>
-                        </div>
-                        <p class="text-zinc-400 text-sm">Check your internet connection and server configuration.</p>
-                    </div>
-                `;
-            }
-            break;
-
-        case 'error':
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-error mb-4">
-                        <strong>Connection Error</strong>
-                        <p class="text-sm opacity-80">There was an error checking the connection</p>
-                    </div>
-                    <p class="text-zinc-400 text-sm">Error: ${status.error || 'Unknown error'}</p>
-                </div>
-            `;
-            break;
-
-        default:
-            content = `
-                <div class="text-center">
-                    <div class="alert alert-info mb-4">
-                        <strong>Status: ${status.status}</strong>
-                    </div>
-                    <p class="text-zinc-400 text-sm">Refresh to check again.</p>
-                </div>
-            `;
-    }
-
-    content += `
-        <div class="text-center mt-4 pt-4 border-t border-border-subtle">
-            <p class="text-xs text-zinc-500">
-                Last updated: ${Dashboard.lastModalUpdateTime.toLocaleTimeString()}
-                <span class="ml-2">(Auto-refreshes every 3s)</span>
-            </p>
-        </div>
-    `;
-
-    modalContent.innerHTML = content;
-}

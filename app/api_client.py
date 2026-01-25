@@ -9,7 +9,13 @@ from datetime import datetime
 from typing import Any, Callable, Optional, Union
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    AsyncRetrying,
+    RetryError,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.api_types import (
     ActionType,
@@ -331,7 +337,9 @@ class ApiClient(metaclass=SingletonMeta):
 
         try:
             async for attempt in AsyncRetrying(
-                retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
+                retry=retry_if_exception_type(
+                    (httpx.HTTPError, httpx.ConnectError, asyncio.TimeoutError)
+                ),
                 stop=stop_after_attempt(
                     config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)
                 ),
@@ -356,17 +364,46 @@ class ApiClient(metaclass=SingletonMeta):
             logger.info(f"Sent {logs} data logs, {problems} problems, {actions} actions")
             return True, "Data sent successfully"
 
+        except RetryError as e:
+            # All retry attempts failed - API is likely offline
+            # Clear pending data (caller will requeue original data_points)
+            self._clear_sent_data()
+            original_exception = e.last_attempt.exception()
+            if isinstance(original_exception, (httpx.ConnectError, httpx.ConnectTimeout)):
+                logger.warning(
+                    f"API connection failed after retries (API offline): {original_exception}"
+                )
+                return False, "API offline - connection failed"
+            elif isinstance(original_exception, asyncio.TimeoutError):
+                logger.warning(f"API request timed out after retries: {original_exception}")
+                return False, "API offline - request timed out"
+            else:
+                logger.warning(f"API request failed after retries: {original_exception}")
+                return False, f"API unavailable: {original_exception}"
+
         except httpx.HTTPStatusError as e:
+            # Clear pending data (caller will requeue original data_points)
+            self._clear_sent_data()
             error_msg = f"{e.response.status_code} - {e.response.text}"
             self._log_transmission_results(url, client_id, success=False, error_msg=error_msg)
             logger.error(f"HTTP error sending data: {error_msg}")
             return False, f"HTTP error: {e.response.status_code}"
 
+        except httpx.ConnectError as e:
+            # Clear pending data (caller will requeue original data_points)
+            self._clear_sent_data()
+            logger.warning(f"API connection failed (API offline): {e}")
+            return False, "API offline - connection failed"
+
         except (httpx.RequestError, asyncio.TimeoutError) as e:
-            logger.error(f"Error sending data: {e}")
+            # Clear pending data (caller will requeue original data_points)
+            self._clear_sent_data()
+            logger.warning(f"Request error sending data: {e}")
             return False, f"Request error: {e}"
 
         except Exception as e:
+            # Clear pending data (caller will requeue original data_points)
+            self._clear_sent_data()
             logger.exception(f"Unexpected error sending data: {e}")
             return False, f"Unexpected error: {e}"
 

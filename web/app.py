@@ -26,8 +26,6 @@ from flask import (
     session,
     url_for,
 )
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.auth import auth_manager
@@ -44,14 +42,6 @@ app = Flask(
     __name__,
     template_folder=str(WEB_DIR / "templates"),
     static_folder=str(WEB_DIR / "static"),
-)
-
-# Initialize rate limiter
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://",
 )
 
 
@@ -143,7 +133,6 @@ def _save_password_to_config(username: str, password_hash: str) -> None:
 
 
 @app.route("/setup", methods=["GET", "POST"])
-@limiter.limit("3 per minute")
 def setup():
     """First-time setup page to set password."""
     if is_password_set():
@@ -188,7 +177,6 @@ def _log_failed_login(username: str) -> None:
 
 
 @app.route("/login", methods=["GET", "POST"])
-@limiter.limit("5 per minute")
 def login():
     """Login page."""
     if not config.get("web.auth_enabled", False):
@@ -226,15 +214,27 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    """Render the index page with onboarding status."""
-    # Check if we need to show onboarding
+    """Render dashboard only if connected and ready."""
+    if not auth_manager.is_ready_for_data():
+        return redirect(url_for("onboarding"))
+    return render_template("index.html")
+
+
+@app.route("/onboarding")
+@login_required
+def onboarding():
+    """Render the onboarding page for device registration."""
+    if auth_manager.is_ready_for_data():
+        return redirect(url_for("index"))
+
     auth_code = auth_manager.get_auth_code()
+    connection_timed_out = auth_manager.is_connection_timed_out()
     is_authenticated = auth_manager.is_authenticated()
 
     return render_template(
-        "index.html",
-        show_onboarding=auth_code is not None,
+        "onboarding.html",
         auth_code=auth_code,
+        connection_timed_out=connection_timed_out,
         is_authenticated=is_authenticated,
     )
 

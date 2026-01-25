@@ -159,14 +159,11 @@ const ConnectionManager = {
     updateUI(status) {
         const headerBadge = document.getElementById('header-status-badge');
         const headerStatusText = document.getElementById('header-status-text');
-        const headerAlert = document.getElementById('header-registration-alert');
 
         if (!status) return;
 
         // Determine connection state
         const isConnected = status.status === 'ready';
-        const isConnecting = ['initializing', 'busy', 'connected'].includes(status.status);
-        const needsRegistration = status.status === 'registration';
         const hasError = status.status === 'error';
 
         // Update header badge
@@ -178,8 +175,6 @@ const ConnectionManager = {
                     badge.classList.add('badge-success');
                 } else if (hasError) {
                     badge.classList.add('badge-error');
-                } else if (needsRegistration) {
-                    badge.classList.add('badge-warning');
                 } else {
                     badge.classList.add('badge-info');
                 }
@@ -189,23 +184,12 @@ const ConnectionManager = {
                     headerStatusText.textContent = 'Connected';
                 } else if (hasError) {
                     headerStatusText.textContent = 'Error';
-                } else if (needsRegistration) {
-                    headerStatusText.textContent = 'Register';
                 } else {
                     headerStatusText.textContent = 'Connecting';
                 }
             }
             headerBadge.classList.remove('hidden');
             headerBadge.classList.add('flex');
-        }
-
-        // Show/hide registration alert
-        if (headerAlert) {
-            if (needsRegistration) {
-                headerAlert.classList.remove('hidden');
-            } else {
-                headerAlert.classList.add('hidden');
-            }
         }
     },
 
