@@ -7,18 +7,17 @@ integration is instantiated.
 """
 
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseIntegrationConfig(BaseModel):
     """Base configuration schema for all integrations."""
 
-    enabled: bool = False
+    model_config = ConfigDict(extra="allow")
 
-    class Config:
-        extra = "allow"  # Allow extra fields for extensibility
+    enabled: bool = False
 
 
 # =============================================================================
@@ -53,20 +52,12 @@ class GPIOPinConfig(BaseModel):
     name: str = Field(..., min_length=1, description="Unique name for the pin")
     pin: int = Field(..., ge=0, le=40, description="BCM GPIO pin number (0-40)")
     direction: PinDirection = Field(..., description="Pin direction: IN or OUT")
-    initial: Optional[PinInitial] = Field(
+    initial: PinInitial | None = Field(
         default=PinInitial.LOW, description="Initial state for output pins"
     )
-    pull_up_down: Optional[PullUpDown] = Field(
+    pull_up_down: PullUpDown | None = Field(
         default=None, description="Pull-up/pull-down resistor for input pins"
     )
-
-    @field_validator("initial")
-    @classmethod
-    def initial_only_for_output(cls, v, info):
-        """Validate that 'initial' is only set for output pins."""
-        # Note: This validator runs before the full model is constructed
-        # so we can't access 'direction' here directly in Pydantic v2
-        return v
 
 
 class GPIOIntegrationConfig(BaseIntegrationConfig):
@@ -157,7 +148,7 @@ class SerialParity(str, Enum):
 class SerialIntegrationConfig(BaseIntegrationConfig):
     """Configuration schema for Serial integration."""
 
-    port: Optional[str] = Field(
+    port: str | None = Field(
         default=None, description="Serial port path (e.g., /dev/ttyUSB0, COM3)"
     )
     baudrate: int = Field(default=9600, ge=300, le=4000000, description="Baud rate")
@@ -178,11 +169,10 @@ class SerialIntegrationConfig(BaseIntegrationConfig):
 class DeviceConfig(BaseModel):
     """Generic device configuration used by external integrations."""
 
+    model_config = ConfigDict(extra="allow")
+
     name: str = Field(..., min_length=1, description="Device name")
     type: str = Field(..., min_length=1, description="Device type")
-
-    class Config:
-        extra = "allow"  # Allow integration-specific fields
 
 
 class GenericIntegrationConfig(BaseIntegrationConfig):
@@ -192,9 +182,6 @@ class GenericIntegrationConfig(BaseIntegrationConfig):
         default_factory=dict, description="Dictionary of device configurations"
     )
     update_interval: int = Field(default=60, ge=1, description="Update interval in seconds")
-
-    class Config:
-        extra = "allow"  # Allow integration-specific fields
 
 
 # =============================================================================

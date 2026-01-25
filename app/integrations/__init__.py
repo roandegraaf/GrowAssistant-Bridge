@@ -38,8 +38,6 @@ logger = logging.getLogger(__name__)
 class ConfigurationError(Exception):
     """Raised when configuration validation fails."""
 
-    pass
-
 
 class Integration(abc.ABC):
     """Base class for all integrations.
@@ -91,9 +89,7 @@ class Integration(abc.ABC):
         Returns:
             str: The configuration key (lowercase).
         """
-        name = cls.__name__
-        if name.endswith("Integration"):
-            name = name[:-11]  # Remove "Integration" suffix
+        name = cls.__name__.removesuffix("Integration")
         return name.lower()
 
     @property
@@ -286,8 +282,6 @@ class Integration(abc.ABC):
         This method should be implemented by integrations to properly clean up
         resources when shutting down.
         """
-        # Default implementation does nothing
-        pass
 
 
 # Registry: class name -> class
@@ -375,37 +369,34 @@ def _load_from_directory(directory_path: str) -> list[str]:
     Returns:
         List[str]: List of successfully loaded module names.
     """
-    loaded_modules = []
-
     if not os.path.exists(directory_path):
         logger.warning(f"External integration directory does not exist: {directory_path}")
-        return loaded_modules
+        return []
 
     logger.info(f"Scanning for integration modules in: {directory_path}")
 
-    # Add the directory to sys.path if not already there
     if directory_path not in sys.path:
         sys.path.append(directory_path)
 
-    # Walk through all Python files in the directory
+    loaded_modules = []
     for file in os.listdir(directory_path):
-        if file.endswith(".py") and not file.startswith("_"):
-            module_name = file[:-3]  # Remove .py extension
-            try:
-                # Construct the full path to the module
-                module_path = os.path.join(directory_path, file)
+        if not file.endswith(".py") or file.startswith("_"):
+            continue
 
-                # Load the module
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
-                if spec is not None:
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    loaded_modules.append(module_name)
-                    logger.info(f"Successfully loaded external module: {module_name}")
-            except ImportError as e:
-                logger.error(f"Error importing external module {module_name}: {e}")
-            except Exception as e:
-                logger.error(f"Error loading external module {module_name}: {e}")
+        module_name = file.removesuffix(".py")
+        module_path = os.path.join(directory_path, file)
+
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                loaded_modules.append(module_name)
+                logger.info(f"Successfully loaded external module: {module_name}")
+        except ImportError as e:
+            logger.error(f"Error importing external module {module_name}: {e}")
+        except Exception as e:
+            logger.error(f"Error loading external module {module_name}: {e}")
 
     return loaded_modules
 

@@ -1,23 +1,14 @@
-"""
-Type Definitions Module.
-
-This module provides TypedDict definitions for type-safe dictionary structures
-used throughout the application. These definitions improve code quality by
-enabling static type checking and IDE autocompletion.
-"""
+"""TypedDict definitions for type-safe dictionary structures."""
 
 from typing import Any, Optional, TypedDict, Union
 
-# =============================================================================
+
 # API Data Structures
-# =============================================================================
-
-
 class DataLogDict(TypedDict):
     """Data log entry sent to the API."""
 
-    logDate: str  # ISO format datetime
-    logType: str  # LogType enum value
+    logDate: str
+    logType: str
     value: str
 
 
@@ -30,11 +21,11 @@ class DataLogWithPumpDict(DataLogDict, total=False):
 class ProblemDict(TypedDict):
     """Problem report sent to the API."""
 
-    id: str  # UUID
-    priority: int  # 0-100
+    id: str
+    priority: int
     description: str
-    type: str  # ProblemType enum value
-    status: str  # ProblemStatus enum value
+    type: str
+    status: str
     userCanResolve: bool
     resolved: bool
 
@@ -51,18 +42,14 @@ class ActionDict(TypedDict):
     """Action received from the API."""
 
     id: str
-    type: str  # ActionType enum value
+    type: str
     value: str
     pump_number: Optional[int]
     received: bool
     resolved: bool
 
 
-# =============================================================================
 # API Request/Response Payloads
-# =============================================================================
-
-
 class SendDataPayload(TypedDict):
     """Payload for sending data to the API."""
 
@@ -92,11 +79,7 @@ class ParsedAPIResponse(TypedDict):
     actions: list[ActionDict]
 
 
-# =============================================================================
 # Configuration Structures
-# =============================================================================
-
-
 class APIConfigDict(TypedDict, total=False):
     """API configuration section."""
 
@@ -109,7 +92,7 @@ class APIConfigDict(TypedDict, total=False):
     retry_max_attempts: int
     retry_min_backoff: int
     retry_max_backoff: int
-    verify_ssl: bool  # For HTTPS validation
+    verify_ssl: bool
 
 
 class GeneralConfigDict(TypedDict, total=False):
@@ -150,16 +133,16 @@ class GPIOPinConfigDict(TypedDict, total=False):
 
     name: str
     pin: int
-    direction: str  # "IN" or "OUT"
-    pull: str  # "UP", "DOWN", or "NONE"
-    initial: str  # "HIGH" or "LOW"
+    direction: str
+    pull: str
+    initial: str
 
 
 class MQTTTopicConfigDict(TypedDict, total=False):
     """MQTT topic configuration."""
 
     name: str
-    type: str  # Device type
+    type: str
     qos: int
 
 
@@ -168,7 +151,7 @@ class HTTPEndpointConfigDict(TypedDict, total=False):
 
     name: str
     url: str
-    method: str  # "GET", "POST", etc.
+    method: str
     headers: dict[str, str]
     interval: int
 
@@ -177,7 +160,7 @@ class DeviceConfigDict(TypedDict, total=False):
     """Generic device configuration."""
 
     name: str
-    type: str  # Device type (temperature, humidity, pump, etc.)
+    type: str
     enabled: bool
 
 
@@ -185,15 +168,11 @@ class IntegrationConfigDict(TypedDict, total=False):
     """Integration configuration."""
 
     enabled: bool
-    # GPIO specific
     pins: dict[str, GPIOPinConfigDict]
-    # MQTT specific
     broker: str
     port: int
     topics: dict[str, MQTTTopicConfigDict]
-    # HTTP specific
     endpoints: dict[str, HTTPEndpointConfigDict]
-    # Generic devices
     devices: dict[str, DeviceConfigDict]
     update_interval: int
 
@@ -208,17 +187,13 @@ class AppConfigDict(TypedDict, total=False):
     web: WebConfigDict
 
 
-# =============================================================================
-# Data Point Structures (Legacy and Internal)
-# =============================================================================
-
-
+# Data Point Structures
 class LegacyDataPointDict(TypedDict, total=False):
     """Legacy data point format for backward compatibility."""
 
     type: str
     value: Union[str, float, int]
-    timestamp: int  # Milliseconds since epoch
+    timestamp: int
     integration: str
     source: str
     endpoint_name: str
@@ -230,15 +205,11 @@ class LegacyDataPointDict(TypedDict, total=False):
 class QueueItemDict(TypedDict, total=False):
     """Item stored in the data queue."""
 
-    timestamp: float  # Unix timestamp
+    timestamp: float
     data: dict[str, Any]
 
 
-# =============================================================================
 # Integration Data Structures
-# =============================================================================
-
-
 class IntegrationDeviceDataDict(TypedDict, total=False):
     """Device data returned from integrations."""
 
@@ -258,11 +229,7 @@ class IntegrationStatusDict(TypedDict, total=False):
     devices: dict[str, IntegrationDeviceDataDict]
 
 
-# =============================================================================
 # Authentication Structures
-# =============================================================================
-
-
 class CredentialsDict(TypedDict, total=False):
     """Stored credentials structure."""
 
@@ -278,14 +245,10 @@ class ConnectionStatusDict(TypedDict):
     """Connection status information."""
 
     connected: bool
-    status: str  # "not_connected", "connected", "ready"
+    status: str
 
 
-# =============================================================================
 # Web API Response Structures
-# =============================================================================
-
-
 class WebAPIErrorResponse(TypedDict):
     """Standard error response for web API."""
 

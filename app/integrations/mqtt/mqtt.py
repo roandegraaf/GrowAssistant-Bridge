@@ -36,28 +36,22 @@ class MQTTIntegration(Integration):
             config: Configuration dictionary for MQTT integration.
         """
         super().__init__(config)
-        self.client = None
+        self.client: mqtt.Client | None = None
         self.connected = False
-        self.message_queue = asyncio.Queue()
-        self.topics = {}
-        self._latest_device_data: dict[
-            str, dict[str, Any]
-        ] = {}  # Store latest data per device name
+        self.message_queue: asyncio.Queue = asyncio.Queue()
+        self.topics: dict[str, dict[str, str]] = {}
+        self._latest_device_data: dict[str, dict[str, Any]] = {}
 
-        # Check if enabled
         if not self.config.get("enabled", False):
             logger.info("MQTT Integration is disabled in configuration.")
             return
 
-        # Parse topic configurations
         topic_configs = self.config.get("topics", {})
         if not topic_configs:
             logger.warning("No MQTT topics configured.")
             return
 
-        # Process each topic configuration
-        for _, topic_config in topic_configs.items():
-            # Skip if not a dictionary (might be a string or other type)
+        for topic_config in topic_configs.values():
             if not isinstance(topic_config, dict):
                 logger.error(f"Invalid topic configuration: {topic_config}")
                 continue
@@ -78,79 +72,51 @@ class MQTTIntegration(Integration):
         self.client_id = self.config.get("client_id", "grow_assistant")
 
         logger.info(
-            f"MQTT Integration initialized with broker {self.broker}:{self.port} and {len(self.topics)} topics"
+            f"MQTT Integration initialized with broker {self.broker}:{self.port} "
+            f"and {len(self.topics)} topics"
         )
 
     def _on_connect(self, client, userdata, flags, rc):
-        """Callback when connection to MQTT broker is established.
-
-        Args:
-            client: MQTT client instance
-            userdata: User data
-            flags: Connection flags
-            rc: Connection result code
-        """
-        if rc == 0:
-            logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
-            self.connected = True
-
-            # Subscribe to topics
-            for topic_name, _topic_info in self.topics.items():
-                client.subscribe(topic_name)
-                logger.debug(f"Subscribed to topic: {topic_name}")
-        else:
+        """Callback when connection to MQTT broker is established."""
+        if rc != 0:
             logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
             self.connected = False
+            return
+
+        logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
+        self.connected = True
+
+        for topic_name in self.topics:
+            client.subscribe(topic_name)
+            logger.debug(f"Subscribed to topic: {topic_name}")
 
     def _on_disconnect(self, client, userdata, rc):
-        """Callback when disconnected from MQTT broker.
-
-        Args:
-            client: MQTT client instance
-            userdata: User data
-            rc: Disconnect result code
-        """
+        """Callback when disconnected from MQTT broker."""
         logger.info("Disconnected from MQTT broker")
         self.connected = False
 
     def _on_message(self, client, userdata, msg):
-        """Callback when message is received from MQTT broker.
-
-        Args:
-            client: MQTT client instance
-            userdata: User data
-            msg: Received message
-        """
+        """Callback when message is received from MQTT broker."""
         try:
             topic = msg.topic
             payload = msg.payload.decode("utf-8")
+            timestamp = time.time()
 
-            # Try to parse as JSON
             try:
                 payload_data = json.loads(payload)
             except json.JSONDecodeError:
                 payload_data = {"value": payload}
 
-            # Add topic info to payload
-            message_data = {"topic": topic, "timestamp": time.time(), "data": payload_data}
+            message_data = {"topic": topic, "timestamp": timestamp, "data": payload_data}
 
-            # Find topic name associated with the received topic string
-            matched_topic_name = None
-            for topic_name, topic_info in self.topics.items():
-                # Simple exact match for now, could support wildcards later if needed
-                if topic == topic_name:
-                    message_data["type"] = topic_info.get("type")
-                    matched_topic_name = topic_name
-                    break
-
-            # Store latest data if it corresponds to a configured device
-            if matched_topic_name:
-                self._latest_device_data[matched_topic_name] = {
+            topic_info = self.topics.get(topic)
+            if topic_info:
+                message_data["type"] = topic_info.get("type")
+                self._latest_device_data[topic] = {
                     "data": payload_data,
-                    "timestamp": message_data["timestamp"],
+                    "timestamp": timestamp,
                 }
 
-            # Put message in queue for async processing
             asyncio.run_coroutine_threadsafe(
                 self.message_queue.put(message_data), asyncio.get_event_loop()
             )
@@ -169,31 +135,22 @@ class MQTTIntegration(Integration):
             return False
 
         try:
-            # Create MQTT client
             self.client = mqtt.Client(client_id=self.client_id)
-
-            # Set callbacks
             self.client.on_connect = self._on_connect
             self.client.on_disconnect = self._on_disconnect
             self.client.on_message = self._on_message
 
-            # Set authentication if provided
             if self.username and self.password:
                 self.client.username_pw_set(self.username, self.password)
 
-            # Connect to broker
             self.client.connect(self.broker, self.port, keepalive=60)
-
-            # Start network loop in a background thread
             self.client.loop_start()
 
-            # Wait for connection to be established
-            for _ in range(10):  # Wait up to 5 seconds
+            for _ in range(10):
                 if self.connected:
                     return True
                 await asyncio.sleep(0.5)
 
-            # If we get here, connection failed
             logger.error(f"Timed out connecting to MQTT broker {self.broker}:{self.port}")
             return False
 
@@ -224,22 +181,15 @@ class MQTTIntegration(Integration):
             return False
 
         try:
-            # Convert payload to JSON string if it's a dict or list
-            if isinstance(payload, (dict, list)):
-                payload_str = json.dumps(payload)
-            else:
-                payload_str = str(payload)
-
-            # Publish message
+            payload_str = json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
             result = self.client.publish(topic, payload_str)
 
-            # Check for success
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
                 logger.debug(f"Published message to {topic}: {payload_str}")
                 return True
-            else:
-                logger.error(f"Failed to publish message to {topic}, error code: {result.rc}")
-                return False
+
+            logger.error(f"Failed to publish message to {topic}, error code: {result.rc}")
+            return False
 
         except Exception as e:
             logger.error(f"Failed to publish MQTT message: {e}")
@@ -255,7 +205,6 @@ class MQTTIntegration(Integration):
             logger.error("MQTT not connected. Cannot receive data.")
             return
 
-        # Get all messages currently in the queue
         while not self.message_queue.empty():
             try:
                 message = self.message_queue.get_nowait()
@@ -270,7 +219,6 @@ class MQTTIntegration(Integration):
         Returns:
             Dict[str, Any]: Dictionary mapping device names to their last received data.
         """
-        # Return a copy to prevent external modification
         return self._latest_device_data.copy()
 
     async def disconnect(self):
@@ -294,19 +242,12 @@ class MQTTIntegration(Integration):
         """
         for topic_name, topic_info in self.topics.items():
             topic_type = topic_info.get("type")
-
             if not topic_type:
                 continue
 
-            # Determine if sensor or actuator based on topic naming convention
-            if topic_name.startswith("sensors/"):
-                registry.register_sensor(
-                    sensor_name=topic_type,
-                    integration_name=self.name,
-                    domain="mqtt",
-                    device_type=topic_type,
-                )
-            elif topic_name.startswith("controls/"):
+            is_actuator = topic_name.startswith("controls/")
+
+            if is_actuator:
                 registry.register_actuator(
                     actuator_name=topic_type,
                     integration_name=self.name,
@@ -314,7 +255,6 @@ class MQTTIntegration(Integration):
                     device_type=topic_type,
                 )
             else:
-                # Default to sensor if can't determine from topic name
                 registry.register_sensor(
                     sensor_name=topic_type,
                     integration_name=self.name,
@@ -333,19 +273,10 @@ class MQTTIntegration(Integration):
         Returns:
             bool: True if successful.
         """
-        # Build the control topic
-        control_topic = f"controls/{target_id}"
-
-        # Build the payload
-        mqtt_payload = {
-            "action": action,
-            **payload,
-        }
-
         return await self.send_data(
             {
-                "topic": control_topic,
-                "payload": mqtt_payload,
+                "topic": f"controls/{target_id}",
+                "payload": {"action": action, **payload},
             }
         )
 

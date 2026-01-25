@@ -1,11 +1,6 @@
-"""
-Device Registry Module.
+"""Device Registry for managing sensors and actuators.
 
-This module manages the registry of sensors and actuators,
-mapping them to the integrations that can handle them.
-
-The registry uses a domain-based naming system (similar to Home Assistant)
-where entity IDs have the format: domain.device_name
+Uses domain-based naming system where entity IDs have format: domain.device_name
 Example: mqtt.temperature, gpio.pump1
 """
 
@@ -28,17 +23,7 @@ class DeviceCategory(str, Enum):
 
 @dataclass
 class DeviceInfo:
-    """Information about a registered device.
-
-    Attributes:
-        name: Device name (unique within domain).
-        domain: Integration domain (e.g., "mqtt", "gpio").
-        device_type: Type of device (e.g., "temperature", "pump").
-        category: Whether this is a sensor or actuator.
-        integration_name: Name of the integration class managing this device.
-        capabilities: List of supported actions/capabilities.
-        metadata: Additional device-specific metadata.
-    """
+    """Information about a registered device."""
 
     name: str
     domain: str
@@ -50,39 +35,30 @@ class DeviceInfo:
 
     @property
     def entity_id(self) -> str:
-        """Return Home Assistant style entity ID: domain.name"""
+        """Return entity ID in domain.name format."""
         return f"{self.domain}.{self.name}"
 
     def is_sensor(self) -> bool:
-        """Check if this device is a sensor."""
         return self.category == DeviceCategory.SENSOR
 
     def is_actuator(self) -> bool:
-        """Check if this device is an actuator."""
         return self.category == DeviceCategory.ACTUATOR
 
 
 class DeviceRegistry(metaclass=SingletonMeta):
-    """Registry of sensors and actuators.
-
-    This class manages the mapping between sensors/actuators and the integrations
-    that can handle them. It uses domain-qualified entity IDs to prevent
-    collisions between integrations.
-
-    Entity ID format: domain.device_name (e.g., mqtt.temperature, gpio.pump1)
+    """Registry of sensors and actuators using domain-qualified entity IDs.
 
     Uses SingletonMeta to ensure only one instance exists.
     """
 
     def __init__(self):
         """Initialize the device registry."""
-        # Primary storage: entity_id -> DeviceInfo
         self._devices: dict[str, DeviceInfo] = {}
 
         # Indexes for fast lookups
-        self._by_domain: dict[str, set[str]] = {}  # domain -> set of entity_ids
-        self._by_type: dict[str, set[str]] = {}  # device_type -> set of entity_ids
-        self._by_integration: dict[str, set[str]] = {}  # integration_name -> set of entity_ids
+        self._by_domain: dict[str, set[str]] = {}
+        self._by_type: dict[str, set[str]] = {}
+        self._by_integration: dict[str, set[str]] = {}
         self._by_category: dict[DeviceCategory, set[str]] = {
             DeviceCategory.SENSOR: set(),
             DeviceCategory.ACTUATOR: set(),
@@ -92,21 +68,20 @@ class DeviceRegistry(metaclass=SingletonMeta):
         self._sensors: dict[str, str] = {}
         self._actuators: dict[str, str] = {}
 
-        # Maps device types to common actions they support
-        # These actions should match what the GrowAssistant API actually supports
+        # Device type -> supported actions
         self._device_type_actions: dict[str, list[str]] = {
             "pump": ["on", "off"],
             "light": ["on", "off"],
             "fan": ["on", "off", "speed"],
             "heater": ["on", "off", "temperature"],
             "humidity": ["on", "off", "level"],
-            "temperature": [],  # Sensor, no actions
-            "water_level": [],  # Sensor, no actions
-            "light_sensor": [],  # Sensor, no actions
-            "ph": [],  # Sensor
-            "ec": [],  # Sensor
-            "pressure": [],  # Sensor
-            "flow": [],  # Sensor
+            "temperature": [],
+            "water_level": [],
+            "light_sensor": [],
+            "ph": [],
+            "ec": [],
+            "pressure": [],
+            "flow": [],
         }
 
         logger.info("Device Registry initialized")
@@ -121,37 +96,16 @@ class DeviceRegistry(metaclass=SingletonMeta):
         capabilities: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> str:
-        """Register a device with full domain qualification.
-
-        This is the primary registration method that supports domain namespacing.
-
-        Args:
-            name: Device name (unique within domain).
-            domain: Integration domain (e.g., "gpio", "mqtt").
-            device_type: Type of device (e.g., "temperature", "pump").
-            category: SENSOR or ACTUATOR.
-            integration_name: Name of the integration class.
-            capabilities: List of supported actions/capabilities.
-            metadata: Additional device metadata.
-
-        Returns:
-            str: The entity_id (domain.name).
-        """
+        """Register a device with full domain qualification. Returns entity_id."""
         entity_id = f"{domain}.{name}"
 
-        # Check for existing device
         if entity_id in self._devices:
             existing = self._devices[entity_id]
             logger.warning(
                 f"Device '{entity_id}' already registered by '{existing.integration_name}'. "
-                f"Overwriting with registration from '{integration_name}'."
+                f"Overwriting with '{integration_name}'."
             )
-            # Remove from old indexes
             self._remove_from_indexes(entity_id, existing)
-
-        # Get default capabilities from device type if not provided
-        if capabilities is None:
-            capabilities = self._device_type_actions.get(device_type, [])
 
         device_info = DeviceInfo(
             name=name,
@@ -159,17 +113,14 @@ class DeviceRegistry(metaclass=SingletonMeta):
             device_type=device_type,
             category=category,
             integration_name=integration_name,
-            capabilities=capabilities,
+            capabilities=capabilities or self._device_type_actions.get(device_type, []),
             metadata=metadata or {},
         )
 
-        # Store in primary storage
         self._devices[entity_id] = device_info
-
-        # Update indexes
         self._update_indexes(entity_id, device_info)
 
-        # Update legacy mappings for backward compatibility
+        # Update legacy mappings
         if category == DeviceCategory.SENSOR:
             self._sensors[name] = integration_name
         else:
@@ -177,48 +128,31 @@ class DeviceRegistry(metaclass=SingletonMeta):
 
         logger.info(
             f"Registered {category.value} '{entity_id}' (type: {device_type}) "
-            f"with integration '{integration_name}'"
+            f"with '{integration_name}'"
         )
 
         return entity_id
 
     def _update_indexes(self, entity_id: str, device_info: DeviceInfo) -> None:
         """Update lookup indexes for a device."""
-        # By domain
-        if device_info.domain not in self._by_domain:
-            self._by_domain[device_info.domain] = set()
-        self._by_domain[device_info.domain].add(entity_id)
-
-        # By type
-        if device_info.device_type not in self._by_type:
-            self._by_type[device_info.device_type] = set()
-        self._by_type[device_info.device_type].add(entity_id)
-
-        # By integration
-        if device_info.integration_name not in self._by_integration:
-            self._by_integration[device_info.integration_name] = set()
-        self._by_integration[device_info.integration_name].add(entity_id)
-
-        # By category
+        self._by_domain.setdefault(device_info.domain, set()).add(entity_id)
+        self._by_type.setdefault(device_info.device_type, set()).add(entity_id)
+        self._by_integration.setdefault(device_info.integration_name, set()).add(entity_id)
         self._by_category[device_info.category].add(entity_id)
 
     def _remove_from_indexes(self, entity_id: str, device_info: DeviceInfo) -> None:
         """Remove device from all indexes."""
-        if device_info.domain in self._by_domain:
-            self._by_domain[device_info.domain].discard(entity_id)
-        if device_info.device_type in self._by_type:
-            self._by_type[device_info.device_type].discard(entity_id)
-        if device_info.integration_name in self._by_integration:
-            self._by_integration[device_info.integration_name].discard(entity_id)
+        for index, key in [
+            (self._by_domain, device_info.domain),
+            (self._by_type, device_info.device_type),
+            (self._by_integration, device_info.integration_name),
+        ]:
+            if key in index:
+                index[key].discard(entity_id)
         self._by_category[device_info.category].discard(entity_id)
 
     def _derive_domain(self, integration_name: str) -> str:
-        """Derive domain from integration class name.
-
-        GPIOIntegration -> gpio
-        MQTTIntegration -> mqtt
-        HTTPIntegration -> http
-        """
+        """Derive domain from integration class name (e.g., GPIOIntegration -> gpio)."""
         name = integration_name
         if name.endswith("Integration"):
             name = name[:-11]
@@ -231,26 +165,10 @@ class DeviceRegistry(metaclass=SingletonMeta):
         domain: Optional[str] = None,
         device_type: Optional[str] = None,
     ) -> str:
-        """Register a sensor with an integration.
-
-        This is a convenience method that wraps register_device().
-        For full control, use register_device() directly.
-
-        Args:
-            sensor_name: Name of the sensor.
-            integration_name: Name of the integration that handles the sensor.
-            domain: Optional domain (derived from integration_name if not provided).
-            device_type: Optional device type (defaults to sensor_name).
-
-        Returns:
-            str: The entity_id.
-        """
-        if domain is None:
-            domain = self._derive_domain(integration_name)
-
+        """Register a sensor. Convenience wrapper for register_device()."""
         return self.register_device(
             name=sensor_name,
-            domain=domain,
+            domain=domain or self._derive_domain(integration_name),
             device_type=device_type or sensor_name,
             category=DeviceCategory.SENSOR,
             integration_name=integration_name,
@@ -263,53 +181,24 @@ class DeviceRegistry(metaclass=SingletonMeta):
         domain: Optional[str] = None,
         device_type: Optional[str] = None,
     ) -> str:
-        """Register an actuator with an integration.
-
-        This is a convenience method that wraps register_device().
-        For full control, use register_device() directly.
-
-        Args:
-            actuator_name: Name of the actuator.
-            integration_name: Name of the integration that handles the actuator.
-            domain: Optional domain (derived from integration_name if not provided).
-            device_type: Optional device type (defaults to actuator_name).
-
-        Returns:
-            str: The entity_id.
-        """
-        if domain is None:
-            domain = self._derive_domain(integration_name)
-
+        """Register an actuator. Convenience wrapper for register_device()."""
         return self.register_device(
             name=actuator_name,
-            domain=domain,
+            domain=domain or self._derive_domain(integration_name),
             device_type=device_type or actuator_name,
             category=DeviceCategory.ACTUATOR,
             integration_name=integration_name,
         )
 
     def register_device_type_actions(self, device_type: str, actions: list[str]) -> None:
-        """Register actions supported by a device type.
-
-        Args:
-            device_type: Type of device (e.g., "pump", "light").
-            actions: List of actions supported by this device type.
-        """
+        """Register actions supported by a device type."""
         self._device_type_actions[device_type] = actions
-        logger.info(f"Registered actions for device type '{device_type}': {actions}")
+        logger.info(f"Registered actions for '{device_type}': {actions}")
 
     def register_integration_by_devices(
         self, integration_name: str, devices_config: dict[str, Any]
     ) -> None:
-        """Register an integration by its device configurations.
-
-        This method examines the device configurations and registers each device
-        as either a sensor or actuator based on its type.
-
-        Args:
-            integration_name: Name of the integration.
-            devices_config: Dictionary of device configurations.
-        """
+        """Register devices from config, categorizing as sensor or actuator by type."""
         sensor_types = {
             "temperature",
             "humidity",
@@ -323,201 +212,95 @@ class DeviceRegistry(metaclass=SingletonMeta):
 
         for _device_id, device_config in devices_config.items():
             if not isinstance(device_config, dict):
-                logger.error(
-                    f"Invalid device configuration for integration '{integration_name}': {device_config}"
-                )
+                logger.error(f"Invalid device config for '{integration_name}': {device_config}")
                 continue
 
             name = device_config.get("name")
             device_type = device_config.get("type")
 
             if not name or not device_type:
-                logger.error(
-                    f"Invalid device configuration for integration '{integration_name}': {device_config}"
-                )
+                logger.error(f"Invalid device config for '{integration_name}': {device_config}")
                 continue
 
-            # Register as sensor or actuator based on device type
             if device_type in sensor_types:
                 self.register_sensor(name, integration_name)
             else:
                 self.register_actuator(name, integration_name)
 
     def get_sensor_integration(self, sensor_name: str) -> Optional[str]:
-        """Get the integration that handles a sensor.
-
-        Args:
-            sensor_name: Name of the sensor.
-
-        Returns:
-            Optional[str]: Name of the integration, or None if not found.
-        """
+        """Get the integration that handles a sensor."""
         integration = self._sensors.get(sensor_name)
         if not integration:
             logger.warning(f"No integration found for sensor '{sensor_name}'")
-
         return integration
 
     def get_actuator_integration(self, actuator_name: str) -> Optional[str]:
-        """Get the integration that handles an actuator.
-
-        Args:
-            actuator_name: Name of the actuator.
-
-        Returns:
-            Optional[str]: Name of the integration, or None if not found.
-        """
+        """Get the integration that handles an actuator."""
         integration = self._actuators.get(actuator_name)
         if not integration:
             logger.warning(f"No integration found for actuator '{actuator_name}'")
-
         return integration
 
     def get_all_sensors(self) -> dict[str, str]:
-        """Get all registered sensors.
-
-        Returns:
-            Dict[str, str]: Map of sensor names to integration names.
-        """
+        """Get all registered sensors as name -> integration mapping."""
         return self._sensors.copy()
 
     def get_all_actuators(self) -> dict[str, str]:
-        """Get all registered actuators.
-
-        Returns:
-            Dict[str, str]: Map of actuator names to integration names.
-        """
+        """Get all registered actuators as name -> integration mapping."""
         return self._actuators.copy()
 
     def get_device_types(self) -> list[str]:
-        """Get all unique device types registered in the system.
-
-        Returns:
-            List[str]: List of device type names.
-        """
+        """Get all registered device types."""
         return list(self._device_type_actions.keys())
 
     def get_device_actions(self, device_type: str) -> list[str]:
-        """Get available actions for a specific device type.
-
-        Args:
-            device_type: The device type to get actions for.
-
-        Returns:
-            List[str]: List of supported actions for this device type.
-        """
+        """Get available actions for a device type."""
         return self._device_type_actions.get(device_type, [])
 
     def has_integration_for_action(self, action_key: str) -> bool:
-        """Check if there's an integration available for a specific action.
-
-        Args:
-            action_key: The action key to check for, typically in format 'action_target'.
-
-        Returns:
-            bool: True if an integration is available, False otherwise.
-        """
-        # Parse the action key to get action and target
+        """Check if there's an integration for an action key (format: action_target)."""
         try:
-            action, target = action_key.split("_", 1)
+            _, target = action_key.split("_", 1)
+            return target in self._actuators
         except ValueError:
             logger.warning(f"Invalid action key format: {action_key}")
             return False
 
-        # Check if we have an actuator with this name
-        return target in self._actuators
-
-    # =========================================================================
-    # New domain-aware query methods
-    # =========================================================================
-
     def get_device(self, entity_id: str) -> Optional[DeviceInfo]:
-        """Get device by entity_id.
-
-        Args:
-            entity_id: The entity ID (domain.name format).
-
-        Returns:
-            DeviceInfo if found, None otherwise.
-        """
+        """Get device by entity_id."""
         return self._devices.get(entity_id)
 
     def find_device(self, name: str, domain: Optional[str] = None) -> Optional[DeviceInfo]:
-        """Find a device by name, optionally scoped to a domain.
-
-        If domain is None, searches all domains. If multiple devices match,
-        logs a warning and returns the first match.
-
-        Args:
-            name: Device name to search for.
-            domain: Optional domain to scope the search.
-
-        Returns:
-            DeviceInfo if found, None otherwise.
-        """
+        """Find a device by name, optionally scoped to a domain."""
         if domain:
             return self._devices.get(f"{domain}.{name}")
 
-        # Search all domains
         matches = [d for d in self._devices.values() if d.name == name]
         if len(matches) > 1:
-            domains = [d.domain for d in matches]
             logger.warning(
-                f"Ambiguous device lookup for '{name}': found in domains {domains}. "
-                f"Use domain-qualified lookup for precision."
+                f"Ambiguous device lookup for '{name}': found in {[d.domain for d in matches]}. "
+                f"Use domain-qualified lookup."
             )
         return matches[0] if matches else None
 
     def get_devices_by_domain(self, domain: str) -> list[DeviceInfo]:
-        """Get all devices in a domain.
-
-        Args:
-            domain: The domain to query.
-
-        Returns:
-            List of DeviceInfo objects.
-        """
-        entity_ids = self._by_domain.get(domain, set())
-        return [self._devices[eid] for eid in entity_ids]
+        """Get all devices in a domain."""
+        return [self._devices[eid] for eid in self._by_domain.get(domain, set())]
 
     def get_devices_by_type(self, device_type: str) -> list[DeviceInfo]:
-        """Get all devices of a specific type across all domains.
-
-        Args:
-            device_type: The device type to query.
-
-        Returns:
-            List of DeviceInfo objects.
-        """
-        entity_ids = self._by_type.get(device_type, set())
-        return [self._devices[eid] for eid in entity_ids]
+        """Get all devices of a specific type."""
+        return [self._devices[eid] for eid in self._by_type.get(device_type, set())]
 
     def get_devices_by_integration(self, integration_name: str) -> list[DeviceInfo]:
-        """Get all devices managed by a specific integration.
-
-        Args:
-            integration_name: The integration class name.
-
-        Returns:
-            List of DeviceInfo objects.
-        """
-        entity_ids = self._by_integration.get(integration_name, set())
-        return [self._devices[eid] for eid in entity_ids]
+        """Get all devices managed by a specific integration."""
+        return [self._devices[eid] for eid in self._by_integration.get(integration_name, set())]
 
     def get_all_devices(self) -> list[DeviceInfo]:
-        """Get all registered devices.
-
-        Returns:
-            List of all DeviceInfo objects.
-        """
+        """Get all registered devices."""
         return list(self._devices.values())
 
     def get_all_entity_ids(self) -> list[str]:
-        """Get all registered entity IDs.
-
-        Returns:
-            List of entity IDs.
-        """
+        """Get all registered entity IDs."""
         return list(self._devices.keys())
 
     def clear(self) -> None:

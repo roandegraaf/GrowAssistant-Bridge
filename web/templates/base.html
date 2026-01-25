@@ -10,44 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <!-- Tailwind CSS via CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwindcss.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        surface: {
-                            base: '#050505',
-                            elevated: '#0a0a0a',
-                            DEFAULT: '#111111',
-                            hover: '#161616',
-                        },
-                        border: {
-                            subtle: '#1a1a1a',
-                            DEFAULT: '#262626',
-                            strong: '#333333',
-                        },
-                        brand: {
-                            DEFAULT: '#22c55e',
-                            hover: '#16a34a',
-                            muted: 'rgba(34, 197, 94, 0.12)',
-                            glow: 'rgba(34, 197, 94, 0.4)',
-                        }
-                    },
-                    fontFamily: {
-                        sans: ['Outfit', 'system-ui', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
-                    },
-                    animation: {
-                        'pulse-slow': 'pulse 3s ease-in-out infinite',
-                        'glow': 'glow 2s ease-in-out infinite',
-                    }
-                }
-            }
-        }
-    </script>
+    <!-- Tailwind CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.built.css') }}">
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">

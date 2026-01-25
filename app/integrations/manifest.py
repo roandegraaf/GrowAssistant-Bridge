@@ -67,16 +67,14 @@ class IntegrationManifest:
 
     def supports_sensors(self) -> bool:
         """Check if this integration supports sensors."""
-        return (
-            DeviceCategory.SENSOR in self.device_categories
-            or DeviceCategory.BOTH in self.device_categories
+        return any(
+            cat in self.device_categories for cat in (DeviceCategory.SENSOR, DeviceCategory.BOTH)
         )
 
     def supports_actuators(self) -> bool:
         """Check if this integration supports actuators."""
-        return (
-            DeviceCategory.ACTUATOR in self.device_categories
-            or DeviceCategory.BOTH in self.device_categories
+        return any(
+            cat in self.device_categories for cat in (DeviceCategory.ACTUATOR, DeviceCategory.BOTH)
         )
 
     def to_dict(self) -> dict[str, Any]:

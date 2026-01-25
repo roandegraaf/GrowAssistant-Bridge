@@ -23,6 +23,7 @@ A bridge application to connect various sensors and controllers for cannabis gro
 - Raspberry Pi (3B+ or newer recommended)
 - Raspberry Pi OS (64-bit recommended)
 - Python 3.9+
+- Node.js 18+ (for building frontend assets)
 - Dependencies listed in `requirements.txt`
 
 ## Installation on Raspberry Pi
@@ -42,7 +43,7 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 3. Install required system packages:
    ```bash
-   sudo apt install -y python3-pip python3-venv git
+   sudo apt install -y python3-pip python3-venv git nodejs npm
    ```
 
 ### 2. Clone and Setup the Application
@@ -62,6 +63,12 @@ A bridge application to connect various sensors and controllers for cannabis gro
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
+   ```
+
+4. Build frontend assets (requires Node.js):
+   ```bash
+   npm install
+   npm run build:css
    ```
 
 ### 3. GPIO Setup (if using GPIO features)
@@ -198,11 +205,11 @@ class MyIntegration(Integration):
     async def connect(self):
         # Implementation
         return True
-        
+
     async def send_data(self, data):
         # Implementation
         return True
-        
+
     async def receive_data(self):
         # Implementation
         yield {"value": 42}

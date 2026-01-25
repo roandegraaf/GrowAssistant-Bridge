@@ -113,7 +113,7 @@ venv.bak/
 *.sqlite3
 
 # Local configuration files
-config.local.yaml 
+config.local.yaml
 data/credentials.json
 .python-version
 
@@ -124,3 +124,4 @@ plan.md
 # macOS
 .DS_Store
 config.yaml
+/node_modules

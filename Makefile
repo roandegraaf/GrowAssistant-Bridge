@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test lint format typecheck run clean
+.PHONY: help install install-dev test lint format typecheck run clean build-css
 
 PYTHON := python3
 VENV := .venv
@@ -24,15 +24,22 @@ help:
 	@echo "Maintenance:"
 	@echo "  make clean            Remove cache files and directories"
 	@echo ""
+	@echo "Frontend:"
+	@echo "  make build-css        Build Tailwind CSS"
+	@echo ""
 	@echo "Quick Start:"
 	@echo "  ./setup-dev.sh        Setup development environment (one command)"
 	@echo ""
+
+build-css:
+	npm install
+	npm run build:css
 
 install:
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r requirements.txt
 
-install-dev: install
+install-dev: install build-css
 	$(PYTHON) -m pip install -r requirements-dev.txt
 	pre-commit install
 

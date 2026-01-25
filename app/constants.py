@@ -1,47 +1,26 @@
-"""
-Application Constants.
+"""Application constants replacing magic numbers throughout the codebase."""
 
-This module defines named constants to replace magic numbers throughout
-the application, improving readability and maintainability.
-"""
+# Timing Constants (seconds)
+DEFAULT_COLLECTION_INTERVAL = 60
+DEFAULT_POLL_INTERVAL = 30
+DEFAULT_TRANSMISSION_INTERVAL = 10
+DEFAULT_CONNECTION_TIMEOUT = 300
+DEFAULT_FLUSH_INTERVAL = 300
 
-# =============================================================================
-# Timing Constants (in seconds unless otherwise specified)
-# =============================================================================
+AUTH_POLL_INTERVAL = 5
+SPACE_CREATION_POLL_INTERVAL = 30
 
-# Default intervals
-DEFAULT_COLLECTION_INTERVAL = 60  # seconds between data collections
-DEFAULT_POLL_INTERVAL = 30  # seconds between API polls for commands
-DEFAULT_TRANSMISSION_INTERVAL = 10  # seconds between data transmissions
-DEFAULT_CONNECTION_TIMEOUT = 300  # seconds to wait for connection
-DEFAULT_FLUSH_INTERVAL = 300  # seconds between queue flushes (5 minutes)
+DEFAULT_HTTP_TIMEOUT = 30.0
+TASK_SHUTDOWN_TIMEOUT = 5.0
 
-# Polling intervals
-AUTH_POLL_INTERVAL = 5  # seconds between auth status checks
-SPACE_CREATION_POLL_INTERVAL = 30  # seconds between space creation checks
-
-# Timeouts
-DEFAULT_HTTP_TIMEOUT = 30.0  # seconds for HTTP requests
-TASK_SHUTDOWN_TIMEOUT = 5.0  # seconds to wait for task cancellation
-
-# Retry settings
 DEFAULT_RETRY_MAX_ATTEMPTS = 5
-DEFAULT_RETRY_MIN_BACKOFF = 1  # seconds
-DEFAULT_RETRY_MAX_BACKOFF = 60  # seconds
+DEFAULT_RETRY_MIN_BACKOFF = 1
+DEFAULT_RETRY_MAX_BACKOFF = 60
 
-
-# =============================================================================
 # Queue Constants
-# =============================================================================
-
 DEFAULT_MAX_QUEUE_SIZE = 10000
 DEFAULT_BATCH_SIZE = 100
-MAX_CONSECUTIVE_FAILURES = 5  # failures before re-checking auth
-
-
-# =============================================================================
-# API Constants
-# =============================================================================
+MAX_CONSECUTIVE_FAILURES = 5
 
 # HTTP Status Codes
 HTTP_OK = 200
@@ -51,21 +30,11 @@ HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
 HTTP_INTERNAL_ERROR = 500
 
-# Timestamp conversion
 MILLISECONDS_PER_SECOND = 1000
 
-
-# =============================================================================
 # Logging Constants
-# =============================================================================
-
 DEFAULT_LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-
-# =============================================================================
-# Sensor Value Ranges
-# =============================================================================
 
 
 class SensorRanges:
@@ -73,20 +42,12 @@ class SensorRanges:
 
     TEMPERATURE_MIN = -10
     TEMPERATURE_MAX = 50
-
     HUMIDITY_MIN = 0
     HUMIDITY_MAX = 100
-
     PH_MIN = 0
     PH_MAX = 14
-
     TANK_ML_MIN = 0
-    TANK_ML_MAX = None  # No maximum
-
-
-# =============================================================================
-# Problem Priority Levels
-# =============================================================================
+    TANK_ML_MAX = None
 
 
 class ProblemPriority:
@@ -98,19 +59,12 @@ class ProblemPriority:
     CRITICAL = 90
 
 
-# =============================================================================
 # Web Interface Constants
-# =============================================================================
-
 DEFAULT_WEB_HOST = "0.0.0.0"
 DEFAULT_WEB_PORT = 5010
 CONCURRENT_EXECUTOR_WORKERS = 10
 
-
-# =============================================================================
 # File Paths (relative to project root)
-# =============================================================================
-
 DEFAULT_CONFIG_FILE = "config.yaml"
 DEFAULT_LOG_FILE = "logs/app.log"
 DEFAULT_DATA_DIR = "data"

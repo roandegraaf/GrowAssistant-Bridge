@@ -37,58 +37,47 @@ class SerialIntegration(Integration):
             config: Configuration dictionary for Serial integration.
         """
         super().__init__(config)
-        self.serial = None
+        self.serial: serial.Serial | None = None
         self.serial_connected = False
         self.serial_lock = asyncio.Lock()
-        self.reader_task = None
-        self.read_buffer = []
+        self.reader_task: asyncio.Task | None = None
+        self.read_buffer: list[dict[str, Any]] = []
 
-        # Check if enabled
         if not self.config.get("enabled", False):
             logger.info("Serial Integration is disabled in configuration.")
             return
 
-        # Get configuration parameters
         self.port = self.config.get("port")
         if not self.port:
             logger.error("No serial port specified in configuration.")
             return
 
         self.baudrate = self.config.get("baudrate", 9600)
-        self.bytesize = self.config.get("bytesize", 8)
-        self.parity = self.config.get("parity", "N")
-        self.stopbits = self.config.get("stopbits", 1)
         self.timeout = self.config.get("timeout", 1)
 
-        # Convert bytesize to serial.EIGHTBITS, etc.
-        if self.bytesize == 5:
-            self.bytesize = serial.FIVEBITS
-        elif self.bytesize == 6:
-            self.bytesize = serial.SIXBITS
-        elif self.bytesize == 7:
-            self.bytesize = serial.SEVENBITS
-        else:
-            self.bytesize = serial.EIGHTBITS
+        bytesize_map = {
+            5: serial.FIVEBITS,
+            6: serial.SIXBITS,
+            7: serial.SEVENBITS,
+            8: serial.EIGHTBITS,
+        }
+        self.bytesize = bytesize_map.get(self.config.get("bytesize", 8), serial.EIGHTBITS)
 
-        # Convert parity to serial.PARITY_NONE, etc.
-        if self.parity == "E":
-            self.parity = serial.PARITY_EVEN
-        elif self.parity == "O":
-            self.parity = serial.PARITY_ODD
-        elif self.parity == "M":
-            self.parity = serial.PARITY_MARK
-        elif self.parity == "S":
-            self.parity = serial.PARITY_SPACE
-        else:
-            self.parity = serial.PARITY_NONE
+        parity_map = {
+            "E": serial.PARITY_EVEN,
+            "O": serial.PARITY_ODD,
+            "M": serial.PARITY_MARK,
+            "S": serial.PARITY_SPACE,
+            "N": serial.PARITY_NONE,
+        }
+        self.parity = parity_map.get(self.config.get("parity", "N"), serial.PARITY_NONE)
 
-        # Convert stopbits to serial.STOPBITS_ONE, etc.
-        if self.stopbits == 1.5:
-            self.stopbits = serial.STOPBITS_ONE_POINT_FIVE
-        elif self.stopbits == 2:
-            self.stopbits = serial.STOPBITS_TWO
-        else:
-            self.stopbits = serial.STOPBITS_ONE
+        stopbits_map = {
+            1: serial.STOPBITS_ONE,
+            1.5: serial.STOPBITS_ONE_POINT_FIVE,
+            2: serial.STOPBITS_TWO,
+        }
+        self.stopbits = stopbits_map.get(self.config.get("stopbits", 1), serial.STOPBITS_ONE)
 
         logger.info(f"Serial Integration initialized with port {self.port} at {self.baudrate} baud")
 
@@ -102,15 +91,14 @@ class SerialIntegration(Integration):
             return False
 
         try:
-            # Check if port exists
             available_ports = [p.device for p in serial.tools.list_ports.comports()]
             if self.port not in available_ports:
                 logger.error(
-                    f"Serial port {self.port} not found. Available ports: {', '.join(available_ports)}"
+                    f"Serial port {self.port} not found. "
+                    f"Available ports: {', '.join(available_ports)}"
                 )
                 return False
 
-            # Create serial connection
             self.serial = serial.Serial(
                 port=self.port,
                 baudrate=self.baudrate,
@@ -120,16 +108,13 @@ class SerialIntegration(Integration):
                 timeout=self.timeout,
             )
 
-            # Open the port if it's not already open
             if not self.serial.is_open:
                 self.serial.open()
 
             self.serial_connected = True
             logger.info(f"Connected to serial port {self.port}")
 
-            # Start reader task
             self.reader_task = asyncio.create_task(self._read_serial())
-
             return True
 
         except Exception as e:
@@ -144,27 +129,28 @@ class SerialIntegration(Integration):
         """Background task to continuously read from the serial port."""
         while self.serial_connected and self.serial and self.serial.is_open:
             try:
-                # Check if there's data available to read
-                if self.serial.in_waiting:
-                    async with self.serial_lock:
-                        line = self.serial.readline().decode("utf-8", errors="replace").strip()
-                        if line:
-                            logger.debug(f"Received from serial: {line}")
-                            # Try to parse as JSON
-                            try:
-                                data = json.loads(line)
-                                # Add timestamp if not present
-                                if "timestamp" not in data:
-                                    data["timestamp"] = time.time()
-                                self.read_buffer.append(data)
-                            except json.JSONDecodeError:
-                                # If not JSON, store as plain text
-                                self.read_buffer.append({"timestamp": time.time(), "data": line})
-                # Yield control to other tasks
-                await asyncio.sleep(0.1)
+                if not self.serial.in_waiting:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                async with self.serial_lock:
+                    line = self.serial.readline().decode("utf-8", errors="replace").strip()
+
+                if not line:
+                    continue
+
+                logger.debug(f"Received from serial: {line}")
+                try:
+                    data = json.loads(line)
+                    data.setdefault("timestamp", time.time())
+                except json.JSONDecodeError:
+                    data = {"timestamp": time.time(), "data": line}
+
+                self.read_buffer.append(data)
+
             except Exception as e:
                 logger.error(f"Error reading from serial port: {e}")
-                await asyncio.sleep(1)  # Longer delay after error
+                await asyncio.sleep(1)
 
     async def send_data(self, data: dict[str, Any]) -> bool:
         """Send data to the serial device.
@@ -182,27 +168,19 @@ class SerialIntegration(Integration):
             return False
 
         payload = data.get("payload")
-        add_newline = data.get("add_newline", True)
-
         if payload is None:
             logger.error("No payload provided in serial data")
             return False
 
         try:
-            # Convert payload to string if it's a dict or list
-            if isinstance(payload, (dict, list)):
-                payload_str = json.dumps(payload)
-            else:
-                payload_str = str(payload)
+            payload_str = json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
 
-            # Add newline if requested
-            if add_newline and not payload_str.endswith("\n"):
+            if data.get("add_newline", True) and not payload_str.endswith("\n"):
                 payload_str += "\n"
 
-            # Send data
             async with self.serial_lock:
                 bytes_written = self.serial.write(payload_str.encode("utf-8"))
-                self.serial.flush()  # Ensure all data is written
+                self.serial.flush()
 
             logger.debug(f"Sent {bytes_written} bytes to serial port: {payload_str.strip()}")
             return True
@@ -221,12 +199,23 @@ class SerialIntegration(Integration):
             logger.error("Serial not connected. Cannot receive data.")
             return
 
-        # Return all data in the buffer
         buffer_copy = self.read_buffer.copy()
-        self.read_buffer = []
+        self.read_buffer.clear()
 
         for data in buffer_copy:
             yield data
+
+    async def get_device_data(self) -> dict[str, Any]:
+        """Get the current data/state for the serial device.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing the latest buffered data.
+        """
+        return {
+            "connected": self.serial_connected,
+            "buffer_size": len(self.read_buffer),
+            "latest": self.read_buffer[-1] if self.read_buffer else None,
+        }
 
     async def close(self):
         """Close the serial connection."""
@@ -246,18 +235,6 @@ class SerialIntegration(Integration):
 
         self.serial_connected = False
 
-    def register_capabilities(self, registry: "DeviceRegistry") -> None:
-        """Register serial device capabilities with the device registry.
-
-        Uses the default implementation that handles 'devices' config.
-
-        Args:
-            registry: The DeviceRegistry instance to register with.
-        """
-        # Use the default implementation from base class
-        # which handles the 'devices' configuration pattern
-        super().register_capabilities(registry)
-
     async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
         """Execute a command via serial.
 
@@ -269,15 +246,9 @@ class SerialIntegration(Integration):
         Returns:
             bool: True if successful.
         """
-        serial_payload = {
-            "target": target_id,
-            "action": action,
-            **payload,
-        }
-
         return await self.send_data(
             {
-                "payload": serial_payload,
+                "payload": {"target": target_id, "action": action, **payload},
             }
         )
 

@@ -6,15 +6,24 @@ to prevent security issues like injection attacks.
 """
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 # Safe patterns for common input types
 SAFE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 SAFE_PATH_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
 UUID_PATTERN = re.compile(r"^[a-fA-F0-9\-]{36}$")
+URL_PATTERN = re.compile(
+    r"^https?://"  # http:// or https://
+    r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain
+    r"localhost|"  # localhost
+    r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # or IP
+    r"(?::\d+)?"  # optional port
+    r"(?:/?|[/?]\S+)$",
+    re.IGNORECASE,
+)
 
 
-def validate_name(name: str, max_length: int = 255) -> tuple[bool, Optional[str]]:
+def validate_name(name: str, max_length: int = 255) -> tuple[bool, str | None]:
     """Validate a name/identifier string.
 
     Args:
@@ -39,7 +48,7 @@ def validate_name(name: str, max_length: int = 255) -> tuple[bool, Optional[str]
     return True, None
 
 
-def validate_path(path: str, max_length: int = 1024) -> tuple[bool, Optional[str]]:
+def validate_path(path: str, max_length: int = 1024) -> tuple[bool, str | None]:
     """Validate a file path string.
 
     Args:
@@ -65,7 +74,7 @@ def validate_path(path: str, max_length: int = 1024) -> tuple[bool, Optional[str
     return True, None
 
 
-def validate_uuid(uuid_str: str) -> tuple[bool, Optional[str]]:
+def validate_uuid(uuid_str: str) -> tuple[bool, str | None]:
     """Validate a UUID string.
 
     Args:
@@ -84,8 +93,8 @@ def validate_uuid(uuid_str: str) -> tuple[bool, Optional[str]]:
 
 
 def validate_integer(
-    value: Any, min_value: Optional[int] = None, max_value: Optional[int] = None
-) -> tuple[bool, Optional[str], Optional[int]]:
+    value: Any, min_value: int | None = None, max_value: int | None = None
+) -> tuple[bool, str | None, int | None]:
     """Validate and convert an integer value.
 
     Args:
@@ -111,8 +120,8 @@ def validate_integer(
 
 
 def validate_float(
-    value: Any, min_value: Optional[float] = None, max_value: Optional[float] = None
-) -> tuple[bool, Optional[str], Optional[float]]:
+    value: Any, min_value: float | None = None, max_value: float | None = None
+) -> tuple[bool, str | None, float | None]:
     """Validate and convert a float value.
 
     Args:
@@ -159,7 +168,7 @@ def sanitize_string(value: str, max_length: int = 1000) -> str:
     return sanitized.strip()
 
 
-def validate_url(url: str) -> tuple[bool, Optional[str]]:
+def validate_url(url: str) -> tuple[bool, str | None]:
     """Validate a URL string.
 
     Args:
@@ -171,18 +180,7 @@ def validate_url(url: str) -> tuple[bool, Optional[str]]:
     if not url:
         return False, "URL cannot be empty"
 
-    # Basic URL pattern
-    url_pattern = re.compile(
-        r"^https?://"  # http:// or https://
-        r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain
-        r"localhost|"  # localhost
-        r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # or IP
-        r"(?::\d+)?"  # optional port
-        r"(?:/?|[/?]\S+)$",
-        re.IGNORECASE,
-    )
-
-    if not url_pattern.match(url):
+    if not URL_PATTERN.match(url):
         return False, "Invalid URL format"
 
     return True, None

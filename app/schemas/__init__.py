@@ -7,6 +7,7 @@ This module provides Pydantic schemas for validating integration configurations.
 from app.schemas.config_schemas import (
     BaseIntegrationConfig,
     DeviceConfig,
+    GenericIntegrationConfig,
     GPIOIntegrationConfig,
     GPIOPinConfig,
     HTTPEndpointConfig,
@@ -14,16 +15,19 @@ from app.schemas.config_schemas import (
     MQTTIntegrationConfig,
     MQTTTopicConfig,
     SerialIntegrationConfig,
+    validate_integration_config,
 )
 
 __all__ = [
-    "GPIOPinConfig",
+    "BaseIntegrationConfig",
+    "DeviceConfig",
+    "GenericIntegrationConfig",
     "GPIOIntegrationConfig",
-    "MQTTTopicConfig",
-    "MQTTIntegrationConfig",
+    "GPIOPinConfig",
     "HTTPEndpointConfig",
     "HTTPIntegrationConfig",
+    "MQTTIntegrationConfig",
+    "MQTTTopicConfig",
     "SerialIntegrationConfig",
-    "DeviceConfig",
-    "BaseIntegrationConfig",
+    "validate_integration_config",
 ]

@@ -91,6 +91,17 @@ else
 fi
 echo ""
 
+# Build Tailwind CSS
+echo -e "${YELLOW}Building Tailwind CSS...${NC}"
+if command -v npm &> /dev/null; then
+    npm install > /dev/null 2>&1
+    npm run build:css > /dev/null 2>&1
+    echo -e "${GREEN}✓ Tailwind CSS built${NC}"
+else
+    echo -e "${YELLOW}Warning: npm not available, skipping CSS build${NC}"
+fi
+echo ""
+
 # Run tests to verify setup
 echo -e "${YELLOW}Running tests to verify setup...${NC}"
 echo ""
