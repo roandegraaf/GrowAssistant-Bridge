@@ -433,10 +433,10 @@ class ApiClient(metaclass=SingletonMeta):
                 return []
 
             response.raise_for_status()
-            commands = response.json().get("commands", [])
-            if commands:
-                logger.info(f"Received {len(commands)} commands from API")
-            return commands
+            actions = response.json().get("actions", [])
+            if actions:
+                logger.info(f"Received {len(actions)} actions from API")
+            return actions
 
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -490,7 +490,7 @@ class ApiClient(metaclass=SingletonMeta):
         if not client_id:
             return False
 
-        url = f"{self._base_url}/client/{client_id}/commands/{command_id}/result"
+        url = f"{self._base_url}/client/{client_id}/actions/{command_id}/result"
 
         try:
             data = {

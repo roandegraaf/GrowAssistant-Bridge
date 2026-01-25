@@ -10,7 +10,10 @@ const Dashboard = {
     modalIsOpen: false,
     lastModalUpdateTime: null,
     modalRefreshInterval: null,
+    countdownInterval: null,
     deviceDataRequestActive: false,
+    codeGeneratedTime: null,
+    CODE_TIMEOUT_MS: 5 * 60 * 1000, // 5 minutes in milliseconds
 
     /**
      * Initialize the dashboard
@@ -25,6 +28,10 @@ const Dashboard = {
                 connected: false,
                 ready: false
             };
+            // Set code generation time if not already set (initial page load)
+            if (!this.codeGeneratedTime) {
+                this.codeGeneratedTime = Date.now();
+            }
             this.updateConnectionState();
             this.updateStatusBanner();
         }
@@ -96,6 +103,28 @@ const Dashboard = {
     async loadConnectionStatus() {
         try {
             const data = await API.get('/api/connection-status');
+
+            // If we're in registration state and don't have a timer yet, start one
+            if (data.status === 'registration' && !this.codeGeneratedTime) {
+                this.codeGeneratedTime = Date.now();
+            }
+
+            // Check for client-side timeout when in registration state
+            if (data.status === 'registration' && this.codeGeneratedTime) {
+                const elapsed = Date.now() - this.codeGeneratedTime;
+                if (elapsed >= this.CODE_TIMEOUT_MS) {
+                    // Code has expired on client side
+                    data.status = 'connection_timeout';
+                    data.message = 'Connection polling timed out. Click "Get New Code" to try again.';
+                    this.codeGeneratedTime = null;
+                }
+            }
+
+            // Clear timer when no longer in registration state (except timeout)
+            if (data.status !== 'registration' && data.status !== 'connection_timeout') {
+                this.codeGeneratedTime = null;
+            }
+
             this.connectionStatus = data;
             this.updateConnectionState();
 
@@ -136,6 +165,10 @@ const Dashboard = {
             case 'registration':
                 stateText = 'Registration';
                 iconClass = 'warning';
+                break;
+            case 'connection_timeout':
+                stateText = 'Timed Out';
+                iconClass = 'error';
                 break;
             case 'not_registered':
             case 'not_connected':
@@ -200,6 +233,12 @@ const Dashboard = {
                 alertDiv.classList.add('alert-info');
                 message.innerHTML = '<strong>Registration Required!</strong> Connect this device to your GrowAssistant account.';
                 actionButton.textContent = 'View Code';
+                break;
+
+            case 'connection_timeout':
+                alertDiv.classList.add('alert-warning');
+                message.innerHTML = '<strong>Connection Timed Out!</strong> The connection code has expired. Get a new code to try again.';
+                actionButton.textContent = 'Get New Code';
                 break;
 
             case 'not_registered':
@@ -568,12 +607,110 @@ function closeConnectionModal() {
         clearInterval(Dashboard.modalRefreshInterval);
         Dashboard.modalRefreshInterval = null;
     }
+    if (Dashboard.countdownInterval) {
+        clearInterval(Dashboard.countdownInterval);
+        Dashboard.countdownInterval = null;
+    }
 }
 
 function refreshConnectionStatus() {
     Dashboard.loadConnectionStatus().then(() => {
         updateConnectionStatusModal();
     });
+}
+
+function ensureCountdownTimer() {
+    // Only start if not already running
+    if (Dashboard.countdownInterval) {
+        return;
+    }
+
+    // Update every second
+    Dashboard.countdownInterval = setInterval(() => {
+        if (!Dashboard.modalIsOpen || !Dashboard.codeGeneratedTime) {
+            clearInterval(Dashboard.countdownInterval);
+            Dashboard.countdownInterval = null;
+            return;
+        }
+        updateCountdownDisplay();
+    }, 1000);
+}
+
+function updateCountdownDisplay() {
+    const countdownEl = document.getElementById('code-countdown');
+    if (!countdownEl || !Dashboard.codeGeneratedTime) return;
+
+    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
+    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
+
+    if (remaining <= 0) {
+        countdownEl.innerHTML = '<span class="text-red-400">Code expired - click below for a new code</span>';
+        // Trigger a status refresh to show timeout state
+        Dashboard.loadConnectionStatus();
+        clearInterval(Dashboard.countdownInterval);
+        Dashboard.countdownInterval = null;
+        return;
+    }
+
+    const minutes = Math.floor(remaining / 60000);
+    const seconds = Math.floor((remaining % 60000) / 1000);
+    countdownEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+async function requestNewCode() {
+    const btn = document.getElementById('request-new-code-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner" style="width: 16px; height: 16px; margin-right: 8px;"></span> Generating...';
+    }
+
+    try {
+        const response = await API.post('/api/request-new-code', {});
+
+        if (response.success && response.auth_code) {
+            // Track when the code was generated for client-side timeout
+            Dashboard.codeGeneratedTime = Date.now();
+
+            // Update the connection status with the new code
+            Dashboard.connectionStatus = {
+                status: 'registration',
+                auth_code: response.auth_code,
+                authenticated: false,
+                connected: false,
+                ready: false
+            };
+            Dashboard.updateConnectionState();
+            updateConnectionStatusModal();
+        } else {
+            // Show error in modal
+            const modalContent = document.getElementById('connection-status-content');
+            modalContent.innerHTML = `
+                <div class="text-center">
+                    <div class="alert alert-error mb-4">
+                        <strong>Error</strong>
+                        <p class="text-sm opacity-80">${response.error || 'Failed to generate new code'}</p>
+                    </div>
+                    <button onclick="requestNewCode()" class="btn btn-primary">
+                        Try Again
+                    </button>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error requesting new code:', error);
+        const modalContent = document.getElementById('connection-status-content');
+        modalContent.innerHTML = `
+            <div class="text-center">
+                <div class="alert alert-error mb-4">
+                    <strong>Error</strong>
+                    <p class="text-sm opacity-80">${error.message || 'Failed to connect to server'}</p>
+                </div>
+                <button onclick="requestNewCode()" class="btn btn-primary">
+                    Try Again
+                </button>
+            </div>
+        `;
+    }
 }
 
 function updateConnectionStatusModal() {
@@ -635,6 +772,15 @@ function updateConnectionStatusModal() {
         case 'registration':
             const authCode = status.auth_code || (typeof serverAuthCode !== 'undefined' ? serverAuthCode : '');
             if (authCode) {
+                // Calculate countdown inline to avoid flicker
+                let countdownText = '';
+                if (Dashboard.codeGeneratedTime) {
+                    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
+                    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
+                    const minutes = Math.floor(remaining / 60000);
+                    const seconds = Math.floor((remaining % 60000) / 1000);
+                    countdownText = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
+                }
                 content = `
                     <div class="text-center">
                         <div class="alert alert-info mb-6">
@@ -643,8 +789,11 @@ function updateConnectionStatusModal() {
                         </div>
                         <div class="auth-code mb-6">${authCode}</div>
                         <p class="text-zinc-400 text-sm">Status: Waiting for connection...</p>
+                        <p id="code-countdown" class="text-amber-400 font-medium mt-4">${countdownText}</p>
                     </div>
                 `;
+                // Ensure countdown timer is running (won't restart if already running)
+                ensureCountdownTimer();
             } else {
                 content = `
                     <div class="text-center">
@@ -656,6 +805,21 @@ function updateConnectionStatusModal() {
                     </div>
                 `;
             }
+            break;
+
+        case 'connection_timeout':
+            content = `
+                <div class="text-center">
+                    <div class="alert alert-warning mb-6">
+                        <strong>Connection Timed Out</strong>
+                        <p class="text-sm opacity-80">The connection code has expired</p>
+                    </div>
+                    <p class="text-zinc-400 mb-6">The previous code is no longer valid. Click the button below to generate a new code and try again.</p>
+                    <button onclick="requestNewCode()" class="btn btn-primary" id="request-new-code-btn">
+                        Get New Code
+                    </button>
+                </div>
+            `;
             break;
 
         case 'connected':
@@ -693,6 +857,15 @@ function updateConnectionStatusModal() {
         case 'not_registered':
             const modalAuthCode = (typeof serverAuthCode !== 'undefined' ? serverAuthCode : '') || (status && status.auth_code);
             if (modalAuthCode) {
+                // Calculate countdown inline to avoid flicker
+                let notConnectedCountdown = '';
+                if (Dashboard.codeGeneratedTime) {
+                    const elapsed = Date.now() - Dashboard.codeGeneratedTime;
+                    const remaining = Math.max(0, Dashboard.CODE_TIMEOUT_MS - elapsed);
+                    const minutes = Math.floor(remaining / 60000);
+                    const seconds = Math.floor((remaining % 60000) / 1000);
+                    notConnectedCountdown = `Code expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
+                }
                 content = `
                     <div class="text-center">
                         <div class="alert alert-info mb-6">
@@ -701,8 +874,11 @@ function updateConnectionStatusModal() {
                         </div>
                         <div class="auth-code mb-6">${modalAuthCode}</div>
                         <p class="text-zinc-400 text-sm">Device not connected. Enter this code to connect.</p>
+                        <p id="code-countdown" class="text-amber-400 font-medium mt-4">${notConnectedCountdown}</p>
                     </div>
                 `;
+                // Ensure countdown timer is running (won't restart if already running)
+                ensureCountdownTimer();
             } else {
                 content = `
                     <div class="text-center">

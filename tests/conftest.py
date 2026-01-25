@@ -441,3 +441,84 @@ def temp_credentials_file(
         json.dump(sample_credentials, f)
 
     yield credentials_file
+
+
+# =============================================================================
+# Application Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_integration():
+    """Mock integration instance for Application tests."""
+    integration = AsyncMock()
+    integration.name = "test_integration"
+    integration.connect = AsyncMock(return_value=True)
+    integration.disconnect = AsyncMock()
+    integration.execute_command = AsyncMock(return_value=True)
+    integration.apply_settings = AsyncMock()
+    integration.register_capabilities = MagicMock()
+
+    async def receive_data_generator():
+        yield {"type": "temperature", "value": 25.5, "device": "sensor1"}
+
+    integration.receive_data = MagicMock(return_value=receive_data_generator())
+    return integration
+
+
+@pytest.fixture
+def mock_application_dependencies(mock_config, mock_httpx_client):
+    """Set up all mocked dependencies for Application tests.
+
+    Returns a dictionary containing all mocked singletons and dependencies
+    needed for testing the Application class.
+    """
+    from unittest.mock import patch
+
+    mocks = {}
+
+    # Mock auth_manager
+    mock_auth = AsyncMock()
+    mock_auth.start = AsyncMock()
+    mock_auth.stop = AsyncMock()
+    mock_auth.is_authenticated = MagicMock(return_value=True)
+    mock_auth.is_ready_for_data = MagicMock(return_value=True)
+    mock_auth.validate_credentials = AsyncMock(return_value=True)
+    mock_auth.register_client = AsyncMock(return_value=True)
+    mock_auth.wait_for_connection = AsyncMock(return_value=True)
+    mock_auth.wait_for_space_creation = AsyncMock(return_value=True)
+    mock_auth.check_connection_status = AsyncMock(return_value=(True, "ready"))
+    mock_auth.display_auth_code = MagicMock()
+    mocks["auth_manager"] = mock_auth
+
+    # Mock api_client
+    mock_api = AsyncMock()
+    mock_api.start = AsyncMock()
+    mock_api.stop = AsyncMock()
+    mock_api.start_command_polling = AsyncMock()
+    mock_api.register_settings_callback = MagicMock()
+    mock_api.send_data = AsyncMock(return_value=(True, "Success"))
+    mock_api.get_command = AsyncMock(return_value=None)
+    mock_api.send_command_result = AsyncMock()
+    mocks["api_client"] = mock_api
+
+    # Mock queue_manager
+    mock_queue = AsyncMock()
+    mock_queue.start = AsyncMock()
+    mock_queue.stop = AsyncMock()
+    mock_queue.put = AsyncMock()
+    mock_queue.get_data_points = AsyncMock(return_value=[])
+    mock_queue.mark_processed = AsyncMock()
+    mock_queue.requeue_data_points = AsyncMock()
+    mocks["queue_manager"] = mock_queue
+
+    # Mock registry
+    mock_registry = MagicMock()
+    mock_registry.get_sensor_integration = MagicMock(return_value=None)
+    mock_registry.get_actuator_integration = MagicMock(return_value=None)
+    mocks["registry"] = mock_registry
+
+    # Mock config
+    mocks["config"] = mock_config
+
+    return mocks

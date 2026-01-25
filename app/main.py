@@ -145,9 +145,10 @@ class Application:
 
         connection_timeout = config.get("api.connection_timeout", 300)
         if not await auth_manager.wait_for_connection(connection_timeout):
-            print("\nTimeout waiting for connection. Please try again.\n")
-            await asyncio.sleep(2)
-            sys.exit(1)
+            print("\nTimeout waiting for connection.")
+            print("You can get a new code from the web interface.\n")
+            logger.info("Connection polling timed out - app will continue running")
+            return  # Don't exit, just return and let the app continue
 
         print("\nConnection successful! Client connected to your environment.\n")
 

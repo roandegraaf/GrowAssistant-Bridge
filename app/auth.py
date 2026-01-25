@@ -44,6 +44,7 @@ class AuthManager(metaclass=SingletonMeta):
         self._credentials: Optional[dict] = None
         self._auth_code: Optional[str] = None
         self._client_id: Optional[str] = None
+        self._connection_timed_out: bool = False
 
         logger.info("Authentication manager initialized")
 
@@ -188,6 +189,43 @@ class AuthManager(metaclass=SingletonMeta):
         """Get the authentication code for connecting to the app."""
         return self._auth_code
 
+    def is_connection_timed_out(self) -> bool:
+        """Check if the connection polling has timed out."""
+        return self._connection_timed_out
+
+    def set_connection_timed_out(self, timed_out: bool) -> None:
+        """Set the connection timeout state."""
+        self._connection_timed_out = timed_out
+        if timed_out:
+            logger.info("Connection polling timed out")
+        else:
+            logger.info("Connection timeout state cleared")
+
+    async def request_new_code(self) -> bool:
+        """Request a new authentication code by re-registering the client.
+
+        This clears the timeout state and registers a new client with the API.
+        Returns True if successful, False otherwise.
+        """
+        logger.info("Requesting new authentication code...")
+        self._connection_timed_out = False
+        self._auth_code = None
+
+        # Clear existing credentials to force re-registration
+        self._credentials = None
+        self._client_id = None
+
+        # Delete the credentials file if it exists
+        if os.path.exists(self._credentials_file):
+            try:
+                os.remove(self._credentials_file)
+                logger.info("Removed old credentials file")
+            except Exception as e:
+                logger.error(f"Error removing credentials file: {e}")
+
+        # Register a new client
+        return await self.register_client()
+
     def display_auth_code(self) -> None:
         """Display the authentication code in a user-friendly format."""
         if not self._auth_code:
@@ -248,16 +286,19 @@ to connect this client to your environment.
     async def wait_for_connection(self, timeout: Optional[float] = None) -> bool:
         """Wait for the client to be connected to an environment."""
         start_time = asyncio.get_event_loop().time()
+        self._connection_timed_out = False
 
         while True:
             connected, _ = await self.check_connection_status()
             if connected:
+                self._connection_timed_out = False
                 return True
 
             if timeout is not None:
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed >= timeout:
                     logger.warning(f"Connection timeout after {elapsed:.1f} seconds")
+                    self._connection_timed_out = True
                     return False
 
             await asyncio.sleep(AUTH_POLL_INTERVAL)

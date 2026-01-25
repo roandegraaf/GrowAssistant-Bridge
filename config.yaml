@@ -7,7 +7,7 @@ api:
   retry_max_backoff: 60
   retry_min_backoff: 1
   transmission_interval: 10
-  url: http://192.168.1.231:8080
+  url: http://localhost:8080
 general:
   api_logs_dir: logs/api
   collection_interval: 10

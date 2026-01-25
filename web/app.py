@@ -637,14 +637,27 @@ async def _check_auth_status(api_initialized: bool) -> dict:
         )
 
     auth_code = auth_manager.get_auth_code()
+    connection_timed_out = auth_manager.is_connection_timed_out()
+
+    # Check if we timed out waiting for connection (before checking authenticated status)
+    # This takes priority because even with credentials, the connection may have timed out
+    if connection_timed_out:
+        return _build_status_response(
+            status="connection_timeout",
+            message="Connection polling timed out. Click 'Get New Code' to try again.",
+            api_initialized=api_initialized,
+        )
+
+    # If we have an auth code, we're still in registration phase waiting for the user
+    # to enter the code - regardless of whether credentials are saved
+    if auth_code:
+        return _build_status_response(
+            status="registration",
+            auth_code=auth_code,
+            api_initialized=api_initialized,
+        )
 
     if not auth_manager.is_authenticated():
-        if auth_code:
-            return _build_status_response(
-                status="registration",
-                auth_code=auth_code,
-                api_initialized=api_initialized,
-            )
         return _build_status_response(
             status="not_registered",
             api_initialized=api_initialized,
@@ -657,7 +670,6 @@ async def _check_auth_status(api_initialized: bool) -> dict:
         status=status,
         ready=auth_manager.is_ready_for_data(),
         api_initialized=api_initialized,
-        auth_code=auth_code,
         client_id=auth_manager.get_client_id(),
     )
 
@@ -704,6 +716,53 @@ def get_connection_status():
                 error=str(e),
             )
         ), 500
+
+
+async def _request_new_auth_code() -> dict:
+    """Request a new authentication code asynchronously."""
+    success = await auth_manager.request_new_code()
+    if success:
+        return {
+            "success": True,
+            "auth_code": auth_manager.get_auth_code(),
+            "message": "New authentication code generated",
+        }
+    return {
+        "success": False,
+        "error": "Failed to generate new authentication code",
+    }
+
+
+@app.route("/api/request-new-code", methods=["POST"])
+@login_required
+def request_new_code():
+    """Request a new authentication code after timeout.
+
+    This endpoint clears the timeout state and generates a new auth code,
+    allowing the user to retry the connection process without restarting the app.
+    """
+    try:
+        app_instance = current_app.config.get("APPLICATION_INSTANCE")
+        if app_instance is None or not getattr(app_instance, "loop", None):
+            return jsonify({"error": "Application is not fully initialized"}), 503
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                _request_new_auth_code(),
+                app_instance.loop,
+            )
+            result = future.result(timeout=10.0)
+
+            if result.get("success"):
+                return jsonify(result)
+            return jsonify(result), 500
+
+        except concurrent.futures.TimeoutError:
+            return jsonify({"error": "Request timed out"}), 504
+
+    except Exception as e:
+        logger.exception("Error requesting new code: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 
 def _ensure_secret_key() -> str:
