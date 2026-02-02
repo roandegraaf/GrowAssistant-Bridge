@@ -50,8 +50,8 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/grow-assistant.git
-   cd grow-assistant
+   git clone https://github.com/roandegraaf/GrowAssistant-Bridge.git
+   cd GrowAssistant-Bridge
    ```
 
 2. Create and activate a virtual environment:
@@ -87,61 +87,77 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 ### 4. Configuration
 
-1. Create and edit the configuration file:
+1. Copy the example configuration file:
+   ```bash
+   cp config.example.yaml config.yaml
+   ```
+
+2. Edit the configuration file:
    ```bash
    nano config.yaml
    ```
 
-2. Configure the following sections in `config.yaml`:
+3. Configure the following sections in `config.yaml`:
 
    **API Configuration:**
    ```yaml
    api:
-     url: https://api.growassistant.app/prod  # The GrowAssistant API url
+     url: https://api.growassistant.app/prod  # The GrowAssistant API URL
      batch_size: 100                          # Number of data points to send in one batch
-     poll_interval: 30                        # How often to check for new commands
-     transmission_interval: 60                # How often to send data to the API
-     log_values: true                        # Enable detailed API value logging
+     poll_interval: 5                         # How often to check for new commands (seconds)
+     transmission_interval: 10                # How often to send data to the API (seconds)
+     connection_timeout: 300                  # Timeout for initial connection (seconds)
+     log_values: true                         # Enable detailed API value logging
+     retry_max_attempts: 5                    # Max retry attempts for failed requests
+     retry_min_backoff: 1                     # Minimum backoff between retries (seconds)
+     retry_max_backoff: 60                    # Maximum backoff between retries (seconds)
    ```
 
    **General Settings:**
    ```yaml
    general:
-     collection_interval: 60                  # How often to collect data from sensors
-     data_dir: data                          # Directory for persistent data
-     log_file: logs/app.log                  # Main application log file
-     log_level: INFO                         # Logging level (DEBUG, INFO, WARNING, ERROR)
-     api_logs_dir: logs/api                  # Directory for API value logs
+     collection_interval: 10                  # How often to collect data from sensors (seconds)
+     data_dir: data                           # Directory for persistent data
+     log_file: logs/app.log                   # Main application log file
+     log_level: INFO                          # Logging level (DEBUG, INFO, WARNING, ERROR)
+     api_logs_dir: logs/api_values            # Directory for API value logs
      external_integrations_dir: external_integrations  # Directory for custom integrations
    ```
 
    **Queue Settings:**
    ```yaml
    queue:
-     max_queue_size: 10000                   # Maximum number of items in queue
-     flush_interval: 300                     # How often to flush queue to disk
-     persistence_enabled: true               # Enable queue persistence
-     persistence_file: data/queue.db         # Queue database file
+     max_queue_size: 10000                    # Maximum number of items in queue
+     flush_interval: 300                      # How often to flush queue to disk (seconds)
+     persistence_enabled: true                # Enable queue persistence
+     persistence_file: data/queue.db          # Queue database file
    ```
 
    **Web Interface Settings:**
    ```yaml
    web:
      enabled: true
-     host: 0.0.0.0                          # Listen on all interfaces
+     host: 127.0.0.1                          # Use 0.0.0.0 to allow external access
      port: 5000
+     debug: false                             # Enable debug mode (not for production)
      auth_enabled: true
      username: admin
-     password_hash: <generate-using-python>  # Generate using the provided script
-     ssl_enabled: false                      # Enable for HTTPS
+     password_hash: ''                        # Set via web interface on first setup
+     secret_key: ''                           # Auto-generated on first run if empty
+     ssl_enabled: false                       # Enable for HTTPS
+     ssl_cert: ''                             # Path to SSL certificate
+     ssl_key: ''                              # Path to SSL private key
    ```
 
-3. For security, generate a new password hash:
+4. **Password Setup:**
+
+   The password is typically set through the web interface on first setup. Alternatively, you can generate a password hash manually:
    ```bash
    python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your-password'))"
    ```
+   Then paste the generated hash into `password_hash` in your config.yaml.
 
-4. Important Raspberry Pi Configuration Notes:
+5. Important Raspberry Pi Configuration Notes:
    - When using GPIO, ensure pins are correctly configured for your specific hardware setup
    - For I2C sensors, verify the correct I2C address in your configuration
    - Consider using a lower `collection_interval` for critical sensors
@@ -171,9 +187,9 @@ A bridge application to connect various sensors and controllers for cannabis gro
    [Service]
    Type=simple
    User=pi
-   WorkingDirectory=/home/pi/grow-assistant
-   Environment=PATH=/home/pi/grow-assistant/venv/bin
-   ExecStart=/home/pi/grow-assistant/venv/bin/python -m app.main
+   WorkingDirectory=/home/pi/GrowAssistant-Bridge
+   Environment=PATH=/home/pi/GrowAssistant-Bridge/venv/bin
+   ExecStart=/home/pi/GrowAssistant-Bridge/venv/bin/python -m app.main
    Restart=always
 
    [Install]
@@ -242,8 +258,7 @@ For more details, see the [Custom Integrations Guide](docs/custom_integrations.m
 The application maintains several log files:
 
 - `logs/app.log`: Main application log file
-- `logs/web.log`: Web interface log file
-- `logs/api/`: Individual log files for each value sent to the API
+- `logs/api_values/`: Individual log files for each value sent to the API
 
 The API value logs contain detailed information about each value sent to the external API, including:
 - The data sent
@@ -260,11 +275,24 @@ These logs are useful for debugging API communication issues and tracking the hi
 │   ├── __init__.py           # Package initialization
 │   ├── main.py               # Main application entry point
 │   ├── config.py             # Configuration handling
-│   ├── api_client.py         # API client for Home Assistant
+│   ├── api_client.py         # API client for GrowAssistant API
+│   ├── api_types.py          # API type definitions
+│   ├── auth.py               # Authentication manager
+│   ├── constants.py          # Application constants
 │   ├── queue_manager.py      # Data queue management
 │   ├── registry.py           # Device type registry
+│   ├── types.py              # Type definitions
+│   ├── watchdog.py           # Process watchdog for reliability
+│   ├── schemas/              # Configuration schemas
+│   │   └── config_schemas.py # Pydantic config validation
+│   ├── utils/                # Utility modules
+│   │   ├── http_utils.py     # HTTP utilities
+│   │   ├── sensitive_data.py # Sensitive data handling
+│   │   ├── singleton.py      # Singleton pattern
+│   │   └── validation.py     # Validation utilities
 │   └── integrations/         # Integration modules
 │       ├── __init__.py       # Integration base class
+│       ├── manifest.py       # Integration manifest handling
 │       ├── gpio/             # GPIO integration
 │       ├── mqtt/             # MQTT integration
 │       ├── http/             # HTTP integration
@@ -272,21 +300,36 @@ These logs are useful for debugging API communication issues and tracking the hi
 ├── external_integrations/    # External integrations (user plugins)
 │   ├── README.md             # Instructions for creating external integrations
 │   ├── sample_integration.py # Template for creating new integrations
-│   └── sample_config.yaml    # Example configuration for sample integration
+│   ├── sample_config.yaml    # Example configuration for sample integration
+│   ├── dht_sensor.py         # DHT temperature/humidity sensor integration
+│   ├── dht_config.yaml       # DHT sensor configuration example
+│   └── climate_control.py    # Climate control integration example
 ├── web/                      # Web interface
 │   ├── __init__.py           # Package initialization
 │   ├── app.py                # Web application
 │   ├── templates/            # HTML templates
+│   │   ├── base.html         # Base template
+│   │   ├── index.html        # Dashboard
+│   │   ├── login.html        # Login page
+│   │   ├── setup.html        # Initial setup
+│   │   ├── onboarding.html   # Onboarding flow
+│   │   ├── config.html       # Configuration page
+│   │   ├── error.html        # Error page
+│   │   └── partials/         # Partial templates
 │   └── static/               # Static assets
+│       ├── css/              # Stylesheets (Tailwind)
+│       └── js/               # JavaScript files
 ├── logs/                     # Log files
 │   ├── app.log               # Main application log
-│   ├── web.log               # Web interface log
-│   └── api/                  # API value logs
+│   └── api_values/           # API value logs
 ├── tests/                    # Test directory
 ├── docs/                     # Documentation
-│   └── custom_integrations.md # Guide for developing custom integrations
-├── config.yaml               # Configuration file
+│   ├── custom_integrations.md # Guide for developing custom integrations
+│   └── developer_guide.md    # Developer documentation
+├── config.example.yaml       # Example configuration (copy to config.yaml)
+├── config.yaml               # Your configuration file (not in git)
 ├── requirements.txt          # Python dependencies
+├── package.json              # Node.js dependencies (for Tailwind CSS)
 └── README.md                 # This file
 ```
 

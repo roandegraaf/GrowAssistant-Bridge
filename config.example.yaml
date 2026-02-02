@@ -14,7 +14,7 @@ api:
   url: https://api.growassistant.app/prod  # Change to your API URL
 
 general:
-  api_logs_dir: logs/api
+  api_logs_dir: logs/api_values
   collection_interval: 10
   data_dir: data
   external_integrations_dir: external_integrations
