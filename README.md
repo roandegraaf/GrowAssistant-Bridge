@@ -23,10 +23,49 @@ A bridge application to connect various sensors and controllers for cannabis gro
 - Raspberry Pi (3B+ or newer recommended)
 - Raspberry Pi OS (64-bit recommended)
 - Python 3.9+
-- Node.js 18+ (for building frontend assets)
+- Node.js 18+ (for building frontend assets, optional)
 - Dependencies listed in `requirements.txt`
 
-## Installation on Raspberry Pi
+## Quick Start (Recommended)
+
+The easiest way to install GrowAssistant Bridge is using the interactive setup script:
+
+```bash
+# 1. Install system packages
+sudo apt update
+sudo apt install -y python3-pip python3-venv git nodejs npm
+
+# 2. Clone the repository
+git clone https://github.com/roandegraaf/GrowAssistant-Bridge.git
+cd GrowAssistant-Bridge
+
+# 3. Run the interactive setup
+./setup.sh
+```
+
+The setup script will guide you through:
+- Installing Python dependencies
+- Selecting integrations (GPIO, MQTT, HTTP, Serial)
+- Configuring the web interface (username, password, port)
+- Setting up auto-start on boot (optional)
+- Starting the application
+
+After setup, you'll see your dashboard URLs:
+```
+╔════════════════════════════════════════════════════════════╗
+║        ✓ GrowAssistant Bridge is running!                  ║
+╠════════════════════════════════════════════════════════════╣
+║  Access your dashboard at:                                 ║
+║                                                            ║
+║  • http://192.168.1.45:5000                                ║
+║  • http://raspberrypi:5000                                 ║
+║  • http://raspberrypi.local:5000                           ║
+╚════════════════════════════════════════════════════════════╝
+```
+
+## Manual Installation
+
+If you prefer manual installation or need more control, follow these steps:
 
 ### 1. Initial Setup
 
@@ -330,6 +369,8 @@ These logs are useful for debugging API communication issues and tracking the hi
 ├── config.yaml               # Your configuration file (not in git)
 ├── requirements.txt          # Python dependencies
 ├── package.json              # Node.js dependencies (for Tailwind CSS)
+├── setup.sh                  # Interactive setup script (recommended)
+├── setup-dev.sh              # Developer setup script
 └── README.md                 # This file
 ```
 
