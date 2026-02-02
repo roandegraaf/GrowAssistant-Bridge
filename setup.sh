@@ -565,6 +565,61 @@ setup_mdns() {
     echo ""
 }
 
+configure_firewall() {
+    # Only configure if external access is enabled
+    if [ "$WEB_EXTERNAL" != "yes" ]; then
+        return
+    fi
+
+    print_step "Configuring" "Firewall for external access"
+
+    # Check if ufw is installed and active
+    if check_command ufw; then
+        UFW_STATUS=$(sudo ufw status 2>/dev/null | head -1)
+        if [[ "$UFW_STATUS" == *"active"* ]]; then
+            print_info "ufw firewall is active, opening port $WEB_PORT..."
+            sudo ufw allow "$WEB_PORT/tcp" comment "GrowAssistant Bridge" >/dev/null 2>&1
+            print_success "Port $WEB_PORT opened in ufw firewall"
+            echo ""
+            return
+        else
+            print_info "ufw is installed but not active"
+        fi
+    fi
+
+    # Check if firewalld is installed and active
+    if check_command firewall-cmd; then
+        if systemctl is-active --quiet firewalld; then
+            print_info "firewalld is active, opening port $WEB_PORT..."
+            sudo firewall-cmd --permanent --add-port="$WEB_PORT/tcp" >/dev/null 2>&1
+            sudo firewall-cmd --reload >/dev/null 2>&1
+            print_success "Port $WEB_PORT opened in firewalld"
+            echo ""
+            return
+        fi
+    fi
+
+    # Check if iptables has rules that might block traffic
+    if check_command iptables; then
+        IPTABLES_RULES=$(sudo iptables -L INPUT -n 2>/dev/null | wc -l)
+        if [ "$IPTABLES_RULES" -gt 2 ]; then
+            # There are custom iptables rules, add one for our port
+            print_info "iptables rules detected, adding rule for port $WEB_PORT..."
+            sudo iptables -I INPUT -p tcp --dport "$WEB_PORT" -j ACCEPT 2>/dev/null || true
+            print_success "Port $WEB_PORT rule added to iptables"
+            print_warning "Note: iptables rules are not persistent across reboots"
+            print_info "To make persistent, install iptables-persistent:"
+            print_info "  sudo apt install iptables-persistent"
+            echo ""
+            return
+        fi
+    fi
+
+    # No active firewall detected
+    print_success "No active firewall detected - port $WEB_PORT should be accessible"
+    echo ""
+}
+
 install_systemd_service() {
     if [ "$INSTALL_SERVICE" != "yes" ]; then
         return
@@ -618,6 +673,22 @@ get_network_info() {
     fi
     if [ -z "$IP_ADDRESS" ]; then
         IP_ADDRESS="127.0.0.1"
+    fi
+
+    # Read actual port and username from config file (in case user kept existing config)
+    if [ -f "$CONFIG_FILE" ]; then
+        ACTUAL_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('$CONFIG_FILE')); print(c.get('web',{}).get('port', 5000))" 2>/dev/null)
+        ACTUAL_USERNAME=$(python3 -c "import yaml; c=yaml.safe_load(open('$CONFIG_FILE')); print(c.get('web',{}).get('username', 'admin'))" 2>/dev/null)
+        ACTUAL_HOST=$(python3 -c "import yaml; c=yaml.safe_load(open('$CONFIG_FILE')); print(c.get('web',{}).get('host', '127.0.0.1'))" 2>/dev/null)
+
+        # Use actual values from config
+        WEB_PORT="${ACTUAL_PORT:-$WEB_PORT}"
+        WEB_USERNAME="${ACTUAL_USERNAME:-$WEB_USERNAME}"
+
+        # Check if external access is enabled
+        if [ "$ACTUAL_HOST" = "0.0.0.0" ]; then
+            WEB_EXTERNAL="yes"
+        fi
     fi
 }
 
@@ -753,6 +824,7 @@ main() {
     build_frontend
     generate_config
     setup_mdns
+    configure_firewall
     install_systemd_service
 
     # Ask if user wants to start now
