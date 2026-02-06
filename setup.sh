@@ -91,11 +91,9 @@ This script will guide you through:
   4. Setting up auto-start (optional)
 
 Navigation:
-  • Use ARROW KEYS to move
-  • Press ENTER to confirm
-  • Press ESC to cancel
-
-Press OK to continue." 20 55
+  - ARROW KEYS to move, TAB to switch buttons
+  - SPACE to select items, ENTER to confirm
+  - ESC to cancel" 18 60
     else
         print_header
         echo "Welcome to GrowAssistant Bridge Setup!"
@@ -110,9 +108,7 @@ select_integrations() {
     if has_whiptail; then
         INTEGRATIONS=$(whiptail --title "Integration Selection" --checklist \
 "Select which integrations to enable.
-
-Use ARROW KEYS to move, SPACE to select/deselect,
-TAB to switch to buttons, and ENTER to confirm." 18 65 5 \
+Use SPACE to select, ENTER to confirm." 16 60 5 \
 "gpio" "Raspberry Pi GPIO pins (sensors/relays)" OFF \
 "mqtt" "Connect to MQTT broker" OFF \
 "http" "Poll HTTP endpoints" OFF \
@@ -152,19 +148,17 @@ TAB to switch to buttons, and ENTER to confirm." 18 65 5 \
 configure_mqtt() {
     if has_whiptail; then
         MQTT_BROKER=$(whiptail --title "MQTT Configuration" --inputbox \
-"Enter MQTT broker address:
-
-Use ARROW KEYS to move, ENTER to confirm." 12 50 "localhost" 3>&1 1>&2 2>&3) || MQTT_BROKER="localhost"
+"Enter MQTT broker address:" 10 60 "localhost" 3>&1 1>&2 2>&3) || MQTT_BROKER="localhost"
 
         MQTT_PORT=$(whiptail --title "MQTT Configuration" --inputbox \
-"Enter MQTT broker port:" 10 50 "1883" 3>&1 1>&2 2>&3) || MQTT_PORT="1883"
+"Enter MQTT broker port:" 10 60 "1883" 3>&1 1>&2 2>&3) || MQTT_PORT="1883"
 
         MQTT_USERNAME=$(whiptail --title "MQTT Configuration" --inputbox \
-"Enter MQTT username (leave empty for none):" 10 50 "" 3>&1 1>&2 2>&3) || MQTT_USERNAME=""
+"Enter MQTT username (leave empty for none):" 10 60 "" 3>&1 1>&2 2>&3) || MQTT_USERNAME=""
 
         if [ -n "$MQTT_USERNAME" ]; then
             MQTT_PASSWORD=$(whiptail --title "MQTT Configuration" --passwordbox \
-"Enter MQTT password:" 10 50 3>&1 1>&2 2>&3) || MQTT_PASSWORD=""
+"Enter MQTT password:" 10 60 3>&1 1>&2 2>&3) || MQTT_PASSWORD=""
         else
             MQTT_PASSWORD=""
         fi
@@ -186,38 +180,36 @@ Use ARROW KEYS to move, ENTER to confirm." 12 50 "localhost" 3>&1 1>&2 2>&3) || 
 configure_web_interface() {
     if has_whiptail; then
         WEB_USERNAME=$(whiptail --title "Web Interface Setup" --inputbox \
-"Enter admin username:
-
-Use ARROW KEYS to move, ENTER to confirm." 12 50 "$DEFAULT_USERNAME" 3>&1 1>&2 2>&3) || WEB_USERNAME="$DEFAULT_USERNAME"
+"Enter admin username:" 10 60 "$DEFAULT_USERNAME" 3>&1 1>&2 2>&3) || WEB_USERNAME="$DEFAULT_USERNAME"
 
         while true; do
             WEB_PASSWORD=$(whiptail --title "Web Interface Setup" --passwordbox \
-"Enter admin password (min 4 characters):" 10 50 3>&1 1>&2 2>&3) || return 1
+"Enter admin password (min 4 characters):" 10 60 3>&1 1>&2 2>&3) || return 1
 
             if [ ${#WEB_PASSWORD} -ge 4 ]; then
                 WEB_PASSWORD_CONFIRM=$(whiptail --title "Web Interface Setup" --passwordbox \
-"Confirm admin password:" 10 50 3>&1 1>&2 2>&3) || return 1
+"Confirm admin password:" 10 60 3>&1 1>&2 2>&3) || return 1
 
                 if [ "$WEB_PASSWORD" = "$WEB_PASSWORD_CONFIRM" ]; then
                     break
                 else
-                    whiptail --title "Error" --msgbox "Passwords do not match. Please try again." 8 45
+                    whiptail --title "Error" --msgbox "Passwords do not match. Please try again." 8 60
                 fi
             else
-                whiptail --title "Error" --msgbox "Password must be at least 4 characters." 8 45
+                whiptail --title "Error" --msgbox "Password must be at least 4 characters." 8 60
             fi
         done
 
         WEB_PORT=$(whiptail --title "Web Interface Setup" --inputbox \
-"Enter web interface port:" 10 50 "$DEFAULT_PORT" 3>&1 1>&2 2>&3) || WEB_PORT="$DEFAULT_PORT"
+"Enter web interface port:" 10 60 "$DEFAULT_PORT" 3>&1 1>&2 2>&3) || WEB_PORT="$DEFAULT_PORT"
 
         if whiptail --title "External Access" --yesno \
 "Allow external access to web interface?
 
-Selecting YES will make the dashboard accessible
-from other devices on your network.
+YES: Dashboard accessible from other devices
+     on your network.
 
-Selecting NO will only allow access from this device." 12 55; then
+NO:  Only accessible from this device." 12 60; then
             WEB_EXTERNAL="yes"
         else
             WEB_EXTERNAL="no"
@@ -265,7 +257,7 @@ ask_systemd_setup() {
 This will automatically start GrowAssistant Bridge
 when your Raspberry Pi boots up.
 
-Recommended for production use." 12 55; then
+Recommended for production use." 12 60; then
             INSTALL_SERVICE="yes"
         else
             INSTALL_SERVICE="no"
@@ -287,7 +279,7 @@ ask_start_now() {
         if whiptail --title "Start Application" --yesno \
 "Setup is complete!
 
-Do you want to start GrowAssistant Bridge now?" 10 50; then
+Do you want to start GrowAssistant Bridge now?" 10 60; then
             START_NOW="yes"
         else
             START_NOW="no"
@@ -308,7 +300,7 @@ show_config_exists_prompt() {
         CHOICE=$(whiptail --title "Configuration Exists" --menu \
 "A config.yaml file already exists.
 
-What would you like to do?" 14 55 3 \
+What would you like to do?" 14 60 3 \
 "overwrite" "Replace with new configuration" \
 "keep" "Keep existing configuration" \
 "backup" "Backup existing and create new" \
