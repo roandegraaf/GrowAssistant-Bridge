@@ -35,7 +35,7 @@ class AuthManager(metaclass=SingletonMeta):
     def __init__(self):
         """Initialize the authentication manager."""
         self._client: Optional[httpx.AsyncClient] = None
-        self._base_url = config.get("api.url", "http://localhost:8080")
+        self._base_url = config.get("api.url", "http://localhost:8080").rstrip("/")
 
         data_dir = config.get("general.data_dir", "data")
         os.makedirs(data_dir, exist_ok=True)

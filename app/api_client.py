@@ -52,7 +52,7 @@ class ApiClient(metaclass=SingletonMeta):
 
     def __init__(self):
         """Initialize the API client."""
-        self._base_url = config.get("api.url", "http://localhost:8080")
+        self._base_url = config.get("api.url", "http://localhost:8080").rstrip("/")
         self._client: Optional[httpx.AsyncClient] = None
         self._command_queue: Optional[asyncio.Queue] = None
         self._log_values = config.get("api.log_values", False)
