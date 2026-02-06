@@ -28,20 +28,13 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 ## Quick Start (Recommended)
 
-The easiest way to install GrowAssistant Bridge is using the interactive setup script:
+Install GrowAssistant Bridge with a single command:
 
 ```bash
-# 1. Install system packages
-sudo apt update
-sudo apt install -y python3-pip python3-venv git nodejs npm
-
-# 2. Clone the repository
-git clone https://github.com/roandegraaf/GrowAssistant-Bridge.git
-cd GrowAssistant-Bridge
-
-# 3. Run the interactive setup
-./setup.sh
+curl -fsSL https://raw.githubusercontent.com/roandegraaf/GrowAssistant-Bridge/main/install.sh | bash
 ```
+
+This will automatically install system packages, clone the repository to `~/GrowAssistant-Bridge`, and launch the interactive setup.
 
 The setup script will guide you through:
 - Installing Python dependencies
