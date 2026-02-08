@@ -503,3 +503,341 @@ class TestAuthManagerDisplayAuthCode:
 
         captured = capsys.readouterr()
         assert "No authentication code available" in captured.out
+
+
+class TestAuthManagerEdgeCases:
+    """Tests for edge cases and error handling in AuthManager."""
+
+    @pytest.fixture
+    def auth_manager(self, mock_config, tmp_path):
+        """Create AuthManager with temp directory."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(exist_ok=True)
+
+        mock_config.get.side_effect = lambda key, default=None: {
+            "api.url": "http://localhost:8080",
+            "general.data_dir": str(data_dir),
+            "api.verify_ssl": True,
+            "api.timeout": 30,
+            "api.retry_max_attempts": 1,
+            "api.retry_min_backoff": 0.1,
+            "api.retry_max_backoff": 0.2,
+        }.get(key, default)
+
+        with patch("app.auth.config", mock_config):
+            from app.auth import AuthManager
+            from app.utils.singleton import SingletonMeta
+
+            if AuthManager in SingletonMeta._instances:
+                del SingletonMeta._instances[AuthManager]
+
+            manager = AuthManager()
+            manager._credentials_file = str(data_dir / "credentials.json")
+            manager._credentials = {}
+            yield manager
+
+    def test_load_credentials_json_decode_error(self, auth_manager, tmp_path):
+        """Test loading credentials with invalid JSON."""
+        credentials_file = tmp_path / "data" / "credentials.json"
+        credentials_file.parent.mkdir(exist_ok=True)
+
+        # Write invalid JSON
+        with open(credentials_file, "w") as f:
+            f.write("{ invalid json }")
+
+        auth_manager._credentials_file = str(credentials_file)
+        # Start with None to ensure the error path doesn't update it
+        auth_manager._credentials = None
+
+        result = auth_manager._load_credentials()
+
+        assert result is False
+        # Credentials should remain None after error
+        assert auth_manager._credentials is None
+
+    def test_load_credentials_permission_error(self, auth_manager, tmp_path):
+        """Test loading credentials when file is not readable."""
+        credentials_file = tmp_path / "data" / "credentials.json"
+        credentials_file.parent.mkdir(exist_ok=True)
+
+        # Create file with valid JSON
+        with open(credentials_file, "w") as f:
+            json.dump({"client_id": "test"}, f)
+
+        auth_manager._credentials_file = str(credentials_file)
+
+        # Mock open to raise PermissionError
+        with patch("builtins.open", side_effect=PermissionError("Permission denied")):
+            result = auth_manager._load_credentials()
+
+        assert result is False
+
+    def test_save_credentials_permission_error(self, auth_manager, tmp_path):
+        """Test saving credentials when file is not writable."""
+        auth_manager._credentials = {"client_id": "test-123"}
+        credentials_file = tmp_path / "data" / "credentials.json"
+        auth_manager._credentials_file = str(credentials_file)
+
+        # Mock open to raise PermissionError
+        with patch("builtins.open", side_effect=PermissionError("Permission denied")):
+            result = auth_manager._save_credentials()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_not_authenticated(self, auth_manager):
+        """Test validate_credentials when not authenticated."""
+        auth_manager._credentials = None
+        auth_manager._client_id = None
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_no_client(self, auth_manager):
+        """Test validate_credentials when client not started."""
+        auth_manager._credentials = {"client_id": "test-123"}
+        auth_manager._client_id = "test-123"
+        auth_manager._client = None
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_status_200(self, auth_manager):
+        """Test validate_credentials with 200 status (space ready)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        auth_manager._client = mock_client
+        auth_manager._client_id = "test-client"
+        auth_manager._credentials = {"client_id": "test-client", "token": "test-token"}
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_status_204(self, auth_manager):
+        """Test validate_credentials with 204 status (no space yet)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        auth_manager._client = mock_client
+        auth_manager._client_id = "test-client"
+        auth_manager._credentials = {"client_id": "test-client", "token": "test-token"}
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_status_401(self, auth_manager):
+        """Test validate_credentials with 401 status (unauthorized)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        auth_manager._client = mock_client
+        auth_manager._client_id = "test-client"
+        auth_manager._credentials = {"client_id": "test-client", "token": "invalid-token"}
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_validate_credentials_network_error(self, auth_manager):
+        """Test validate_credentials with network error."""
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.RequestError("Network error")
+
+        auth_manager._client = mock_client
+        auth_manager._client_id = "test-client"
+        auth_manager._credentials = {"client_id": "test-client", "token": "test-token"}
+
+        result = await auth_manager.validate_credentials()
+
+        assert result is False
+
+    def test_get_auth_headers_with_credentials(self, auth_manager):
+        """Test getting auth headers with credentials."""
+        auth_manager._credentials = {"token": "test-token-123"}
+
+        headers = auth_manager._get_auth_headers()
+
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "Bearer test-token-123"
+
+    def test_get_auth_headers_without_credentials(self, auth_manager):
+        """Test getting auth headers without credentials."""
+        auth_manager._credentials = None
+
+        headers = auth_manager._get_auth_headers()
+
+        # Should have base headers but no Authorization
+        assert "Authorization" not in headers
+        assert "Content-Type" in headers
+        assert "Accept" in headers
+
+    @pytest.mark.asyncio
+    async def test_register_client_request_error(self, auth_manager):
+        """Test registration handles request errors."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = httpx.RequestError("Connection refused")
+        auth_manager._client = mock_client
+
+        result = await auth_manager.register_client()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_register_client_unexpected_error(self, auth_manager):
+        """Test registration handles unexpected errors."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = RuntimeError("Unexpected error")
+        auth_manager._client = mock_client
+
+        result = await auth_manager.register_client()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_check_connection_status_unexpected_status(self, auth_manager):
+        """Test connection status with unexpected HTTP status."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        auth_manager._client = mock_client
+        auth_manager._client_id = "test-client"
+
+        connected, status = await auth_manager.check_connection_status()
+
+        assert connected is False
+        assert status == "not_connected"
+
+    def test_is_connection_timed_out_default(self, auth_manager):
+        """Test connection timeout default value."""
+        assert auth_manager.is_connection_timed_out() is False
+
+    def test_set_connection_timed_out_true(self, auth_manager):
+        """Test setting connection timeout to True."""
+        auth_manager.set_connection_timed_out(True)
+
+        assert auth_manager.is_connection_timed_out() is True
+
+    def test_set_connection_timed_out_false(self, auth_manager):
+        """Test setting connection timeout to False."""
+        auth_manager._connection_timed_out = True
+        auth_manager.set_connection_timed_out(False)
+
+        assert auth_manager.is_connection_timed_out() is False
+
+    @pytest.mark.asyncio
+    async def test_request_new_code_success(self, auth_manager, tmp_path):
+        """Test requesting new code successfully."""
+        credentials_file = tmp_path / "data" / "credentials.json"
+        credentials_file.parent.mkdir(exist_ok=True)
+
+        # Create old credentials file
+        with open(credentials_file, "w") as f:
+            json.dump({"client_id": "old-client"}, f)
+
+        auth_manager._credentials_file = str(credentials_file)
+        auth_manager._credentials = {"client_id": "old-client"}
+        auth_manager._client_id = "old-client"
+        auth_manager._auth_code = "OLD123"
+        auth_manager._connection_timed_out = True
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "new-client-id",
+            "code": "NEW456",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        auth_manager._client = mock_client
+
+        result = await auth_manager.request_new_code()
+
+        assert result is True
+        assert auth_manager._client_id == "new-client-id"
+        assert auth_manager._auth_code == "NEW456"
+        assert auth_manager.is_connection_timed_out() is False
+        assert not credentials_file.with_name("old_credentials.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_request_new_code_file_removal_error(self, auth_manager, tmp_path):
+        """Test requesting new code when file removal fails."""
+        credentials_file = tmp_path / "data" / "credentials.json"
+        credentials_file.parent.mkdir(exist_ok=True)
+
+        # Create old credentials file
+        with open(credentials_file, "w") as f:
+            json.dump({"client_id": "old-client"}, f)
+
+        auth_manager._credentials_file = str(credentials_file)
+        auth_manager._credentials = {"client_id": "old-client"}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "new-client-id",
+            "code": "NEW456",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        auth_manager._client = mock_client
+
+        # Mock os.remove to raise error
+        with patch("os.remove", side_effect=OSError("Cannot remove file")):
+            result = await auth_manager.request_new_code()
+
+        # Should still succeed even if file removal fails
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_wait_for_connection_clears_timeout_on_success(self, auth_manager):
+        """Test wait_for_connection clears timeout flag on success."""
+        auth_manager._connection_timed_out = True
+
+        async def mock_check_status():
+            return True, "connected"
+
+        auth_manager.check_connection_status = mock_check_status
+
+        result = await auth_manager.wait_for_connection(timeout=5.0)
+
+        assert result is True
+        assert auth_manager.is_connection_timed_out() is False
+
+    @pytest.mark.asyncio
+    async def test_wait_for_connection_sets_timeout_on_failure(self, auth_manager):
+        """Test wait_for_connection sets timeout flag on timeout."""
+        with patch("app.auth.AUTH_POLL_INTERVAL", 0.1):
+
+            async def mock_check_status():
+                return False, "not_connected"
+
+            auth_manager.check_connection_status = mock_check_status
+
+            result = await auth_manager.wait_for_connection(timeout=0.15)
+
+            assert result is False
+            assert auth_manager.is_connection_timed_out() is True

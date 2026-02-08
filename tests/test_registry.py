@@ -434,3 +434,292 @@ class TestDeviceRegistry:
         assert registry._derive_domain("GPIOIntegration") == "gpio"
         assert registry._derive_domain("HTTPIntegration") == "http"
         assert registry._derive_domain("CustomDevice") == "customdevice"
+
+
+class TestDeviceRegistryEdgeCases:
+    """Tests for edge cases and error handling in DeviceRegistry."""
+
+    @pytest.fixture
+    def registry(self):
+        """Create a fresh DeviceRegistry instance."""
+        from app.utils.singleton import SingletonMeta
+
+        if DeviceRegistry in SingletonMeta._instances:
+            del SingletonMeta._instances[DeviceRegistry]
+
+        reg = DeviceRegistry()
+        yield reg
+        reg.clear()
+
+    def test_register_integration_by_devices_invalid_dict(self, registry):
+        """Test register_integration_by_devices with non-dict device config."""
+        devices_config = {
+            "device1": {"name": "temp_sensor", "type": "temperature"},
+            "device2": "invalid_string",  # Invalid: should be dict
+            "device3": ["invalid", "list"],  # Invalid: should be dict
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # Only device1 should be registered
+        assert registry.get_sensor_integration("temp_sensor") == "TestIntegration"
+        assert len(registry.get_all_devices()) == 1
+
+    def test_register_integration_by_devices_missing_name(self, registry):
+        """Test register_integration_by_devices with missing name field."""
+        devices_config = {
+            "device1": {"type": "temperature"},  # Missing 'name'
+            "device2": {"name": "valid_sensor", "type": "humidity"},
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # Only device2 should be registered
+        assert registry.get_sensor_integration("valid_sensor") == "TestIntegration"
+        assert len(registry.get_all_devices()) == 1
+
+    def test_register_integration_by_devices_missing_type(self, registry):
+        """Test register_integration_by_devices with missing type field."""
+        devices_config = {
+            "device1": {"name": "sensor_without_type"},  # Missing 'type'
+            "device2": {"name": "valid_pump", "type": "pump"},
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # Only device2 should be registered
+        assert registry.get_actuator_integration("valid_pump") == "TestIntegration"
+        assert len(registry.get_all_devices()) == 1
+
+    def test_register_integration_by_devices_both_missing(self, registry):
+        """Test register_integration_by_devices with both name and type missing."""
+        devices_config = {
+            "device1": {},  # Missing both 'name' and 'type'
+            "device2": {"name": "valid_sensor", "type": "temperature"},
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # Only device2 should be registered
+        assert registry.get_sensor_integration("valid_sensor") == "TestIntegration"
+        assert len(registry.get_all_devices()) == 1
+
+    def test_get_sensor_integration_not_found(self, registry, caplog):
+        """Test get_sensor_integration logs warning when sensor not found."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            integration = registry.get_sensor_integration("nonexistent_sensor")
+
+        assert integration is None
+        assert "No integration found for sensor 'nonexistent_sensor'" in caplog.text
+
+    def test_get_actuator_integration_not_found(self, registry, caplog):
+        """Test get_actuator_integration logs warning when actuator not found."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            integration = registry.get_actuator_integration("nonexistent_actuator")
+
+        assert integration is None
+        assert "No integration found for actuator 'nonexistent_actuator'" in caplog.text
+
+    def test_find_device_ambiguous_name(self, registry, caplog):
+        """Test find_device logs warning for ambiguous device name."""
+        import logging
+
+        # Register multiple devices with same name in different domains
+        registry.register_device(
+            name="sensor",
+            domain="mqtt",
+            device_type="temperature",
+            category=DeviceCategory.SENSOR,
+            integration_name="MQTTIntegration",
+        )
+        registry.register_device(
+            name="sensor",
+            domain="http",
+            device_type="humidity",
+            category=DeviceCategory.SENSOR,
+            integration_name="HTTPIntegration",
+        )
+        registry.register_device(
+            name="sensor",
+            domain="gpio",
+            device_type="pressure",
+            category=DeviceCategory.SENSOR,
+            integration_name="GPIOIntegration",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            device = registry.find_device("sensor")
+
+        # Should return first match but log warning
+        assert device is not None
+        assert device.name == "sensor"
+        assert "Ambiguous device lookup for 'sensor'" in caplog.text
+        assert "Use domain-qualified lookup" in caplog.text
+
+    def test_find_device_single_match_no_warning(self, registry, caplog):
+        """Test find_device with single match doesn't log warning."""
+        import logging
+
+        registry.register_device(
+            name="unique_sensor",
+            domain="mqtt",
+            device_type="temperature",
+            category=DeviceCategory.SENSOR,
+            integration_name="MQTTIntegration",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            device = registry.find_device("unique_sensor")
+
+        assert device is not None
+        assert device.name == "unique_sensor"
+        # Should not log ambiguity warning
+        assert "Ambiguous device lookup" not in caplog.text
+
+    def test_find_device_with_domain_no_ambiguity(self, registry, caplog):
+        """Test find_device with domain specified avoids ambiguity."""
+        import logging
+
+        # Register multiple devices with same name in different domains
+        registry.register_device(
+            name="sensor",
+            domain="mqtt",
+            device_type="temperature",
+            category=DeviceCategory.SENSOR,
+            integration_name="MQTTIntegration",
+        )
+        registry.register_device(
+            name="sensor",
+            domain="http",
+            device_type="humidity",
+            category=DeviceCategory.SENSOR,
+            integration_name="HTTPIntegration",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            device = registry.find_device("sensor", domain="mqtt")
+
+        assert device is not None
+        assert device.domain == "mqtt"
+        # Should not log ambiguity warning when domain is specified
+        assert "Ambiguous device lookup" not in caplog.text
+
+    def test_register_integration_by_devices_sensor_types(self, registry):
+        """Test that sensor types are correctly categorized."""
+        devices_config = {
+            "temp": {"name": "temp_sensor", "type": "temperature"},
+            "humid": {"name": "humid_sensor", "type": "humidity"},
+            "water": {"name": "water_sensor", "type": "water_level"},
+            "light": {"name": "light_sensor", "type": "light_sensor"},
+            "ph": {"name": "ph_sensor", "type": "ph"},
+            "ec": {"name": "ec_sensor", "type": "ec"},
+            "pressure": {"name": "pressure_sensor", "type": "pressure"},
+            "flow": {"name": "flow_sensor", "type": "flow"},
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # All should be registered as sensors
+        assert registry.get_sensor_integration("temp_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("humid_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("water_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("light_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("ph_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("ec_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("pressure_sensor") == "TestIntegration"
+        assert registry.get_sensor_integration("flow_sensor") == "TestIntegration"
+
+        # None should be registered as actuators
+        assert len(registry.get_all_actuators()) == 0
+
+    def test_register_integration_by_devices_actuator_types(self, registry):
+        """Test that non-sensor types are correctly categorized as actuators."""
+        devices_config = {
+            "pump": {"name": "water_pump", "type": "pump"},
+            "light": {"name": "grow_light", "type": "light"},
+            "fan": {"name": "ventilation_fan", "type": "fan"},
+            "heater": {"name": "space_heater", "type": "heater"},
+        }
+
+        registry.register_integration_by_devices("TestIntegration", devices_config)
+
+        # All should be registered as actuators
+        assert registry.get_actuator_integration("water_pump") == "TestIntegration"
+        assert registry.get_actuator_integration("grow_light") == "TestIntegration"
+        assert registry.get_actuator_integration("ventilation_fan") == "TestIntegration"
+        assert registry.get_actuator_integration("space_heater") == "TestIntegration"
+
+        # None should be registered as sensors
+        assert len(registry.get_all_sensors()) == 0
+
+    def test_get_devices_by_domain_empty(self, registry):
+        """Test getting devices by domain when domain doesn't exist."""
+        devices = registry.get_devices_by_domain("nonexistent_domain")
+        assert devices == []
+
+    def test_get_devices_by_type_empty(self, registry):
+        """Test getting devices by type when type doesn't exist."""
+        devices = registry.get_devices_by_type("nonexistent_type")
+        assert devices == []
+
+    def test_get_devices_by_integration_empty(self, registry):
+        """Test getting devices by integration when integration doesn't exist."""
+        devices = registry.get_devices_by_integration("NonexistentIntegration")
+        assert devices == []
+
+    def test_get_device_actions_unknown_type(self, registry):
+        """Test getting actions for unknown device type."""
+        actions = registry.get_device_actions("unknown_device_type")
+        assert actions == []
+
+    def test_register_device_default_capabilities(self, registry):
+        """Test that device gets default capabilities based on type."""
+        registry.register_device(
+            name="test_pump",
+            domain="test",
+            device_type="pump",
+            category=DeviceCategory.ACTUATOR,
+            integration_name="TestIntegration",
+        )
+
+        device = registry.get_device("test.test_pump")
+        assert device.capabilities == ["on", "off"]
+
+    def test_register_device_unknown_type_empty_capabilities(self, registry):
+        """Test that unknown device type gets empty capabilities."""
+        registry.register_device(
+            name="custom_device",
+            domain="test",
+            device_type="unknown_custom_type",
+            category=DeviceCategory.SENSOR,
+            integration_name="TestIntegration",
+        )
+
+        device = registry.get_device("test.custom_device")
+        assert device.capabilities == []
+
+    def test_clear_resets_all_indexes(self, registry):
+        """Test that clear resets all internal indexes."""
+        # Register various devices
+        registry.register_sensor("temp", "MQTTIntegration")
+        registry.register_actuator("pump", "GPIOIntegration")
+
+        # Verify devices exist
+        assert len(registry.get_all_devices()) > 0
+
+        # Clear registry
+        registry.clear()
+
+        # Verify all indexes are cleared
+        assert len(registry._devices) == 0
+        assert len(registry._sensors) == 0
+        assert len(registry._actuators) == 0
+        assert len(registry._by_domain) == 0
+        assert len(registry._by_type) == 0
+        assert len(registry._by_integration) == 0
+        assert len(registry._by_category[DeviceCategory.SENSOR]) == 0
+        assert len(registry._by_category[DeviceCategory.ACTUATOR]) == 0
