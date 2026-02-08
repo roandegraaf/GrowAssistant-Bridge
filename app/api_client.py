@@ -1,4 +1,4 @@
-"""API Client for communicating with the Spring API."""
+"""API Client for communicating with the Spring API via SSE and REST."""
 
 import asyncio
 import json
@@ -29,6 +29,7 @@ from app.api_types import (
 )
 from app.auth import auth_manager
 from app.config import config
+from app.config_store import config_store
 from app.constants import (
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_RETRY_MAX_ATTEMPTS,
@@ -42,11 +43,16 @@ from app.utils.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
+# SSE reconnect constants
+SSE_RECONNECT_MIN = 1
+SSE_RECONNECT_MAX = 60
+SSE_STREAM_TIMEOUT = 90.0  # Longer than heartbeat interval (15s) to detect stale connections
+
 
 class ApiClient(metaclass=SingletonMeta):
     """Client for interacting with the GrowAssistant API.
 
-    Handles authentication, data transmission, and command reception.
+    Handles data transmission via REST and receives config/actions via SSE.
     Uses SingletonMeta to ensure only one instance exists.
     """
 
@@ -68,6 +74,10 @@ class ApiClient(metaclass=SingletonMeta):
         self._action_handlers: dict[str, Callable] = {}
         self._settings_callback: Optional[Callable] = None
 
+        # SSE state
+        self._sse_task: Optional[asyncio.Task] = None
+        self._sse_running = False
+
         logger.info("API client initialized")
 
     async def start(self):
@@ -85,7 +95,16 @@ class ApiClient(metaclass=SingletonMeta):
         logger.info("API client started")
 
     async def stop(self):
-        """Stop the API client and close HTTP connection."""
+        """Stop the API client, SSE listener, and close HTTP connection."""
+        self._sse_running = False
+        if self._sse_task and not self._sse_task.done():
+            self._sse_task.cancel()
+            try:
+                await self._sse_task
+            except asyncio.CancelledError:
+                pass
+            self._sse_task = None
+
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -121,6 +140,8 @@ class ApiClient(metaclass=SingletonMeta):
         value_logger.addHandler(file_handler)
 
         return value_logger
+
+    # ─── Data log / problem / action building ───────────────────────
 
     def add_data_log(
         self,
@@ -166,6 +187,8 @@ class ApiClient(metaclass=SingletonMeta):
         """Register a callback for when settings are received from the API."""
         self._settings_callback = callback
 
+    # ─── Validation helpers ─────────────────────────────────────────
+
     def _validate_send_preconditions(self) -> tuple[bool, str, Optional[str]]:
         """Validate preconditions for sending data.
 
@@ -180,6 +203,8 @@ class ApiClient(metaclass=SingletonMeta):
         if not client_id:
             return False, "No client ID available", None
         return True, "", client_id
+
+    # ─── Data processing helpers ────────────────────────────────────
 
     def _process_legacy_data_points(self, data_points: list[dict[str, Any]]) -> None:
         """Process legacy data points and convert to new format."""
@@ -220,26 +245,6 @@ class ApiClient(metaclass=SingletonMeta):
                 }
             )
             log_item(value_logger, "Data log", data_log)
-
-        for problem in self._problems:
-            value_logger = self._get_api_value_logger(
-                {
-                    "type": problem.get("type"),
-                    "status": problem.get("status"),
-                    "description": problem.get("description"),
-                }
-            )
-            log_item(value_logger, "Problem", problem)
-
-        for action in self._actions:
-            value_logger = self._get_api_value_logger(
-                {
-                    "action": action.get("id"),
-                    "received": action.get("received"),
-                    "resolved": action.get("resolved"),
-                }
-            )
-            log_item(value_logger, "Action response", action)
 
     def _clear_sent_data(self) -> tuple[int, int, int]:
         """Clear sent data and return counts of (data_logs, problems, actions)."""
@@ -309,10 +314,16 @@ class ApiClient(metaclass=SingletonMeta):
             except (ValueError, TypeError):
                 pass
 
+    # ─── REST: Send sensor data ─────────────────────────────────────
+
     async def send_data(
         self, data_points: Optional[list[dict[str, Any]]] = None
     ) -> tuple[bool, str]:
-        """Send data to the API. Returns (success, message) tuple."""
+        """Send sensor data to the API. Returns (success, message) tuple.
+
+        Posts to POST /bridge/{id}/data with payload {"dataLogs": [...]}.
+        The endpoint returns 200 OK with no body (config comes via SSE).
+        """
         valid, error_msg, client_id = self._validate_send_preconditions()
         if not valid:
             return False, error_msg
@@ -325,15 +336,13 @@ class ApiClient(metaclass=SingletonMeta):
             if not connected:
                 return False, "Not connected to API"
 
-        url = f"{self._base_url}/client/{client_id}"
+        url = f"{self._base_url}/bridge/{client_id}/data"
 
         if data_points:
             self._process_legacy_data_points(data_points)
 
         payload = {
             "dataLogs": self._data_logs,
-            "problems": self._problems,
-            "actions": self._actions,
         }
 
         try:
@@ -350,24 +359,18 @@ class ApiClient(metaclass=SingletonMeta):
                 ),
             ):
                 with attempt:
-                    logger.debug(
-                        f"Sending data: {len(self._data_logs)} logs, "
-                        f"{len(self._problems)} problems, {len(self._actions)} actions"
-                    )
+                    logger.debug(f"Sending data: {len(self._data_logs)} logs")
                     response = await self._client.post(
                         url, json=payload, headers=self._get_headers()
                     )
                     response.raise_for_status()
-                    await self._process_response(response.json())
 
             self._log_transmission_results(url, client_id, success=True)
             logs, problems, actions = self._clear_sent_data()
-            logger.info(f"Sent {logs} data logs, {problems} problems, {actions} actions")
+            logger.info(f"Sent {logs} data logs")
             return True, "Data sent successfully"
 
         except RetryError as e:
-            # All retry attempts failed - API is likely offline
-            # Clear pending data (caller will requeue original data_points)
             self._clear_sent_data()
             original_exception = e.last_attempt.exception()
             if isinstance(original_exception, (httpx.ConnectError, httpx.ConnectTimeout)):
@@ -383,7 +386,6 @@ class ApiClient(metaclass=SingletonMeta):
                 return False, f"API unavailable: {original_exception}"
 
         except httpx.HTTPStatusError as e:
-            # Clear pending data (caller will requeue original data_points)
             self._clear_sent_data()
             error_msg = f"{e.response.status_code} - {e.response.text}"
             self._log_transmission_results(url, client_id, success=False, error_msg=error_msg)
@@ -391,132 +393,21 @@ class ApiClient(metaclass=SingletonMeta):
             return False, f"HTTP error: {e.response.status_code}"
 
         except httpx.ConnectError as e:
-            # Clear pending data (caller will requeue original data_points)
             self._clear_sent_data()
             logger.warning(f"API connection failed (API offline): {e}")
             return False, "API offline - connection failed"
 
         except (httpx.RequestError, asyncio.TimeoutError) as e:
-            # Clear pending data (caller will requeue original data_points)
             self._clear_sent_data()
             logger.warning(f"Request error sending data: {e}")
             return False, f"Request error: {e}"
 
         except Exception as e:
-            # Clear pending data (caller will requeue original data_points)
             self._clear_sent_data()
             logger.exception(f"Unexpected error sending data: {e}")
             return False, f"Unexpected error: {e}"
 
-    async def _process_response(self, response_data: dict[str, Any]):
-        """Process API response data including settings and actions."""
-        parsed = parse_api_response(response_data)
-
-        settings = {
-            "rdh_mode": parsed.get("rdh_mode", False),
-            "status": parsed.get("status", ""),
-            "light": parsed.get("light", {}),
-            "climate": parsed.get("climate", {}),
-            "tank": parsed.get("tank", {}),
-        }
-
-        if self._settings_callback:
-            try:
-                await self._settings_callback(settings)
-                logger.debug("Settings callback executed successfully")
-            except Exception as e:
-                logger.error(f"Error in settings callback: {e}")
-
-        for action in parsed.get("actions", []):
-            action_id, action_type = action.get("id"), action.get("type")
-            if not action_id or not action_type:
-                logger.warning(f"Received action with missing id or type: {action}")
-                continue
-
-            self.acknowledge_action(action_id, received=True, resolved=False)
-
-            if action_type not in self._action_handlers:
-                logger.warning(f"No handler registered for action type: {action_type}")
-                continue
-
-            try:
-                success = await self._action_handlers[action_type](action)
-                if success:
-                    self.acknowledge_action(action_id, received=True, resolved=True)
-                logger.info(f"Handled action {action_id} ({action_type}): success={success}")
-            except Exception as e:
-                logger.error(f"Error handling action {action_id} ({action_type}): {e}")
-
-    async def poll_commands(self) -> Optional[list[dict[str, Any]]]:
-        """Poll for commands from the API. Returns list of commands or None on error."""
-        if not self._client:
-            logger.error("API client not started")
-            return None
-        if not auth_manager.is_authenticated():
-            logger.warning("Not authenticated, cannot poll commands")
-            return None
-
-        client_id = auth_manager.get_client_id()
-        if not client_id:
-            logger.warning("No client ID available, cannot poll commands")
-            return None
-
-        url = f"{self._base_url}/client/{client_id}"
-
-        try:
-            response = await self._client.get(url, headers=self._get_headers())
-
-            if response.status_code == 204:
-                logger.debug("Client connected but no space created yet")
-                return []
-
-            response.raise_for_status()
-            actions = response.json().get("actions", [])
-            if actions:
-                logger.info(f"Received {len(actions)} actions from API")
-            return actions
-
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"HTTP error polling commands: {e.response.status_code} - {e.response.text}"
-            )
-        except (httpx.RequestError, asyncio.TimeoutError) as e:
-            logger.error(f"Error polling commands: {e}")
-        except Exception as e:
-            logger.exception(f"Unexpected error polling commands: {e}")
-
-        return None
-
-    async def start_command_polling(self):
-        """Start polling for commands in a background task."""
-        asyncio.create_task(self._command_polling_task())
-
-    async def _command_polling_task(self):
-        """Background task for polling commands."""
-        interval = config.get("api.poll_interval", 30)
-
-        while True:
-            try:
-                commands = await self.poll_commands()
-                if commands:
-                    for command in commands:
-                        await self._command_queue.put(command)
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("Command polling task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in command polling task: {e}")
-                await asyncio.sleep(interval)
-
-    async def get_command(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
-        """Get a command from the queue. Returns None on timeout."""
-        try:
-            if timeout is None:
-                return await self._command_queue.get()
-            return await asyncio.wait_for(self._command_queue.get(), timeout)
-        except asyncio.TimeoutError:
-            return None
+    # ─── REST: Send action result ───────────────────────────────────
 
     async def send_command_result(self, command_id: str, success: bool, message: str) -> bool:
         """Send the result of executing a command back to the API."""
@@ -528,7 +419,7 @@ class ApiClient(metaclass=SingletonMeta):
         if not client_id:
             return False
 
-        url = f"{self._base_url}/client/{client_id}/actions/{command_id}/result"
+        url = f"{self._base_url}/bridge/{client_id}/actions/{command_id}/result"
 
         try:
             data = {
@@ -544,11 +435,244 @@ class ApiClient(metaclass=SingletonMeta):
             logger.error(f"Error sending command result: {e}")
             return False
 
+    # ─── REST: Fetch full config (fallback) ─────────────────────────
+
+    async def fetch_full_config(self) -> Optional[dict]:
+        """Fetch the full config from GET /bridge/{id} as a fallback.
+
+        Returns the parsed config dict, or None on failure.
+        """
+        if not self._client or not auth_manager.is_authenticated():
+            return None
+
+        client_id = auth_manager.get_client_id()
+        if not client_id:
+            return None
+
+        url = f"{self._base_url}/bridge/{client_id}"
+
+        try:
+            response = await self._client.get(url, headers=self._get_headers())
+            if response.status_code == 200:
+                data = response.json()
+                version = data.get("configVersion", 0)
+                config_store.save_full_config(data, version)
+                logger.info(f"Fetched full config version={version} from API")
+                return data
+            elif response.status_code == 204:
+                logger.info("Bridge connected but no space created yet")
+                return None
+            else:
+                logger.warning(f"Unexpected status fetching config: {response.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching full config: {e}")
+            return None
+
+    # ─── Command queue (fed by SSE, consumed by main.py) ────────────
+
+    async def get_command(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """Get a command from the queue. Returns None on timeout."""
+        try:
+            if timeout is None:
+                return await self._command_queue.get()
+            return await asyncio.wait_for(self._command_queue.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    # ─── SSE Listener ───────────────────────────────────────────────
+
+    async def start_sse_listener(self):
+        """Start the SSE listener as a background task."""
+        self._sse_running = True
+        self._sse_task = asyncio.create_task(self._sse_listener_loop())
+        logger.info("SSE listener started")
+
+    async def _sse_listener_loop(self):
+        """Background loop that connects to SSE and reconnects on failure."""
+        backoff = SSE_RECONNECT_MIN
+
+        while self._sse_running:
+            try:
+                await self._sse_connect()
+                # If _sse_connect returns normally (stream ended), reset backoff
+                backoff = SSE_RECONNECT_MIN
+            except asyncio.CancelledError:
+                logger.info("SSE listener cancelled")
+                return
+            except Exception as e:
+                logger.error(f"SSE connection error: {e}")
+
+            if not self._sse_running:
+                return
+
+            logger.info(f"SSE reconnecting in {backoff}s...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, SSE_RECONNECT_MAX)
+
+    async def _sse_connect(self):
+        """Connect to the SSE stream and process events."""
+        client_id = auth_manager.get_client_id()
+        if not client_id:
+            logger.warning("No client ID for SSE connection")
+            await asyncio.sleep(5)
+            return
+
+        local_version = config_store.get_config_version()
+        url = f"{self._base_url}/bridge/{client_id}/stream?configVersion={local_version}"
+        headers = self._get_headers()
+        headers["Accept"] = "text/event-stream"
+
+        logger.info(f"SSE connecting to {url} (configVersion={local_version})")
+
+        # Use a separate client with longer timeout for SSE streaming
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=DEFAULT_HTTP_TIMEOUT,
+                read=SSE_STREAM_TIMEOUT,
+                write=DEFAULT_HTTP_TIMEOUT,
+                pool=DEFAULT_HTTP_TIMEOUT,
+            ),
+            verify=config.get("api.verify_ssl", True),
+        ) as sse_client:
+            async with sse_client.stream("GET", url, headers=headers) as response:
+                if response.status_code != 200:
+                    logger.error(f"SSE connection failed: {response.status_code}")
+                    return
+
+                logger.info("SSE connected")
+
+                # SSE parsing state
+                event_type = None
+                event_data = ""
+                event_id = None
+
+                async for line in response.aiter_lines():
+                    if not self._sse_running:
+                        return
+
+                    # Empty line signals end of an event
+                    if line == "":
+                        if event_type and event_data:
+                            await self._handle_sse_event(event_type, event_data.strip(), event_id)
+                        event_type = None
+                        event_data = ""
+                        event_id = None
+                        continue
+
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_part = line[5:].strip()
+                        if event_data:
+                            event_data += "\n" + data_part
+                        else:
+                            event_data = data_part
+                    elif line.startswith("id:"):
+                        event_id = line[3:].strip()
+                    elif line.startswith(":"):
+                        # SSE comment, ignore
+                        pass
+
+        logger.info("SSE stream ended")
+
+    async def _handle_sse_event(self, event_type: str, data: str, event_id: Optional[str]):
+        """Handle a parsed SSE event."""
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            logger.error(f"SSE event '{event_type}' has invalid JSON: {data[:200]}")
+            return
+
+        if event_type == "config":
+            await self._handle_config_event(payload)
+        elif event_type == "action":
+            await self._handle_action_event(payload)
+        elif event_type == "heartbeat":
+            await self._handle_heartbeat_event(payload)
+        elif event_type == "connected":
+            await self._handle_connected_event(payload)
+        else:
+            logger.debug(f"Unknown SSE event type: {event_type}")
+
+    async def _handle_config_event(self, payload: dict):
+        """Handle a config SSE event - full config push from API."""
+        version = payload.get("configVersion", 0)
+        logger.info(f"SSE received config event (version={version})")
+
+        # Save to local store
+        config_store.save_full_config(payload, version)
+
+        # Extract settings and call the settings callback
+        settings = {
+            "rdh_mode": payload.get("rdhMode", False),
+            "status": payload.get("status", ""),
+            "light": payload.get("light", {}),
+            "climate": payload.get("climate", {}),
+            "tank": payload.get("tank", {}),
+        }
+
+        if self._settings_callback:
+            try:
+                await self._settings_callback(settings)
+                logger.debug("Settings callback executed from SSE config event")
+            except Exception as e:
+                logger.error(f"Error in settings callback: {e}")
+
+    async def _handle_action_event(self, payload: dict):
+        """Handle an action SSE event - put action into command queue."""
+        action_id = payload.get("id")
+        action_type = payload.get("type")
+
+        if not action_id:
+            logger.warning(f"SSE action event missing id: {payload}")
+            return
+
+        logger.info(f"SSE received action event: {action_id} ({action_type})")
+
+        # Put the action into the command queue for processing by _command_execution_task
+        if self._command_queue:
+            await self._command_queue.put(payload)
+
+    async def _handle_heartbeat_event(self, payload: dict):
+        """Handle a heartbeat SSE event - check configVersion for drift."""
+        remote_version = payload.get("configVersion", 0)
+        local_version = config_store.get_config_version()
+
+        if remote_version != local_version:
+            logger.info(
+                f"SSE heartbeat: config version mismatch "
+                f"(local={local_version}, remote={remote_version}), fetching full config"
+            )
+            full_config = await self.fetch_full_config()
+            if full_config and self._settings_callback:
+                settings = {
+                    "rdh_mode": full_config.get("rdhMode", False),
+                    "status": full_config.get("status", ""),
+                    "light": full_config.get("light", {}),
+                    "climate": full_config.get("climate", {}),
+                    "tank": full_config.get("tank", {}),
+                }
+                try:
+                    await self._settings_callback(settings)
+                except Exception as e:
+                    logger.error(f"Error in settings callback after heartbeat resync: {e}")
+        else:
+            logger.debug(f"SSE heartbeat: config version OK ({local_version})")
+
+    async def _handle_connected_event(self, payload: dict):
+        """Handle a connected SSE event - log and store version."""
+        version = payload.get("configVersion", 0)
+        logger.info(f"SSE connected event: configVersion={version}")
+
+    # ─── State ──────────────────────────────────────────────────────
+
     def get_init_state(self) -> dict[str, bool]:
         """Get the initialization state of the API client."""
         return {
             "initialized": self._client is not None,
             "has_command_queue": self._command_queue is not None,
+            "sse_running": self._sse_running,
         }
 
 

@@ -304,57 +304,33 @@ class TestApiClientPollCommands:
             yield client
 
     @pytest.mark.asyncio
-    async def test_poll_commands_returns_commands(self, api_client):
-        """Test polling commands returns action list."""
-        mock_response = api_client._mock_httpx_response(
-            status_code=200,
-            json_data={
-                "actions": [
-                    {"id": "cmd-1", "action": "on", "target": "pump1"},
-                    {"id": "cmd-2", "action": "off", "target": "pump2"},
-                ]
-            },
-        )
-        api_client._client.get.return_value = mock_response
+    async def test_sse_action_event_queues_command(self, api_client):
+        """Test that SSE action events are queued as commands."""
+        action_payload = {"id": "cmd-1", "type": "LIGHT", "action": "on", "target": "pump1"}
+        await api_client._handle_action_event(action_payload)
 
-        actions = await api_client.poll_commands()
-
-        assert len(actions) == 2
-        assert actions[0]["id"] == "cmd-1"
+        result = await api_client.get_command(timeout=1.0)
+        assert result["id"] == "cmd-1"
 
     @pytest.mark.asyncio
-    async def test_poll_commands_204_returns_empty(self, api_client):
-        """Test polling with 204 status returns empty list."""
-        mock_response = MagicMock()
-        mock_response.status_code = 204
-        mock_response.raise_for_status = MagicMock()
-        api_client._client.get.return_value = mock_response
+    async def test_sse_action_event_missing_id(self, api_client):
+        """Test that SSE action events without id are ignored."""
+        action_payload = {"type": "LIGHT", "action": "on"}
+        await api_client._handle_action_event(action_payload)
 
-        commands = await api_client.poll_commands()
-
-        assert commands == []
+        result = await api_client.get_command(timeout=0.1)
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_poll_commands_not_authenticated(self, mock_config):
-        """Test poll_commands when not authenticated."""
-        with (
-            patch("app.api_client.config", mock_config),
-            patch("app.api_client.auth_manager") as mock_auth,
-        ):
-            mock_auth.is_authenticated.return_value = False
+    async def test_sse_action_event_multiple_commands(self, api_client):
+        """Test that multiple SSE action events are queued in order."""
+        await api_client._handle_action_event({"id": "cmd-1", "type": "LIGHT"})
+        await api_client._handle_action_event({"id": "cmd-2", "type": "FAN"})
 
-            from app.api_client import ApiClient
-            from app.utils.singleton import SingletonMeta
-
-            if ApiClient in SingletonMeta._instances:
-                del SingletonMeta._instances[ApiClient]
-
-            client = ApiClient()
-            client._client = MagicMock()
-
-            commands = await client.poll_commands()
-
-            assert commands is None
+        result1 = await api_client.get_command(timeout=1.0)
+        result2 = await api_client.get_command(timeout=1.0)
+        assert result1["id"] == "cmd-1"
+        assert result2["id"] == "cmd-2"
 
     @pytest.mark.asyncio
     async def test_get_command_from_queue(self, api_client):
@@ -374,13 +350,17 @@ class TestApiClientPollCommands:
         assert result is None
 
 
-class TestApiClientProcessResponse:
-    """Tests for ApiClient response processing."""
+class TestApiClientSSEEventHandling:
+    """Tests for ApiClient SSE event handling."""
 
     @pytest.fixture
     def api_client(self, mock_config):
         """Create a configured ApiClient instance."""
-        with patch("app.api_client.config", mock_config), patch("app.api_client.auth_manager"):
+        with (
+            patch("app.api_client.config", mock_config),
+            patch("app.api_client.auth_manager"),
+            patch("app.api_client.config_store"),
+        ):
             from app.api_client import ApiClient
             from app.utils.singleton import SingletonMeta
 
@@ -388,41 +368,48 @@ class TestApiClientProcessResponse:
                 del SingletonMeta._instances[ApiClient]
 
             client = ApiClient()
+            client._command_queue = asyncio.Queue()
             yield client
 
     @pytest.mark.asyncio
-    async def test_process_response_calls_settings_callback(self, api_client, sample_api_response):
-        """Test that process_response calls settings callback."""
+    async def test_config_event_calls_settings_callback(self, api_client):
+        """Test that config SSE event calls settings callback."""
         callback = AsyncMock()
         api_client.register_settings_callback(callback)
 
-        await api_client._process_response(sample_api_response)
+        config_payload = {
+            "configVersion": 1,
+            "rdhMode": False,
+            "status": "active",
+            "light": {"day": {"on": "06:00", "off": "22:00"}},
+            "climate": {"temperature": 25, "humidity": 60},
+            "tank": {"ph": 6.5},
+        }
+
+        await api_client._handle_config_event(config_payload)
 
         callback.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_process_response_handles_actions(self, api_client, sample_api_response):
-        """Test that process_response handles actions."""
-        handler = AsyncMock(return_value=True)
-        api_client.register_action_handler("LIGHT", handler)
+    async def test_action_event_queues_command(self, api_client):
+        """Test that action SSE event puts command in queue."""
+        action_payload = {"id": "action-1", "type": "LIGHT", "value": "on"}
 
-        await api_client._process_response(sample_api_response)
+        await api_client._handle_action_event(action_payload)
 
-        handler.assert_called_once()
-        # Should have acknowledged the action twice (received and resolved)
-        assert len(api_client._actions) >= 1
+        result = await api_client.get_command(timeout=1.0)
+        assert result is not None
+        assert result["id"] == "action-1"
 
     @pytest.mark.asyncio
-    async def test_process_response_action_without_handler(self, api_client):
-        """Test process_response with action but no handler."""
-        response = {"actions": [{"id": "action-1", "type": "UNKNOWN_TYPE", "value": "test"}]}
+    async def test_action_event_without_id_ignored(self, api_client):
+        """Test that action event without id is ignored."""
+        action_payload = {"type": "UNKNOWN_TYPE", "value": "test"}
 
-        await api_client._process_response(response)
+        await api_client._handle_action_event(action_payload)
 
-        # Should still acknowledge as received
-        assert len(api_client._actions) == 1
-        assert api_client._actions[0]["received"] is True
-        assert api_client._actions[0]["resolved"] is False
+        result = await api_client.get_command(timeout=0.1)
+        assert result is None
 
 
 class TestApiClientProblemDetection:

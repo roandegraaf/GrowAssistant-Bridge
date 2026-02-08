@@ -108,7 +108,7 @@ class AuthManager(metaclass=SingletonMeta):
 
         try:
             response = await self._client.get(
-                f"{self._base_url}/client/{self._client_id}",
+                f"{self._base_url}/bridge/{self._client_id}",
                 headers=self._get_auth_headers(),
             )
             if response.status_code == 200:
@@ -135,7 +135,7 @@ class AuthManager(metaclass=SingletonMeta):
             return False
 
         custom_id = self._generate_custom_id()
-        url = f"{self._base_url}/client"
+        url = f"{self._base_url}/bridge"
 
         try:
             async for attempt in AsyncRetrying(
@@ -261,7 +261,7 @@ to connect this client to your environment.
             return False, "not_connected"
 
         try:
-            response = await self._client.get(f"{self._base_url}/client/{self._client_id}")
+            response = await self._client.get(f"{self._base_url}/bridge/{self._client_id}")
 
             if response.status_code == 204:
                 logger.info("Client connected to API but no space created yet")

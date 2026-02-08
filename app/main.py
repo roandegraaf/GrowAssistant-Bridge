@@ -18,6 +18,7 @@ if parent_dir not in sys.path:
 from app.api_client import api_client
 from app.auth import auth_manager
 from app.config import config, init_logging
+from app.config_store import config_store
 from app.integrations import (
     Integration,
     discover_integrations,
@@ -99,12 +100,18 @@ class Application:
 
         await self._handle_authentication()
         await queue_manager.start()
+        config_store.start()
 
         await api_client.start()
-        await api_client.start_command_polling()
         api_client.register_settings_callback(self._apply_settings)
 
+        # Load config from local store and apply settings before SSE connects
+        await self._load_config_from_store()
+
         await self._load_integrations()
+
+        # Start SSE listener (replaces command polling)
+        await api_client.start_sse_listener()
         self._create_tasks()
 
         logger.info("Application started")
@@ -161,6 +168,22 @@ class Application:
             else:
                 print("\nTimeout waiting for space creation. Will check periodically.\n")
 
+    async def _load_config_from_store(self):
+        """Load config from local ConfigStore and apply settings on startup."""
+        stored_config, version = config_store.get_full_config()
+        if stored_config and version > 0:
+            logger.info(f"Loaded stored config version={version}, applying settings")
+            settings = {
+                "rdh_mode": stored_config.get("rdhMode", False),
+                "status": stored_config.get("status", ""),
+                "light": stored_config.get("light", {}),
+                "climate": stored_config.get("climate", {}),
+                "tank": stored_config.get("tank", {}),
+            }
+            await self._apply_settings(settings)
+        else:
+            logger.info("No stored config found, waiting for SSE config push")
+
     async def stop(self):
         """Stop the application, cancelling tasks and stopping all services."""
         if not self._running:
@@ -187,6 +210,7 @@ class Application:
         await api_client.stop()
         await auth_manager.stop()
         await queue_manager.stop()
+        config_store.stop()
 
         logger.info("Application stopped")
 

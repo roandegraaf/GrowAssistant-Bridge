@@ -35,6 +35,7 @@ def mock_dependencies():
         patch("app.main.queue_manager") as mock_queue,
         patch("app.main.registry") as mock_registry,
         patch("app.main.config") as mock_config,
+        patch("app.main.config_store") as mock_config_store,
         patch("app.main.discover_integrations") as mock_discover,
         patch("app.main.get_integration_class_by_config_key") as mock_get_class,
     ):
@@ -53,7 +54,7 @@ def mock_dependencies():
         # Configure api_client
         mock_api.start = AsyncMock()
         mock_api.stop = AsyncMock()
-        mock_api.start_command_polling = AsyncMock()
+        mock_api.start_sse_listener = AsyncMock()
         mock_api.register_settings_callback = MagicMock()
         mock_api.send_data = AsyncMock(return_value=(True, "Success"))
         mock_api.get_command = AsyncMock(return_value=None)
@@ -66,6 +67,11 @@ def mock_dependencies():
         mock_queue.get_data_points = AsyncMock(return_value=[])
         mock_queue.mark_processed = AsyncMock()
         mock_queue.requeue_data_points = AsyncMock()
+
+        # Configure config_store
+        mock_config_store.start = MagicMock()
+        mock_config_store.stop = MagicMock()
+        mock_config_store.get_full_config = MagicMock(return_value=(None, 0))
 
         # Configure registry
         mock_registry.get_sensor_integration = MagicMock(return_value=None)
@@ -94,6 +100,7 @@ def mock_dependencies():
             "queue_manager": mock_queue,
             "registry": mock_registry,
             "config": mock_config,
+            "config_store": mock_config_store,
             "discover_integrations": mock_discover,
             "get_integration_class_by_config_key": mock_get_class,
         }
