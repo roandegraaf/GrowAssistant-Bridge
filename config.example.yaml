@@ -66,6 +66,27 @@ integrations:
         type: humidity
     username: ''  # Set your MQTT username
 
+  esphome:
+    enabled: false
+    reconnect_interval: 10
+    devices:
+      tent_sensors:
+        name: tent_sensors
+        host: tent-sensors.local  # or the device's IP
+        port: 6053
+        encryption_key: ''  # base64 PSK from ESPHome `api.encryption.key`
+        # password: ''      # only if you used the legacy api.password
+        # Optional explicit entity mapping. Without this, sensors are auto-mapped
+        # by their ESPHome `device_class` (temperature/humidity/pressure/...).
+        # ESPHome's `device_class: moisture` is ambiguous (soil/leak/tank), so
+        # soil moisture sensors must be mapped explicitly. The `soil_moisture`
+        # type is automatically logged as SOIL_MOISTURE.
+        entities:
+          soil_moisture_1:
+            type: soil_moisture
+          soil_moisture_2:
+            type: soil_moisture
+
   sample:
     devices:
       '0':

@@ -120,7 +120,7 @@ web:
   debug: false
   enabled: true
   host: 0.0.0.0
-  password_hash: scrypt:32768:8:1$8uqRIO3TpkP55Wc5$f21e47c312d9741f213212bdd89f59da3b1a02f4951c573fd12dc73f0b7c161fdac3f027ea28fc760192320183157964621d6df39554de1d3606d21a69f30661
+  password_hash: scrypt:32768:8:1$rtojrNQSQOzHdAuo$89667dffe28a5f896b362c0b11a9b768c50848297e5c78667582dba820f20cb46b42bb53a2ef4d525e4ac918f0be10d04046a50c1b33159264d015a718eed038
   port: 5010
   secret_key: change-this-in-production
   ssl_cert: ''

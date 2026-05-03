@@ -162,6 +162,68 @@ class SerialIntegrationConfig(BaseIntegrationConfig):
 
 
 # =============================================================================
+# ESPHome Integration Schemas
+# =============================================================================
+
+
+class ESPHomeEntityConfig(BaseModel):
+    """Mapping for a single ESPHome entity onto a GrowAssistant device.
+
+    `key` matches the ESPHome entity's `object_id` (preferred) or `name`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(
+        ..., min_length=1, description="GrowAssistant device type (temperature, humidity, ...)"
+    )
+    name: str | None = Field(
+        default=None, description="Override device name in the registry (defaults to entity key)"
+    )
+    log_type: str | None = Field(
+        default=None,
+        description="API LogType (TEMPERATURE, HUMIDITY, ...). If unset, derived from `type`.",
+    )
+    category: Literal["sensor", "actuator"] | None = Field(
+        default=None, description="Force sensor/actuator category. Auto-detected if omitted."
+    )
+
+
+class ESPHomeDeviceConfig(BaseModel):
+    """Configuration for a single ESPHome device (one ESP node)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(..., min_length=1, description="Friendly name for this ESPHome device")
+    host: str = Field(..., min_length=1, description="Hostname or IP of the ESPHome device")
+    port: int = Field(default=6053, ge=1, le=65535, description="Native API port (default 6053)")
+    encryption_key: str | None = Field(
+        default=None, description="Base64 noise PSK from the ESPHome `api: encryption: key:` block"
+    )
+    password: str | None = Field(
+        default=None, description="Legacy password (only if not using encryption_key)"
+    )
+    entities: dict[str, ESPHomeEntityConfig] = Field(
+        default_factory=dict,
+        description=(
+            "Optional explicit mapping of ESPHome entity object_id -> GrowAssistant device. "
+            "If omitted, sensors are auto-mapped from device_class metadata."
+        ),
+    )
+
+
+class ESPHomeIntegrationConfig(BaseIntegrationConfig):
+    """Configuration schema for the native ESPHome integration."""
+
+    devices: dict[str, ESPHomeDeviceConfig] = Field(
+        default_factory=dict, description="Dictionary of ESPHome devices keyed by ID"
+    )
+    reconnect_interval: int = Field(
+        default=10, ge=1, description="Seconds to wait between reconnect attempts"
+    )
+
+
+# =============================================================================
 # Generic Device Configuration (for external integrations)
 # =============================================================================
 

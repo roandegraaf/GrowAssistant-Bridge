@@ -62,6 +62,7 @@ class LogType(str, Enum):
     SUPPLEMENT_ML = "SUPPLEMENT_ML"
     SUPPLEMENT_LEVEL = "SUPPLEMENT_LEVEL"
     PLANT_WATER = "PLANT_WATER"
+    SOIL_MOISTURE = "SOIL_MOISTURE"
 
     # Binary actuator states
     HEATER_STATE = "HEATER_STATE"
