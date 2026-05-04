@@ -110,6 +110,17 @@ class Application:
 
         await self._load_integrations()
 
+        # Push the initial device manifest now that integrations have
+        # registered their devices. Skipped silently if not yet
+        # authenticated — the registry change callback will retry once
+        # auth completes (and the API treats it as a normal upsert).
+        if auth_manager.is_authenticated():
+            success, msg = await api_client.send_manifest()
+            if success:
+                logger.info(f"Initial manifest pushed: {msg}")
+            else:
+                logger.warning(f"Initial manifest push failed: {msg}")
+
         # Start SSE listener (replaces command polling)
         await api_client.start_sse_listener()
         self._create_tasks()

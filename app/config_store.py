@@ -158,6 +158,105 @@ class ConfigStore(metaclass=SingletonMeta):
                 return None, 0
         return None, 0
 
+    # ─── Manifest version / hash ────────────────────────────────────
+
+    def get_manifest_version(self) -> int:
+        """Return the last accepted manifest version, or 0 if never sent."""
+        if not self._db_conn:
+            return 0
+        cursor = self._db_conn.execute(
+            "SELECT value FROM local_config WHERE key = ?", ("manifest_version",)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            logger.error("Invalid manifest_version in store, resetting to 0")
+            return 0
+
+    def set_manifest_version(self, version: int) -> None:
+        """Persist the latest accepted manifest version."""
+        if not self._db_conn:
+            logger.warning("ConfigStore not started, cannot save manifest_version")
+            return
+        self._db_conn.execute(
+            """INSERT OR REPLACE INTO local_config (key, value, version, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            ("manifest_version", str(int(version)), int(version), time.time()),
+        )
+        self._db_conn.commit()
+        logger.debug(f"Saved manifest_version={version}")
+
+    def get_manifest_hash(self) -> Optional[str]:
+        """Return the hash of the last successfully-pushed manifest, or None."""
+        if not self._db_conn:
+            return None
+        cursor = self._db_conn.execute(
+            "SELECT value FROM local_config WHERE key = ?", ("manifest_hash",)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_manifest_hash(self, manifest_hash: str) -> None:
+        """Persist the hash of the last successfully-pushed manifest."""
+        if not self._db_conn:
+            logger.warning("ConfigStore not started, cannot save manifest_hash")
+            return
+        self._db_conn.execute(
+            """INSERT OR REPLACE INTO local_config (key, value, version, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            ("manifest_hash", manifest_hash, 0, time.time()),
+        )
+        self._db_conn.commit()
+        logger.debug(f"Saved manifest_hash={manifest_hash[:12]}…")
+
+    # ─── Device assignments (display-only, from SSE config event) ──
+
+    def save_device_assignments(self, assignments: list[dict], version: int) -> None:
+        """Persist the latest device assignments list from the API.
+
+        Stored under the ``device_assignments`` key via the existing
+        ``save_config`` mechanism. The payload is the raw list of
+        ``{entityId, role, slot}`` dicts as received over SSE; this is
+        used solely by the bridge web UI for labeling. Command routing
+        never consults this list.
+        """
+        # save_config uses json.dumps which round-trips lists fine, but
+        # the type hint says ``dict``. Wrapping happens at the SQL layer
+        # via json serialization, so a top-level list works in practice.
+        self.save_config("device_assignments", assignments, version)
+        logger.info(f"Saved device_assignments version={version} count={len(assignments)}")
+
+    def get_device_assignments(self) -> list[dict]:
+        """Return the stored device assignments, or [] if none stored.
+
+        Mirrors the read pattern of ``get_full_config`` but returns just
+        the list (no version pair), since callers only need the data.
+        """
+        if not self._db_conn:
+            return []
+
+        cursor = self._db_conn.execute(
+            "SELECT value FROM local_config WHERE key = ?", ("device_assignments",)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return []
+        try:
+            data = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Error decoding device_assignments from store")
+            return []
+        if not isinstance(data, list):
+            logger.warning(
+                "Stored device_assignments is not a list (got %s); returning []",
+                type(data).__name__,
+            )
+            return []
+        return data
+
     def queue_outbound(self, endpoint: str, payload: dict):
         """Queue an outbound request for later delivery.
 

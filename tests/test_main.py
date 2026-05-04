@@ -57,6 +57,7 @@ def mock_dependencies():
         mock_api.start_sse_listener = AsyncMock()
         mock_api.register_settings_callback = MagicMock()
         mock_api.send_data = AsyncMock(return_value=(True, "Success"))
+        mock_api.send_manifest = AsyncMock(return_value=(True, "Manifest v1 accepted"))
         mock_api.get_command = AsyncMock(return_value=None)
         mock_api.send_command_result = AsyncMock()
 

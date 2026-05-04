@@ -18,6 +18,16 @@ A bridge application to connect various sensors and controllers for cannabis gro
 - Extensible architecture for adding new device types and integrations
 - Detailed logging with individual log files for API data transmissions
 
+## Documentation
+
+- [`docs/bridge-protocol.md`](docs/bridge-protocol.md) — wire-format
+  contract between bridge and API. Read this if you are building or
+  modifying an API server that talks to the bridge.
+- [`docs/developer_guide.md`](docs/developer_guide.md) — internal
+  architecture, integration plugin authoring guide, and pipeline
+  details. Read this if you are writing a new integration or hacking
+  on bridge internals.
+
 ## Requirements
 
 - Raspberry Pi (3B+ or newer recommended)

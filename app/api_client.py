@@ -78,6 +78,10 @@ class ApiClient(metaclass=SingletonMeta):
         self._sse_task: Optional[asyncio.Task] = None
         self._sse_running = False
 
+        # Manifest push state
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._manifest_lock: Optional[asyncio.Lock] = None
+
         logger.info("API client initialized")
 
     async def start(self):
@@ -89,6 +93,19 @@ class ApiClient(metaclass=SingletonMeta):
         )
         self._command_queue = asyncio.Queue()
 
+        # Capture the running loop so the registry change callback (which
+        # may fire from any thread / sync context) can schedule the async
+        # manifest push correctly.
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+        # Wire registry change callbacks → manifest push.
+        from app.registry import registry as _registry
+
+        _registry.add_change_callback(self._on_registry_change)
+
         if self._log_values:
             os.makedirs(self._api_log_dir, exist_ok=True)
 
@@ -96,6 +113,15 @@ class ApiClient(metaclass=SingletonMeta):
 
     async def stop(self):
         """Stop the API client, SSE listener, and close HTTP connection."""
+        # Deregister the registry change callback so a shutting-down client
+        # never schedules another manifest push.
+        try:
+            from app.registry import registry as _registry
+
+            _registry.remove_change_callback(self._on_registry_change)
+        except Exception:
+            logger.debug("Failed to deregister registry change callback", exc_info=True)
+
         self._sse_running = False
         if self._sse_task and not self._sse_task.done():
             self._sse_task.cancel()
@@ -148,13 +174,10 @@ class ApiClient(metaclass=SingletonMeta):
         log_type: Union[LogType, str],
         value: Union[str, float, int],
         log_date: Optional[datetime] = None,
-        pump_num: Optional[int] = None,
         device_id: Optional[str] = None,
     ):
         """Add a data log entry."""
         data_log = create_data_log(log_type, value, log_date, device_id)
-        if pump_num is not None:
-            data_log["pumpNum"] = pump_num
         self._data_logs.append(data_log)
 
     def add_problem(
@@ -206,6 +229,45 @@ class ApiClient(metaclass=SingletonMeta):
 
     # ─── Data processing helpers ────────────────────────────────────
 
+    @staticmethod
+    def _derive_entity_id(point: dict[str, Any]) -> Optional[str]:
+        """Best-effort derive a stable `<domain>.<name>` entity_id from a legacy point.
+
+        Each integration's `receive_data()` yields a different key for the device
+        name (GPIO → `pin_name`, MQTT → `topic`, HTTP → `endpoint_name`, Serial
+        has no consistent key). `main._data_collection_task` tags every point with
+        `integration` (the registered integration name). We strip a trailing
+        `Integration` suffix to get the domain, then probe a series of keys in
+        order of specificity.
+
+        Returns None when no name can be found — `add_data_log` will then omit the
+        device_id and the API will skip the liveness touch for that point.
+        """
+        # If the integration already produced a fully-qualified entity_id, trust it.
+        explicit = point.get("entity_id")
+        if isinstance(explicit, str) and "." in explicit:
+            return explicit
+
+        integration = point.get("integration")
+        if not integration:
+            return None
+        domain = integration.lower()
+        if domain.endswith("integration"):
+            domain = domain[: -len("integration")]
+
+        name = (
+            point.get("device_id")
+            or point.get("device")
+            or point.get("entity_id")
+            or point.get("sensor")
+            or point.get("endpoint_name")  # HTTP integration
+            or point.get("topic")  # MQTT integration
+            or point.get("pin_name")  # GPIO integration
+            or point.get("name")
+            or point.get("target")
+        )
+        return f"{domain}.{name}" if name else None
+
     def _process_legacy_data_points(self, data_points: list[dict[str, Any]]) -> None:
         """Process legacy data points and convert to new format."""
         self._detect_problems_from_data(data_points)
@@ -217,7 +279,7 @@ class ApiClient(metaclass=SingletonMeta):
                 log_type=point.get("type", "SYSTEM"),
                 value=point.get("value", ""),
                 log_date=log_date,
-                pump_num=point.get("pumpNum") or point.get("pump_num"),
+                device_id=self._derive_entity_id(point),
             )
 
     def _log_transmission_results(
@@ -406,6 +468,128 @@ class ApiClient(metaclass=SingletonMeta):
             self._clear_sent_data()
             logger.exception(f"Unexpected error sending data: {e}")
             return False, f"Unexpected error: {e}"
+
+    # ─── REST: Send device manifest ─────────────────────────────────
+
+    def _on_registry_change(self) -> None:
+        """Sync callback invoked by the registry when devices change.
+
+        Schedules an async manifest push on the event loop. No-ops cleanly
+        when the loop isn't running yet (registry pre-init) or when not
+        authenticated — ``send_manifest`` itself re-validates preconditions.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # No live loop: bridge is starting up or already torn down.
+            return
+        if not auth_manager.is_authenticated():
+            # Not yet authenticated: startup will push once auth completes.
+            return
+        try:
+            if loop.is_running() and asyncio.get_event_loop() is loop:
+                asyncio.create_task(self.send_manifest())
+            else:
+                # Called from a non-loop thread (e.g. signal handler, web UI).
+                asyncio.run_coroutine_threadsafe(self.send_manifest(), loop)
+        except RuntimeError:
+            # No running loop in this thread; fall back to threadsafe schedule.
+            try:
+                asyncio.run_coroutine_threadsafe(self.send_manifest(), loop)
+            except Exception:
+                logger.debug(
+                    "Could not schedule manifest push from registry callback", exc_info=True
+                )
+
+    async def send_manifest(self) -> tuple[bool, str]:
+        """Push the current device registry as a manifest to the API.
+
+        Persists a monotonic ``manifestVersion`` and the manifest content
+        hash via ``config_store``. Idempotent under concurrent calls (an
+        async lock serializes pushes).
+
+        Returns:
+            ``(success, message)``.
+        """
+        valid, error_msg, client_id = self._validate_send_preconditions()
+        if not valid:
+            return False, error_msg
+
+        # Lazy-init the lock — start() runs on the loop so it's safe here.
+        if self._manifest_lock is None:
+            self._manifest_lock = asyncio.Lock()
+
+        # Local imports to avoid module import-cycle pain.
+        from app.registry import registry
+
+        async with self._manifest_lock:
+            # Bump version monotonically. Persist optimistically; if the API
+            # rejects we leave the version alone — the API echoes the
+            # accepted version which we then write back.
+            current_version = config_store.get_manifest_version()
+            next_version = current_version + 1
+
+            payload = registry.serialize_manifest(next_version)
+            manifest_hash = registry.compute_manifest_hash()
+            url = f"{self._base_url}/bridge/{client_id}/manifest"
+
+            try:
+                async for attempt in AsyncRetrying(
+                    retry=retry_if_exception_type(
+                        (httpx.HTTPError, httpx.ConnectError, asyncio.TimeoutError)
+                    ),
+                    stop=stop_after_attempt(
+                        config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)
+                    ),
+                    wait=wait_exponential(
+                        min=config.get("api.retry_min_backoff", DEFAULT_RETRY_MIN_BACKOFF),
+                        max=config.get("api.retry_max_backoff", DEFAULT_RETRY_MAX_BACKOFF),
+                    ),
+                ):
+                    with attempt:
+                        logger.debug(
+                            f"Pushing manifest v{next_version} "
+                            f"with {len(payload['devices'])} devices"
+                        )
+                        response = await self._client.post(
+                            url, json=payload, headers=self._get_headers()
+                        )
+                        response.raise_for_status()
+
+                # Parse and persist accepted version + content hash.
+                try:
+                    body = response.json() if response.content else {}
+                except ValueError:
+                    body = {}
+                accepted = body.get("acceptedVersion", next_version)
+                try:
+                    accepted_int = int(accepted)
+                except (TypeError, ValueError):
+                    accepted_int = next_version
+                config_store.set_manifest_version(accepted_int)
+                config_store.set_manifest_hash(manifest_hash)
+                logger.info(
+                    f"Manifest pushed: v{accepted_int}, "
+                    f"{len(payload['devices'])} devices, hash={manifest_hash[:12]}…"
+                )
+                return True, f"Manifest v{accepted_int} accepted"
+
+            except RetryError as e:
+                original = e.last_attempt.exception()
+                logger.warning(f"Manifest push failed after retries: {original}")
+                return False, f"Manifest push failed: {original}"
+            except httpx.HTTPStatusError as e:
+                err = f"{e.response.status_code} - {e.response.text}"
+                logger.error(f"HTTP error pushing manifest: {err}")
+                return False, f"HTTP {e.response.status_code}"
+            except httpx.ConnectError as e:
+                logger.warning(f"Manifest push: API offline ({e})")
+                return False, "API offline"
+            except (httpx.RequestError, asyncio.TimeoutError) as e:
+                logger.warning(f"Request error pushing manifest: {e}")
+                return False, f"Request error: {e}"
+            except Exception as e:
+                logger.exception(f"Unexpected error pushing manifest: {e}")
+                return False, f"Unexpected error: {e}"
 
     # ─── REST: Send action result ───────────────────────────────────
 
@@ -603,6 +787,17 @@ class ApiClient(metaclass=SingletonMeta):
         # Save to local store
         config_store.save_full_config(payload, version)
 
+        # Extract device assignments (display-only; command routing always
+        # goes by entity_id via registry.get_device, never by role).
+        raw_assignments = payload.get("deviceAssignments", [])
+        if not isinstance(raw_assignments, list):
+            logger.warning(
+                "deviceAssignments in config event is not a list (got %s); " "treating as empty",
+                type(raw_assignments).__name__,
+            )
+            raw_assignments = []
+        config_store.save_device_assignments(raw_assignments, version)
+
         # Extract settings and call the settings callback
         settings = {
             "rdh_mode": payload.get("rdhMode", False),
@@ -659,6 +854,19 @@ class ApiClient(metaclass=SingletonMeta):
                     logger.error(f"Error in settings callback after heartbeat resync: {e}")
         else:
             logger.debug(f"SSE heartbeat: config version OK ({local_version})")
+
+        # Manifest-hash drift detection: API echoes the hash it last accepted
+        # in the heartbeat; if it diverges from what we last pushed, re-push.
+        remote_manifest_hash = payload.get("manifestHash")
+        if remote_manifest_hash:
+            local_manifest_hash = config_store.get_manifest_hash()
+            if remote_manifest_hash != local_manifest_hash:
+                logger.info(
+                    "SSE heartbeat: manifest hash mismatch "
+                    f"(local={local_manifest_hash}, remote={remote_manifest_hash}), "
+                    "scheduling re-push"
+                )
+                asyncio.create_task(self.send_manifest())
 
     async def _handle_connected_event(self, payload: dict):
         """Handle a connected SSE event - log and store version."""

@@ -381,10 +381,11 @@ my_devices = registry.get_devices_by_integration("MyIntegration")
 ```python
 from app.api_types import LogType
 
-# Log sensor readings
-self.log_data(LogType.TEMPERATURE, 25.5)
-self.log_data(LogType.HUMIDITY, 65)
-self.log_data(LogType.TANK_ML, 500, pump_num=1)  # With pump number
+# Log sensor readings. `device_id` is the source device's entity_id
+# (`<domain>.<name>`); see docs/bridge-protocol.md §7 for the identity rule.
+self.log_data(LogType.TEMPERATURE, 25.5, device_id="mqtt.temp1")
+self.log_data(LogType.HUMIDITY, 65, device_id="mqtt.temp1")
+self.log_data(LogType.TANK_ML, 500, device_id="gpio.water_pump")
 ```
 
 ### Reporting Problems
@@ -424,7 +425,8 @@ async def _handle_temp(self, action_data: Dict[str, Any]) -> bool:
 
 async def _handle_dosing(self, action_data: Dict[str, Any]) -> bool:
     value = float(action_data.get("value", 0))
-    pump_num = action_data.get("pumpNumber")
+    # The action's target device is routed upstream in _process_command via
+    # action_data["targetId"] (entity_id). See docs/bridge-protocol.md §4.4.
 
     # Dispense nutrients...
 
@@ -435,31 +437,34 @@ async def _handle_dosing(self, action_data: Dict[str, Any]) -> bool:
 
 ```python
 async def apply_settings(self, settings: Dict[str, Any]) -> bool:
-    """Handle settings updates from API."""
+    """Handle settings updates from API.
+
+    The exact shape of `settings` is defined by the API's SSE `config`
+    event payload. See `docs/bridge-protocol.md` §4.2 for the canonical
+    schema, including `deviceAssignments` and the per-section keys
+    (`climate`, `light`, `tank`).
+    """
     try:
-        # Climate settings
+        # Climate setpoints
         climate = settings.get("climate", {})
         if climate:
             temp = climate.get("temperature")
             humidity = climate.get("humidity")
             fan_speed = climate.get("baseFanSpeed")
 
-        # Light settings (schedule strings like "06:00-18:00")
+        # Light schedule (strings like "06:00-18:00")
         light = settings.get("light", {})
         if light:
             day_schedule = light.get("day")
             night_schedule = light.get("night")
 
-        # Tank/pump settings
+        # Tank / device assignments. Devices are keyed by entity_id; the
+        # API tells the bridge which entity_id holds each role via
+        # `settings["deviceAssignments"]` — see protocol doc §4.2.
         tank = settings.get("tank", {})
         if tank:
-            waters = tank.get("waters", [])  # Pump schedules
             ph_setting = tank.get("ph", {})
             tank_capacity = tank.get("amountML")
-
-            for water in waters:
-                pump_num = water.get("pumpNum")
-                schedules = water.get("waterSchedules", [])
 
         return True
     except Exception as e:

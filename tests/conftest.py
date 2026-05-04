@@ -268,7 +268,6 @@ def sample_api_response() -> dict[str, Any]:
                 "id": "action-1",
                 "type": "LIGHT",
                 "value": "on",
-                "pumpNumber": None,
                 "received": False,
                 "resolved": False,
             }
@@ -283,7 +282,6 @@ def sample_action() -> dict[str, Any]:
         "id": "test-action-1",
         "type": "LIGHT",
         "value": "on",
-        "pumpNumber": None,
     }
 
 

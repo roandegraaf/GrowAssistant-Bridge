@@ -12,12 +12,6 @@ class DataLogDict(TypedDict):
     value: str
 
 
-class DataLogWithPumpDict(DataLogDict, total=False):
-    """Data log entry with optional pump number."""
-
-    pumpNum: int
-
-
 class ProblemDict(TypedDict):
     """Problem report sent to the API."""
 
@@ -44,7 +38,6 @@ class ActionDict(TypedDict):
     id: str
     type: str
     value: str
-    pump_number: Optional[int]
     received: bool
     resolved: bool
 
@@ -198,8 +191,6 @@ class LegacyDataPointDict(TypedDict, total=False):
     source: str
     endpoint_name: str
     sensor: str
-    pumpNum: int
-    pump_num: int
 
 
 class QueueItemDict(TypedDict, total=False):

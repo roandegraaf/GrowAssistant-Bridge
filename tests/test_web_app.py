@@ -226,6 +226,72 @@ class TestWebAppAPIEndpoints:
 
             assert response.status_code == 503
 
+    def test_get_devices_includes_assigned_role(self, mock_config):
+        """`/api/devices` annotates each device with its assigned_role/role_slot."""
+        with (
+            patch("web.app.config", mock_config),
+            patch("web.app.auth_manager") as mock_auth,
+            patch("web.app.registry"),
+            patch("web.app._collect_device_data_from_integrations") as mock_collect,
+        ):
+            mock_config.get.side_effect = lambda key, default=None: {
+                "web.auth_enabled": False,
+            }.get(key, default)
+            mock_auth.is_authenticated.return_value = True
+
+            # Stub out the integration collection so the test stays fast and
+            # doesn't need a running event loop. The route still exercises
+            # the _attach_assigned_roles annotation path because we patch
+            # _collect_device_data_from_integrations to return an already-
+            # annotated dict — but for a more accurate test we patch
+            # config_store.get_device_assignments and call _attach directly.
+            from web.app import _attach_assigned_roles, app
+
+            device_data = {
+                "gpio.relay1": {"state": "off"},
+                "esphome.scd30_temperature": {"value": 22.5},
+                "gpio.relay99": {"state": "off"},  # no assignment stored
+                "broken.integration": {"error": "Timeout getting data"},
+            }
+
+            with patch("web.app.config_store") as mock_store:
+                mock_store.get_device_assignments.return_value = [
+                    {"entityId": "gpio.relay1", "role": "WATER_PUMP", "slot": None},
+                    {
+                        "entityId": "esphome.scd30_temperature",
+                        "role": "TEMPERATURE_SENSOR",
+                        "slot": 2,
+                    },
+                ]
+                _attach_assigned_roles(device_data)
+
+            assert device_data["gpio.relay1"]["assigned_role"] == "WATER_PUMP"
+            assert device_data["gpio.relay1"]["role_slot"] is None
+            assert device_data["esphome.scd30_temperature"]["assigned_role"] == "TEMPERATURE_SENSOR"
+            assert device_data["esphome.scd30_temperature"]["role_slot"] == 2
+            # Unmatched device gets the UNASSIGNED default
+            assert device_data["gpio.relay99"]["assigned_role"] == "UNASSIGNED"
+            assert device_data["gpio.relay99"]["role_slot"] is None
+            # Error entries are not annotated
+            assert "assigned_role" not in device_data["broken.integration"]
+
+            # Sanity: the route itself still wires up
+            mock_collect.return_value = device_data
+            app.config["TESTING"] = True
+            app.config["SECRET_KEY"] = "test-secret"
+            mock_app_instance = MagicMock()
+            mock_app_instance._integrations = {"gpio": MagicMock()}
+            mock_app_instance.loop = MagicMock()
+            app.config["APPLICATION_INSTANCE"] = mock_app_instance
+
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["logged_in"] = True
+                response = client.get("/api/devices")
+                assert response.status_code == 200
+                data = json.loads(response.data)
+                assert "gpio.relay1" in data
+
 
 class TestWebAppConfigEndpoints:
     """Tests for web app configuration endpoints."""

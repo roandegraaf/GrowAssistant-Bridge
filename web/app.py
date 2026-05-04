@@ -30,6 +30,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.auth import auth_manager
 from app.config import config
+from app.config_store import config_store
 from app.registry import registry
 
 # Constant for masked sensitive values
@@ -389,7 +390,46 @@ def _collect_device_data_from_integrations(app_instance) -> dict:
     if not_done:
         logger.warning("Timeout waiting for device data from %d integrations", len(not_done))
 
+    _attach_assigned_roles(all_device_data)
+
     return all_device_data
+
+
+def _attach_assigned_roles(device_data: dict) -> None:
+    """Annotate each device dict with its assigned_role / role_slot.
+
+    Builds a lookup from ``config_store.get_device_assignments()`` keyed
+    by entity_id, then attaches ``assigned_role`` (str) and ``role_slot``
+    (int|None) to each device entry whose key matches. Devices with no
+    stored assignment get ``assigned_role="UNASSIGNED"`` and
+    ``role_slot=None`` for consistency. Error-shaped entries
+    (``{"error": ...}``) are left untouched.
+    """
+    try:
+        assignments = config_store.get_device_assignments()
+    except Exception as e:  # defensive — never let UI break on store issues
+        logger.warning("Could not load device assignments: %s", e)
+        assignments = []
+
+    lookup = {
+        a.get("entityId"): {
+            "role": a.get("role", "UNASSIGNED"),
+            "slot": a.get("slot"),
+        }
+        for a in assignments
+        if isinstance(a, dict) and a.get("entityId")
+    }
+
+    for entity_id, info in device_data.items():
+        if not isinstance(info, dict) or "error" in info:
+            continue
+        match = lookup.get(entity_id)
+        if match is not None:
+            info["assigned_role"] = match["role"]
+            info["role_slot"] = match["slot"]
+        else:
+            info["assigned_role"] = "UNASSIGNED"
+            info["role_slot"] = None
 
 
 @app.route("/api/devices", methods=["GET"])

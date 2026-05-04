@@ -267,6 +267,82 @@ class TestConfigStoreFullConfig:
         assert version == 0
 
 
+class TestConfigStoreDeviceAssignments:
+    """Tests for device-assignment persistence (Phase 3 SSE round-trip)."""
+
+    def test_save_and_get_device_assignments(self, config_store_with_temp_db):
+        """Round trip a list of {entityId, role, slot} dicts."""
+        store = config_store_with_temp_db
+        store.start()
+
+        assignments = [
+            {"entityId": "gpio.relay1", "role": "WATER_PUMP", "slot": None},
+            {
+                "entityId": "esphome.scd30_temperature",
+                "role": "TEMPERATURE_SENSOR",
+                "slot": None,
+            },
+        ]
+        store.save_device_assignments(assignments, 7)
+
+        result = store.get_device_assignments()
+        assert result == assignments
+
+    def test_get_device_assignments_when_empty(self, config_store_with_temp_db):
+        """Empty store returns []."""
+        store = config_store_with_temp_db
+        store.start()
+
+        assert store.get_device_assignments() == []
+
+    def test_save_device_assignments_overwrites(self, config_store_with_temp_db):
+        """Subsequent save overwrites the earlier assignments."""
+        store = config_store_with_temp_db
+        store.start()
+
+        store.save_device_assignments(
+            [{"entityId": "gpio.relay1", "role": "WATER_PUMP", "slot": None}], 1
+        )
+        store.save_device_assignments(
+            [{"entityId": "gpio.relay1", "role": "PH_UP_PUMP", "slot": None}], 2
+        )
+
+        result = store.get_device_assignments()
+        assert result == [{"entityId": "gpio.relay1", "role": "PH_UP_PUMP", "slot": None}]
+
+    def test_get_device_assignments_when_not_started(self, config_store_with_temp_db):
+        """When DB not started, return [] rather than raising."""
+        store = config_store_with_temp_db
+
+        assert store.get_device_assignments() == []
+
+    def test_get_device_assignments_invalid_json(self, config_store_with_temp_db):
+        """Corrupt JSON yields []."""
+        store = config_store_with_temp_db
+        store.start()
+
+        store._db_conn.execute(
+            "INSERT INTO local_config (key, value, version, updated_at) VALUES (?, ?, ?, ?)",
+            ("device_assignments", "not valid json{", 1, time.time()),
+        )
+        store._db_conn.commit()
+
+        assert store.get_device_assignments() == []
+
+    def test_get_device_assignments_non_list_payload(self, config_store_with_temp_db):
+        """A stored non-list value (defensive corruption) yields []."""
+        store = config_store_with_temp_db
+        store.start()
+
+        store._db_conn.execute(
+            "INSERT INTO local_config (key, value, version, updated_at) VALUES (?, ?, ?, ?)",
+            ("device_assignments", json.dumps({"oops": "dict"}), 1, time.time()),
+        )
+        store._db_conn.commit()
+
+        assert store.get_device_assignments() == []
+
+
 class TestConfigStoreVersionTracking:
     """Tests for config version tracking."""
 

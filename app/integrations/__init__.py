@@ -180,7 +180,6 @@ class Integration(abc.ABC):
         log_type: Union[LogType, str],
         value: Union[str, float, int],
         log_date=None,
-        pump_num=None,
         device_id=None,
     ):
         """Log data to the API.
@@ -189,10 +188,9 @@ class Integration(abc.ABC):
             log_type: Type of data being logged
             value: Value to log
             log_date: Optional timestamp (defaults to now)
-            pump_num: Optional pump number (only for pump-related logs)
             device_id: Optional device identifier for multiple devices of same type
         """
-        api_client.add_data_log(log_type, value, log_date, pump_num, device_id)
+        api_client.add_data_log(log_type, value, log_date, device_id)
 
     def report_problem(
         self,

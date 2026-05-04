@@ -133,7 +133,6 @@ def parse_api_response(response_data: dict) -> dict:
                 "id": action.get("id", ""),
                 "type": action.get("type", ""),
                 "value": action.get("value", ""),
-                "pump_number": action.get("pumpNumber"),
                 "received": action.get("received", False),
                 "resolved": action.get("resolved", False),
             }

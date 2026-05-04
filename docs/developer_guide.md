@@ -358,7 +358,7 @@ async def test_execute_command(config):
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `log_data(log_type, value, log_date, pump_num)` | `(LogType, value, ...) -> None` | Log sensor reading to API |
+| `log_data(log_type, value, log_date, device_id)` | `(LogType, value, ...) -> None` | Log sensor reading to API. `device_id` is the device's `entity_id` (`<domain>.<name>`); when present, the API uses it to update `lastSeen`. |
 | `report_problem(problem_type, status, description, ...)` | `(...) -> None` | Report problem to API |
 | `register_action_handler(action_type, handler)` | `(ActionType, Callable) -> None` | Register action handler |
 | `acknowledge_action(action_id, received, resolved)` | `(str, bool, bool) -> None` | Acknowledge API action |
@@ -437,6 +437,241 @@ all_devices = registry.get_all_devices()
 
 ---
 
+## Manifest computation and push pipeline
+
+After the registry has devices in it, the bridge serializes the entire
+device set as a **manifest** and POSTs it to the API. The wire format
+is documented in [`bridge-protocol.md`](bridge-protocol.md) §5; this
+section covers the mechanics from a plugin author's point of view.
+
+### Registry change callbacks
+
+Every successful `register_device` (and `_remove_from_indexes`) fires
+the registry's change callbacks (`app/registry.py:181-188`).
+`api_client.py:107` registers `_on_registry_change` as one such
+callback at startup. The callback's job is intentionally tiny:
+
+1. If we're not on the asyncio loop, schedule via
+   `run_coroutine_threadsafe` (`api_client.py:474-500`).
+2. If we are, `asyncio.create_task(send_manifest())`.
+3. If auth isn't ready or the loop is gone, no-op.
+
+This means **registering a device synchronously triggers a manifest
+push asynchronously**. As an integration author you don't need to do
+anything special — just call `registry.register_sensor(...)` /
+`register_actuator(...)` from `register_capabilities()` and the bridge
+takes care of the rest.
+
+### Hash algorithm (`compute_manifest_hash`)
+
+The registry computes a SHA-256 over a deterministic JSON serialization
+(`app/registry.py:192-218`). Concrete rules:
+
+- Iterate devices in `entityId`-sorted order.
+- For each device emit a JSON object with exactly seven keys:
+  `entityId`, `domain`, `name`, `deviceType`, `category`,
+  `integrationName`, `capabilities` (sorted).
+- Use `json.dumps(payload, sort_keys=True, separators=(",", ":"))` —
+  compact, no spaces.
+- Join those per-device strings with `\n`, UTF-8 encode, SHA-256, hex.
+- **`metadata` is excluded from the hash.** Tweaking `metadata` will
+  not trigger a re-push on heartbeat drift.
+
+The same string is computed on the API side; the heartbeat carries the
+API's view of the hash and the bridge re-pushes when they disagree
+(`_handle_heartbeat_event`, `api_client.py:858-869`).
+
+### When pushes fire
+
+Three triggers for `api_client.send_manifest()`:
+
+1. **Startup** — once, after `_load_integrations()` completes
+   (`main.py:117-122`). Skipped silently if not yet authenticated.
+2. **Registry change** — every register/remove via the change-callback
+   path described above.
+3. **Hash drift on heartbeat** — the SSE consumer re-schedules a push.
+
+`send_manifest` is serialized by an internal `asyncio.Lock`
+(`api_client.py:518, :523`) so concurrent triggers coalesce into
+sequential pushes. The bridge writes the accepted `manifestVersion` and
+content hash back to `config_store` only on a 2xx response — failed
+pushes leave the local counter alone and the next trigger retries with
+the same `next_version`.
+
+---
+
+## SSE consumer pipeline
+
+The bridge holds a single long-lived SSE connection
+(`GET /bridge/{id}/stream`). The parser is in `api_client.py:696-779`;
+event dispatch is in `_handle_sse_event` (`api_client.py:762-779`).
+
+There are four event types and one handler each:
+
+| Event       | Handler                       | Effect on bridge state                                                                 |
+|-------------|-------------------------------|----------------------------------------------------------------------------------------|
+| `connected` | `_handle_connected_event`     | Logs the API's `configVersion`. No state change.                                       |
+| `config`    | `_handle_config_event`        | Saves full snapshot to `config_store`, extracts settings dict, awaits `settings_callback`. |
+| `heartbeat` | `_handle_heartbeat_event`     | Drift checks (`configVersion`, `manifestHash`); fetches/re-pushes on mismatch.         |
+| `action`    | `_handle_action_event`        | Puts the raw payload onto `_command_queue` for `_command_execution_task` to drain.     |
+
+### Settings fan-out
+
+`_handle_config_event` builds a settings dict shaped like:
+
+```python
+{
+    "rdh_mode": payload.get("rdhMode", False),
+    "status":   payload.get("status", ""),
+    "light":    payload.get("light", {}),
+    "climate":  payload.get("climate", {}),
+    "tank":     payload.get("tank", {}),
+}
+```
+
+…and awaits `_settings_callback(settings)`. That callback is
+`Application._apply_settings` (`main.py:228-239`), which in turn calls
+`integration.apply_settings(settings)` on every loaded integration.
+Integrations that don't override `apply_settings` raise
+`NotImplementedError`, which `_apply_settings` swallows — there's no
+penalty for not implementing it.
+
+### Heartbeat drift handling
+
+The heartbeat carries `configVersion` and (optionally) `manifestHash`.
+The bridge's logic (`api_client.py:832-869`):
+
+1. If `remote.configVersion != local.configVersion`: call
+   `fetch_full_config()` (a synchronous `GET /bridge/{id}`) and re-run
+   the same fan-out as a `config` event.
+2. If `remote.manifestHash` is set and `!= stored hash`: schedule
+   `send_manifest()` as a fire-and-forget task.
+
+Both checks run on every heartbeat; a single heartbeat can trigger
+either, both, or neither.
+
+---
+
+## Config store schema
+
+`app/config_store.py` is a tiny SQLite wrapper used for everything the
+bridge needs to remember across restarts. Database file:
+`data/config.db` (configurable via `general.config_db_file`).
+
+### Tables
+
+`local_config` — generic `(key, value, version, updated_at)` table.
+
+| Key                 | Value semantics                                                                 | Version field |
+|---------------------|---------------------------------------------------------------------------------|---------------|
+| `full`              | The most-recent `BridgeSpaceResp` JSON, exactly as received over SSE / GET.     | `configVersion` from the payload. |
+| `manifest_version`  | The last `acceptedVersion` returned by the API (stringified int).               | Same int again. |
+| `manifest_hash`     | SHA-256 hex of the last successfully-pushed manifest.                           | `0` (unused).   |
+| `device_assignments`| The `deviceAssignments` list from the most-recent `config` event (JSON list). Display-only. | `configVersion` of the carrying event. |
+
+`outbound_queue` — `(id, endpoint, payload, created_at)`. Currently
+*defined* but not yet wired into the regular send path. Intended for
+durable retry of writes that fail while the API is offline.
+
+### Lifecycle
+
+- `config_store.start()` runs in `Application.start` after
+  authentication completes.
+- `config_store.stop()` closes the DB on shutdown.
+- The store is a `SingletonMeta` instance — import `config_store` from
+  anywhere and you get the same connection.
+
+### Why this matters for plugin authors
+
+If you implement `apply_settings`, your integration may receive a
+settings dict on bridge startup *before SSE has connected*, sourced
+from this cache (`main.py:182-196`). Don't assume "first call =
+freshly delivered" — treat every settings application as idempotent.
+
+---
+
+## Command pipeline
+
+When the API wants to actuate a device, it pushes an `event: action`
+over SSE. The bridge moves it through this pipeline:
+
+```
+SSE event:action
+   │
+   ▼
+api_client._handle_action_event   (api_client.py:817-830)
+   │   puts the JSON payload on api_client._command_queue
+   ▼
+Application._command_execution_task  (main.py:370-402)
+   │   pops queue, validates ready-state, calls:
+   ▼
+Application._process_command       (main.py:404-451)
+   │   reads targetType, targetId, action, payload
+   │
+   ├─ targetType == "sensor"   → registry.get_sensor_integration(targetId)
+   └─ targetType == "actuator" → registry.get_actuator_integration(targetId)
+       │
+       ▼
+integration.execute_command(target_id, action, payload)
+       │
+       ▼
+api_client.send_command_result(command_id, success, message)
+       │   POST /bridge/{id}/actions/{action_id}/result
+       ▼
+   API records outcome
+```
+
+Plugin author's contract:
+
+- Override `execute_command(self, target_id, action, payload)` if your
+  integration needs custom routing — e.g. you want to dispatch on
+  `action` ("on"/"off"/"set") and read additional fields from
+  `payload`. The base class wraps `send_data` for you, but most
+  integrations override.
+- `target_id` is always the fully-qualified `entity_id` for the new
+  API. (Legacy code passed bare names; the new API SHOULD always send
+  `entity_id`.)
+- Return `True` for success, `False` for failure. The bridge translates
+  this to the result POST. Raising is also fine — exceptions are caught
+  in `_process_command` and converted to `success=false` with the
+  exception message.
+
+There is no built-in retry on action result delivery; if the result
+POST fails, the API will time the action out on its own policy.
+
+---
+
+## Bridge web UI
+
+`web/app.py` exposes a Flask UI for operator-facing tasks. Endpoints
+relevant to plugin authors:
+
+| Endpoint               | Returns                                                                                  |
+|------------------------|------------------------------------------------------------------------------------------|
+| `GET /api/integrations`| `[{name, type, status}, ...]` for each loaded integration. 202 if integrations are still loading; `[]` if none enabled. (`web/app.py:299-334`) |
+| `GET /api/devices`     | `{entity_id: {<integration's get_device_data fields>, assigned_role, role_slot}, ...}` — collected by calling `integration.get_device_data()` on every integration with a 10 s timeout per call. (`web/app.py:355-456`) |
+| `GET /api/device-types`| `{deviceType: [actions, ...]}` from the registry. (`web/app.py:258-271`) |
+| `GET /api/config`      | The bridge's `config.yaml` (sensitive fields masked). (`web/app.py:475-491`) |
+
+### `assigned_role` flow into `/api/devices`
+
+`_attach_assigned_roles` (`web/app.py:398-432`) reads
+`config_store.get_device_assignments()` and joins on `entityId`. The
+result decorates each device entry with:
+
+- `assigned_role`: a `GrowRole` string (e.g. `"WATER_PUMP"`,
+  `"UNASSIGNED"`, `"IGNORED"`).
+- `role_slot`: an int for `MULTIPLE`-cardinality roles, else `null`.
+
+If `get_device_data()` returned an error-shaped dict (`{"error": ...}`)
+for some integration, the role attachment is skipped for that entry.
+
+This is the only place the bridge surfaces role assignments — they are
+pure UI labels. **Command routing never consults this list**; the
+bridge always routes by `entity_id` via the registry.
+
+---
+
 ## Configuration Validation
 
 ### Defining Schemas
@@ -499,9 +734,9 @@ LogType.HUMIDITY       # Humidity readings
 LogType.LIGHT          # Light level
 LogType.PH             # pH value
 LogType.EC             # Electrical conductivity
-LogType.TANK_ML        # Tank water level (include pump_num)
-LogType.SUPPLEMENT_ML  # Nutrient dosing (include pump_num)
-LogType.PH_ML          # pH adjustment (include pump_num)
+LogType.TANK_ML        # Tank water dispensed (set device_id to the dosing pump's entity_id)
+LogType.SUPPLEMENT_ML  # Nutrient dosing (set device_id to the dosing pump's entity_id)
+LogType.PH_ML          # pH adjustment (set device_id to the dosing pump's entity_id)
 ```
 
 ### Problem Types
@@ -656,8 +891,11 @@ async def apply_settings(self, settings: Dict[str, Any]) -> bool:
 
         tank = settings.get("tank", {})
         if tank:
+            # The new API addresses dosing devices by entity_id; iterate
+            # the bridge's registry rather than relying on positional
+            # pump indices.
             for water in tank.get("waters", []):
-                pump_num = water.get("pumpNum")
+                target_entity_id = water.get("entityId")  # e.g. "gpio.water_pump"
                 schedules = water.get("waterSchedules", [])
 
         return True
@@ -670,6 +908,7 @@ async def apply_settings(self, settings: Dict[str, Any]) -> bool:
 
 ## See Also
 
+- [Bridge Protocol Specification](bridge-protocol.md) - Wire-format contract between bridge and API
 - [Custom Integrations Guide](custom_integrations.md) - Detailed integration development guide
 - [Sample Integration](../external_integrations/sample_integration.py) - Complete working example
 - [Config Schemas](../app/schemas/config_schemas.py) - Built-in Pydantic schemas

@@ -4,10 +4,13 @@ Uses domain-based naming system where entity IDs have format: domain.device_name
 Example: mqtt.temperature, gpio.pump1
 """
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from app.utils.singleton import SingletonMeta
 
@@ -67,6 +70,9 @@ class DeviceRegistry(metaclass=SingletonMeta):
         # Legacy mappings for backward compatibility
         self._sensors: dict[str, str] = {}
         self._actuators: dict[str, str] = {}
+
+        # Change-notification callbacks fired after register/remove.
+        self._on_change_callbacks: list[Callable[[], None]] = []
 
         # Device type -> supported actions
         self._device_type_actions: dict[str, list[str]] = {
@@ -131,6 +137,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
             f"with '{integration_name}'"
         )
 
+        self._fire_change_callbacks()
         return entity_id
 
     def _update_indexes(self, entity_id: str, device_info: DeviceInfo) -> None:
@@ -150,6 +157,94 @@ class DeviceRegistry(metaclass=SingletonMeta):
             if key in index:
                 index[key].discard(entity_id)
         self._by_category[device_info.category].discard(entity_id)
+        self._fire_change_callbacks()
+
+    # ─── Change-callback machinery ──────────────────────────────────
+
+    def add_change_callback(self, cb: Callable[[], None]) -> None:
+        """Register a callback fired whenever the registry's device set changes.
+
+        Callbacks are invoked synchronously after every successful
+        ``register_device`` and after ``_remove_from_indexes``. They MUST be
+        cheap and non-blocking (typically: schedule an async task).
+        """
+        if cb not in self._on_change_callbacks:
+            self._on_change_callbacks.append(cb)
+
+    def remove_change_callback(self, cb: Callable[[], None]) -> None:
+        """Deregister a previously-added change callback. No-op if absent."""
+        try:
+            self._on_change_callbacks.remove(cb)
+        except ValueError:
+            pass
+
+    def _fire_change_callbacks(self) -> None:
+        """Invoke every registered change callback. One bad callback never
+        breaks the others — exceptions are logged and swallowed."""
+        for cb in list(self._on_change_callbacks):
+            try:
+                cb()
+            except Exception:
+                logger.exception("Registry change callback raised")
+
+    # ─── Manifest helpers ───────────────────────────────────────────
+
+    def compute_manifest_hash(self) -> str:
+        """SHA-256 hex digest over a deterministic serialization of the
+        current device set.
+
+        Stable under dict-ordering / set-ordering changes — two registries
+        with the same logical contents always produce the same hash. Used by
+        the heartbeat path to decide whether a manifest re-push is needed.
+        """
+        items: list[str] = []
+        for entity_id in sorted(self._devices.keys()):
+            d = self._devices[entity_id]
+            payload = {
+                "entityId": entity_id,
+                "domain": d.domain,
+                "name": d.name,
+                "deviceType": d.device_type,
+                # UPPERCASE to match the wire format used by serialize_manifest
+                # and the API-side BridgeDeviceService.computeManifestHash.
+                "category": d.category.value.upper(),
+                "integrationName": d.integration_name,
+                "capabilities": sorted(d.capabilities),
+            }
+            # Compact separators (no spaces) — must match the API-side hash
+            # computation in BridgeDeviceService.computeManifestHash byte-for-byte.
+            items.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        digest = hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()
+        return digest
+
+    def serialize_manifest(self, version: int) -> dict[str, Any]:
+        """Build the JSON-serializable manifest payload for the API.
+
+        ``version`` is the monotonic ``manifestVersion`` supplied by the
+        caller (typically ``api_client``, which persists it via
+        ``config_store``). The registry deliberately does not read it
+        directly to avoid a cyclic import / coupling.
+        """
+        devices = []
+        for entity_id in sorted(self._devices.keys()):
+            d = self._devices[entity_id]
+            devices.append(
+                {
+                    "entityId": entity_id,
+                    "domain": d.domain,
+                    "name": d.name,
+                    "deviceType": d.device_type,
+                    "category": d.category.value.upper(),
+                    "integrationName": d.integration_name,
+                    "capabilities": list(d.capabilities),
+                    "metadata": dict(d.metadata),
+                }
+            )
+        return {
+            "manifestVersion": version,
+            "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "devices": devices,
+        }
 
     def _derive_domain(self, integration_name: str) -> str:
         """Derive domain from integration class name (e.g., GPIOIntegration -> gpio)."""

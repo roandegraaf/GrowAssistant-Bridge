@@ -240,7 +240,6 @@ class TestParseApiResponse:
                     "id": "action-1",
                     "type": "LIGHT",
                     "value": "on",
-                    "pumpNumber": None,
                     "received": False,
                     "resolved": False,
                 },
@@ -248,7 +247,6 @@ class TestParseApiResponse:
                     "id": "action-2",
                     "type": "FAN",
                     "value": "50",
-                    "pumpNumber": 1,
                     "received": True,
                     "resolved": False,
                 },
@@ -260,7 +258,9 @@ class TestParseApiResponse:
         assert len(result["actions"]) == 2
         assert result["actions"][0]["id"] == "action-1"
         assert result["actions"][0]["type"] == "LIGHT"
-        assert result["actions"][1]["pump_number"] == 1
+        # Regression guard: legacy pump_number must not be in parsed output.
+        assert "pump_number" not in result["actions"][0]
+        assert "pump_number" not in result["actions"][1]
 
     def test_parse_response_rdh_mode(self):
         """Test parsing response with RDH mode enabled."""

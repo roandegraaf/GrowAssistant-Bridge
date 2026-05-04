@@ -106,12 +106,6 @@ class TestApiClientDataMethods:
         assert api_client._data_logs[0]["logType"] == "TEMPERATURE"
         assert api_client._data_logs[0]["value"] == "25.5"
 
-    def test_add_data_log_with_pump_num(self, api_client):
-        """Test adding a data log with pump number."""
-        api_client.add_data_log(LogType.SUPPLEMENT_ML, 100, pump_num=1)
-
-        assert api_client._data_logs[0]["pumpNum"] == 1
-
     def test_add_data_log_with_custom_date(self, api_client):
         """Test adding a data log with custom date."""
         custom_date = datetime(2024, 1, 15, 12, 0, 0)
@@ -709,6 +703,67 @@ class TestApiClientSSEEventHandlers:
 
         # Should not raise, just log error
         await api_client._handle_config_event(config_payload)
+
+    @pytest.mark.asyncio
+    async def test_handle_config_event_persists_device_assignments(self, api_client):
+        """Config event with deviceAssignments forwards them to config_store."""
+        assignments = [
+            {"entityId": "gpio.relay1", "role": "WATER_PUMP", "slot": None},
+            {
+                "entityId": "esphome.scd30_temperature",
+                "role": "TEMPERATURE_SENSOR",
+                "slot": None,
+            },
+        ]
+        config_payload = {
+            "configVersion": 11,
+            "rdhMode": False,
+            "status": "active",
+            "light": {},
+            "climate": {},
+            "tank": {},
+            "deviceAssignments": assignments,
+        }
+
+        with patch("app.api_client.config_store") as mock_store:
+            await api_client._handle_config_event(config_payload)
+
+            mock_store.save_device_assignments.assert_called_once_with(assignments, 11)
+
+    @pytest.mark.asyncio
+    async def test_handle_config_event_missing_device_assignments(self, api_client):
+        """Missing deviceAssignments → empty list passed to store."""
+        config_payload = {
+            "configVersion": 12,
+            "rdhMode": False,
+            "status": "active",
+            "light": {},
+            "climate": {},
+            "tank": {},
+        }
+
+        with patch("app.api_client.config_store") as mock_store:
+            await api_client._handle_config_event(config_payload)
+
+            mock_store.save_device_assignments.assert_called_once_with([], 12)
+
+    @pytest.mark.asyncio
+    async def test_handle_config_event_invalid_device_assignments(self, api_client):
+        """Non-list deviceAssignments coerced to empty list."""
+        config_payload = {
+            "configVersion": 13,
+            "rdhMode": False,
+            "status": "active",
+            "light": {},
+            "climate": {},
+            "tank": {},
+            "deviceAssignments": {"not": "a list"},
+        }
+
+        with patch("app.api_client.config_store") as mock_store:
+            await api_client._handle_config_event(config_payload)
+
+            mock_store.save_device_assignments.assert_called_once_with([], 13)
 
     @pytest.mark.asyncio
     async def test_handle_heartbeat_event_version_match(self, api_client):
@@ -1613,43 +1668,6 @@ class TestApiClientEdgeCases:
         assert len(api_client._data_logs) == 0
         assert len(api_client._problems) == 0
         assert len(api_client._actions) == 0
-
-    @pytest.mark.asyncio
-    async def test_process_legacy_data_points_with_pump_num(self, api_client):
-        """Test processing legacy data points with pump_num field."""
-        data_points = [
-            {
-                "timestamp": 1700000000000,
-                "type": "SUPPLEMENT_ML",
-                "value": 50,
-                "pump_num": 2,
-                "integration": "test",
-            }
-        ]
-
-        api_client._process_legacy_data_points(data_points)
-
-        assert len(api_client._data_logs) == 1
-        assert api_client._data_logs[0]["pumpNum"] == 2
-
-    @pytest.mark.asyncio
-    async def test_process_legacy_data_points_with_pumpNum_camelCase(self, api_client):
-        """Test processing legacy data points with pumpNum (camelCase) field."""
-        data_points = [
-            {
-                "timestamp": 1700000000000,
-                "type": "SUPPLEMENT_ML",
-                "value": 50,
-                "pumpNum": 3,
-                "integration": "test",
-            }
-        ]
-
-        api_client._process_legacy_data_points(data_points)
-
-        assert len(api_client._data_logs) == 1
-        # pumpNum should take precedence
-        assert api_client._data_logs[0]["pumpNum"] == 3
 
     def test_get_headers_with_client_id(self, api_client):
         """Test _get_headers includes client ID when authenticated."""
