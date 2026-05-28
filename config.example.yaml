@@ -4,14 +4,13 @@
 
 api:
   batch_size: 100
-  connection_timeout: 300
   log_values: true
-  poll_interval: 5
+  mqtt_keepalive: 60  # MQTT keepalive interval in seconds
   retry_max_attempts: 5
   retry_max_backoff: 60
   retry_min_backoff: 1
   transmission_interval: 10
-  url: https://api.growassistant.app/prod  # Change to your API URL
+  url: http://localhost:3000  # GrowAssistant app base URL (HTTPS pairing bootstrap)
 
 general:
   api_logs_dir: logs/api_values

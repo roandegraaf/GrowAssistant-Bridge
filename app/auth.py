@@ -1,50 +1,47 @@
-"""Authentication with the GrowAssistant Spring API."""
+"""Authentication & pairing with the GrowAssistant app (MQTT transport).
 
-import asyncio
+Pairing direction is reversed from the old SSE-era flow: the APP issues a
+pairing code (shown in its UI), the operator enters it into this bridge's web
+UI, and the bridge claims it over an HTTPS bootstrap call. There is no longer a
+bridge-minted auth code, no self-registration, and no separate "space" gate —
+once paired, the bridge is ready.
+"""
+
 import json
 import logging
 import os
-import uuid
-from typing import Literal, Optional
+from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import config
-from app.constants import (
-    AUTH_POLL_INTERVAL,
-    DEFAULT_HTTP_TIMEOUT,
-    DEFAULT_RETRY_MAX_ATTEMPTS,
-    DEFAULT_RETRY_MAX_BACKOFF,
-    DEFAULT_RETRY_MIN_BACKOFF,
-    SPACE_CREATION_POLL_INTERVAL,
-)
-from app.utils.http_utils import build_auth_headers
+from app.constants import DEFAULT_HTTP_TIMEOUT
 from app.utils.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
+# Credential keys persisted to data/credentials.json.
+CREDENTIAL_KEYS = ("bridgeId", "tenantId", "bridgeSecret", "token", "brokerUrl")
+
 
 class AuthManager(metaclass=SingletonMeta):
-    """Authentication manager for the GrowAssistant Spring API.
+    """Pairing & credential manager for the GrowAssistant app.
 
-    Handles client registration, authentication, and credential management.
-    Uses SingletonMeta to ensure only one instance exists.
+    Handles the HTTPS pairing bootstrap, JWT token rotation, and persistence of
+    the MQTT credentials. Uses SingletonMeta to ensure only one instance exists.
     """
 
     def __init__(self):
         """Initialize the authentication manager."""
         self._client: Optional[httpx.AsyncClient] = None
-        self._base_url = config.get("api.url", "http://localhost:8080").rstrip("/")
+        self._base_url = config.get("api.url", "http://localhost:3000").rstrip("/")
 
         data_dir = config.get("general.data_dir", "data")
         os.makedirs(data_dir, exist_ok=True)
         self._credentials_file = os.path.join(data_dir, "credentials.json")
 
         self._credentials: Optional[dict] = None
-        self._auth_code: Optional[str] = None
-        self._client_id: Optional[str] = None
-        self._connection_timed_out: bool = False
 
         logger.info("Authentication manager initialized")
 
@@ -65,21 +62,33 @@ class AuthManager(metaclass=SingletonMeta):
             self._client = None
         logger.info("Authentication manager stopped")
 
+    # ─── Credential persistence ─────────────────────────────────────
+
     def _load_credentials(self) -> bool:
-        """Load saved credentials from file."""
+        """Load saved credentials from file.
+
+        Migrates gracefully: an old SSE-era file keyed by ``client_id`` is
+        treated as unpaired (the bridge must be re-paired with the app).
+        """
         if not os.path.exists(self._credentials_file):
-            logger.info("No saved credentials found")
+            logger.info("No saved credentials found — bridge is unpaired")
             return False
 
         try:
             with open(self._credentials_file) as f:
-                self._credentials = json.load(f)
-            self._client_id = self._credentials.get("client_id")
-            logger.info(f"Loaded credentials for client ID: {self._client_id}")
-            return True
+                data = json.load(f)
         except Exception as e:
             logger.error(f"Error loading credentials: {e}")
             return False
+
+        if "bridgeId" not in data:
+            # Legacy credentials (client_id-based) — treat as unpaired.
+            logger.warning("Found legacy credentials without bridgeId — treating as unpaired")
+            return False
+
+        self._credentials = data
+        logger.info(f"Loaded credentials for bridge ID: {data.get('bridgeId')}")
+        return True
 
     def _save_credentials(self) -> bool:
         """Save credentials to file."""
@@ -90,252 +99,157 @@ class AuthManager(metaclass=SingletonMeta):
         try:
             with open(self._credentials_file, "w") as f:
                 json.dump(self._credentials, f)
-            logger.info(f"Saved credentials for client ID: {self._client_id}")
+            logger.info(f"Saved credentials for bridge ID: {self._credentials.get('bridgeId')}")
             return True
         except Exception as e:
             logger.error(f"Error saving credentials: {e}")
             return False
 
-    def is_authenticated(self) -> bool:
-        """Check if the client is authenticated."""
-        return self._credentials is not None and self._client_id is not None
+    # ─── Pairing & token rotation ───────────────────────────────────
 
-    async def validate_credentials(self) -> bool:
-        """Validate saved credentials with the API."""
-        if not self.is_authenticated() or not self._client:
-            logger.warning("Not authenticated or client not started")
-            return False
+    async def pair_with_code(self, code: str, name: Optional[str] = None) -> bool:
+        """Claim an app-issued pairing code over the HTTPS bootstrap.
 
-        try:
-            response = await self._client.get(
-                f"{self._base_url}/bridge/{self._client_id}",
-                headers=self._get_auth_headers(),
-            )
-            if response.status_code == 200:
-                logger.info("Credentials validated successfully (space ready)")
-                return True
-            if response.status_code == 204:
-                logger.info("Credentials validated successfully (no space yet)")
-                return True
-            logger.warning(f"Credentials validation failed: {response.status_code}")
-            return False
-        except Exception as e:
-            logger.error(f"Error validating credentials: {e}")
-            return False
-
-    def _get_auth_headers(self) -> dict[str, str]:
-        """Get authentication headers for API requests."""
-        token = self._credentials.get("token") if self._credentials else None
-        return build_auth_headers(token=token)
-
-    async def register_client(self) -> bool:
-        """Register a new client with the API."""
+        POSTs ``/api/bridge/pair`` with the code and this host's name. On
+        success persists ``{bridgeId, tenantId, bridgeSecret, token,
+        brokerUrl}`` and returns True. Returns False on bad/used codes
+        (404/400) or transport errors.
+        """
         if not self._client:
             logger.error("Authentication manager not started")
             return False
 
-        custom_id = self._generate_custom_id()
-        url = f"{self._base_url}/bridge"
+        if not code:
+            logger.warning("pair_with_code called with empty code")
+            return False
+
+        hostname = name or self._hostname()
+        url = f"{self._base_url}/api/bridge/pair"
 
         try:
-            async for attempt in AsyncRetrying(
-                retry=retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError)),
-                stop=stop_after_attempt(
-                    config.get("api.retry_max_attempts", DEFAULT_RETRY_MAX_ATTEMPTS)
-                ),
-                wait=wait_exponential(
-                    min=config.get("api.retry_min_backoff", DEFAULT_RETRY_MIN_BACKOFF),
-                    max=config.get("api.retry_max_backoff", DEFAULT_RETRY_MAX_BACKOFF),
-                ),
-            ):
-                with attempt:
-                    logger.info(f"Registering client with customId: {custom_id}")
-                    response = await self._client.post(url, json={"customId": custom_id})
-                    response.raise_for_status()
+            response = await self._client.post(url, json={"code": code, "name": hostname})
+        except httpx.HTTPError as e:
+            logger.error(f"Error pairing with code: {e}")
+            return False
 
-            response_data = response.json()
-            self._client_id = response_data.get("id")
-            self._auth_code = response_data.get("code")
-
-            self._credentials = {
-                "client_id": self._client_id,
-                "custom_id": custom_id,
-                "registration_time": str(asyncio.get_event_loop().time()),
-            }
-            self._save_credentials()
-
-            logger.info(f"Client registered with ID: {self._client_id}")
-            logger.info(f"Authentication code: {self._auth_code}")
-            return True
-
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"HTTP error registering client: {e.response.status_code} - {e.response.text}"
-            )
-        except (httpx.RequestError, asyncio.TimeoutError) as e:
-            logger.error(f"Error registering client: {e}")
-        except Exception as e:
-            logger.exception(f"Unexpected error registering client: {e}")
-
-        return False
-
-    def _generate_custom_id(self) -> str:
-        """Generate a custom ID combining hostname and UUID."""
-        hostname = (
-            os.uname().nodename
-            if hasattr(os, "uname")
-            else os.environ.get("COMPUTERNAME", "unknown")
-        )
-        return f"{hostname}-{uuid.uuid4().hex[:8]}"
-
-    def get_auth_code(self) -> Optional[str]:
-        """Get the authentication code for connecting to the app."""
-        return self._auth_code
-
-    def is_connection_timed_out(self) -> bool:
-        """Check if the connection polling has timed out."""
-        return self._connection_timed_out
-
-    def set_connection_timed_out(self, timed_out: bool) -> None:
-        """Set the connection timeout state."""
-        self._connection_timed_out = timed_out
-        if timed_out:
-            logger.info("Connection polling timed out")
-        else:
-            logger.info("Connection timeout state cleared")
-
-    async def request_new_code(self) -> bool:
-        """Request a new authentication code by re-registering the client.
-
-        This clears the timeout state and registers a new client with the API.
-        Returns True if successful, False otherwise.
-        """
-        logger.info("Requesting new authentication code...")
-        self._connection_timed_out = False
-        self._auth_code = None
-
-        # Clear existing credentials to force re-registration
-        self._credentials = None
-        self._client_id = None
-
-        # Delete the credentials file if it exists
-        if os.path.exists(self._credentials_file):
+        if response.status_code != 200:
             try:
-                os.remove(self._credentials_file)
-                logger.info("Removed old credentials file")
-            except Exception as e:
-                logger.error(f"Error removing credentials file: {e}")
+                err = response.json().get("error", response.text)
+            except ValueError:
+                err = response.text
+            logger.warning(f"Pairing failed ({response.status_code}): {err}")
+            return False
 
-        # Register a new client
-        return await self.register_client()
+        data = response.json()
+        self._credentials = {
+            "bridgeId": data.get("bridgeId"),
+            "tenantId": data.get("tenantId"),
+            "bridgeSecret": data.get("bridgeSecret"),
+            "token": data.get("token"),
+            "brokerUrl": data.get("brokerUrl"),
+        }
+        self._save_credentials()
+        logger.info(f"Paired successfully as bridge {self._credentials.get('bridgeId')}")
+        return True
 
-    def display_auth_code(self) -> None:
-        """Display the authentication code in a user-friendly format."""
-        if not self._auth_code:
-            print("\nNo authentication code available. Please register first.\n")
-            return
+    async def refresh_token(self) -> bool:
+        """Rotate the JWT using the stored bridgeId + bridgeSecret.
 
-        print(f"""
-{"=" * 40}
-    AUTHENTICATION CODE
-{"=" * 40}
-
-        {self._auth_code}
-
-Enter this code in the GrowAssistant app
-to connect this client to your environment.
-
-{"=" * 40}
-""")
-
-    async def check_connection_status(
-        self,
-    ) -> tuple[bool, Literal["not_connected", "connected", "ready"]]:
-        """Check if client has been connected to an environment.
-
-        Returns:
-            Tuple of (connected, status) where status is "not_connected", "connected", or "ready".
+        POSTs ``/api/bridge/token`` and updates the stored token on success.
+        Returns False on a bad secret (401) or transport errors.
         """
-        if not self._client_id or not self._client:
-            logger.warning("No client ID or client not started")
-            return False, "not_connected"
+        if not self._client:
+            logger.error("Authentication manager not started")
+            return False
+
+        bridge_id = self.get_client_id()
+        bridge_secret = self.get_bridge_secret()
+        if not bridge_id or not bridge_secret:
+            logger.warning("Cannot refresh token: bridge is not paired")
+            return False
+
+        url = f"{self._base_url}/api/bridge/token"
 
         try:
-            response = await self._client.get(f"{self._base_url}/bridge/{self._client_id}")
+            response = await self._client.post(
+                url, json={"bridgeId": bridge_id, "bridgeSecret": bridge_secret}
+            )
+        except httpx.HTTPError as e:
+            logger.error(f"Error refreshing token: {e}")
+            return False
 
-            if response.status_code == 204:
-                logger.info("Client connected to API but no space created yet")
-                self._credentials["connected"] = True
-                self._auth_code = None
-                self._save_credentials()
-                return True, "connected"
+        if response.status_code != 200:
+            logger.warning(f"Token refresh failed ({response.status_code})")
+            return False
 
-            if response.status_code == 200:
-                logger.info("Client connected to environment with space created")
-                self._credentials["connected"] = True
-                self._credentials["ready"] = True
-                self._auth_code = None
-                self._save_credentials()
-                response.json()  # Process response if needed
-                return True, "ready"
+        data = response.json()
+        token = data.get("token")
+        if not token:
+            logger.warning("Token refresh response missing token")
+            return False
 
-            logger.warning(f"Error checking connection status: {response.status_code}")
-            return False, "not_connected"
+        self._credentials["token"] = token
+        self._save_credentials()
+        logger.info("Token refreshed successfully")
+        return True
 
-        except Exception as e:
-            logger.error(f"Error checking connection status: {e}")
-            return False, "not_connected"
+    def _hostname(self) -> str:
+        """Return this host's name for the pairing call."""
+        if hasattr(os, "uname"):
+            return os.uname().nodename
+        return os.environ.get("COMPUTERNAME", "unknown")
 
-    async def wait_for_connection(self, timeout: Optional[float] = None) -> bool:
-        """Wait for the client to be connected to an environment."""
-        start_time = asyncio.get_event_loop().time()
-        self._connection_timed_out = False
+    # ─── State ──────────────────────────────────────────────────────
 
-        while True:
-            connected, _ = await self.check_connection_status()
-            if connected:
-                self._connection_timed_out = False
-                return True
-
-            if timeout is not None:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= timeout:
-                    logger.warning(f"Connection timeout after {elapsed:.1f} seconds")
-                    self._connection_timed_out = True
-                    return False
-
-            await asyncio.sleep(AUTH_POLL_INTERVAL)
-
-    async def wait_for_space_creation(self, timeout: Optional[float] = None) -> bool:
-        """Wait for a space to be created for this client (status code 200)."""
-        start_time = asyncio.get_event_loop().time()
-
-        while True:
-            _, status = await self.check_connection_status()
-            if status == "ready":
-                logger.info("Space created successfully, client ready to send data")
-                return True
-
-            if timeout is not None:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= timeout:
-                    logger.warning(f"Space creation timeout after {elapsed:.1f} seconds")
-                    return False
-
-            logger.info(f"Space not created yet, checking in {SPACE_CREATION_POLL_INTERVAL}s")
-            await asyncio.sleep(SPACE_CREATION_POLL_INTERVAL)
+    def is_authenticated(self) -> bool:
+        """Check if the bridge is paired (creds present)."""
+        if not self._credentials:
+            return False
+        return all(self._credentials.get(k) for k in ("bridgeId", "token", "bridgeSecret"))
 
     def is_ready_for_data(self) -> bool:
-        """Check if the client is ready to send data (connected and space created)."""
-        return (
-            self._credentials is not None
-            and self._client_id is not None
-            and self._credentials.get("ready", False)
-        )
+        """Check if the bridge may send data.
+
+        MQTT pairing implies ready — there is no separate "space" gate, so this
+        is identical to ``is_authenticated()``. Kept as a distinct name because
+        main.py and the web layer call it.
+        """
+        return self.is_authenticated()
+
+    # ─── Getters ────────────────────────────────────────────────────
 
     def get_client_id(self) -> Optional[str]:
-        """Get the client ID."""
-        return self._client_id
+        """Return the bridge ID (the stable MQTT client id)."""
+        return self._credentials.get("bridgeId") if self._credentials else None
+
+    def get_tenant_id(self) -> Optional[str]:
+        """Return the tenant ID."""
+        return self._credentials.get("tenantId") if self._credentials else None
+
+    def get_token(self) -> Optional[str]:
+        """Return the current JWT (used as the MQTT password)."""
+        return self._credentials.get("token") if self._credentials else None
+
+    def get_broker_url(self) -> Optional[str]:
+        """Return the broker URL delivered at pairing (e.g. mqtt://host:1883)."""
+        return self._credentials.get("brokerUrl") if self._credentials else None
+
+    def get_bridge_secret(self) -> Optional[str]:
+        """Return the bridge secret used for token rotation."""
+        return self._credentials.get("bridgeSecret") if self._credentials else None
+
+    def get_broker_host_port(self, default_port: int = 1883) -> tuple[Optional[str], int]:
+        """Parse host/port from the stored broker URL.
+
+        Returns ``(host, port)``; host is None when no broker URL is stored.
+        """
+        broker_url = self.get_broker_url()
+        if not broker_url:
+            return None, default_port
+        parsed = urlparse(broker_url)
+        host = parsed.hostname
+        port = parsed.port or default_port
+        return host, port
 
 
 # Create a global instance for easy imports

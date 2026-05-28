@@ -31,7 +31,7 @@ def mock_dependencies():
     """Mock all Application dependencies."""
     with (
         patch("app.main.auth_manager") as mock_auth,
-        patch("app.main.api_client") as mock_api,
+        patch("app.main.mqtt_transport") as mock_api,
         patch("app.main.queue_manager") as mock_queue,
         patch("app.main.registry") as mock_registry,
         patch("app.main.config") as mock_config,
@@ -44,22 +44,18 @@ def mock_dependencies():
         mock_auth.stop = AsyncMock()
         mock_auth.is_authenticated = MagicMock(return_value=True)
         mock_auth.is_ready_for_data = MagicMock(return_value=True)
-        mock_auth.validate_credentials = AsyncMock(return_value=True)
-        mock_auth.register_client = AsyncMock(return_value=True)
-        mock_auth.wait_for_connection = AsyncMock(return_value=True)
-        mock_auth.wait_for_space_creation = AsyncMock(return_value=True)
-        mock_auth.check_connection_status = AsyncMock(return_value=(True, "ready"))
-        mock_auth.display_auth_code = MagicMock()
+        mock_auth.pair_with_code = AsyncMock(return_value=True)
+        mock_auth.refresh_token = AsyncMock(return_value=True)
 
-        # Configure api_client
+        # Configure mqtt_transport
         mock_api.start = AsyncMock()
         mock_api.stop = AsyncMock()
-        mock_api.start_sse_listener = AsyncMock()
         mock_api.register_settings_callback = MagicMock()
         mock_api.send_data = AsyncMock(return_value=(True, "Success"))
-        mock_api.send_manifest = AsyncMock(return_value=(True, "Manifest v1 accepted"))
+        mock_api.send_manifest = AsyncMock(return_value=(True, "Manifest v1 published"))
         mock_api.get_command = AsyncMock(return_value=None)
         mock_api.send_command_result = AsyncMock()
+        mock_api.is_connected = MagicMock(return_value=True)
 
         # Configure queue_manager
         mock_queue.start = AsyncMock()
@@ -97,7 +93,7 @@ def mock_dependencies():
 
         yield {
             "auth_manager": mock_auth,
-            "api_client": mock_api,
+            "mqtt_transport": mock_api,
             "queue_manager": mock_queue,
             "registry": mock_registry,
             "config": mock_config,
@@ -382,14 +378,14 @@ class TestApplicationStop:
             assert len(app._integrations) == 0
 
     @pytest.mark.asyncio
-    async def test_stop_stops_api_client(self, reset_application_singleton, mock_dependencies):
-        """Test that stop calls api_client.stop()."""
+    async def test_stop_stops_transport(self, reset_application_singleton, mock_dependencies):
+        """Test that stop calls mqtt_transport.stop()."""
         with patch("app.main.signal.signal"):
             app = Application()
             await app.start()
             await app.stop()
 
-            mock_dependencies["api_client"].stop.assert_called_once()
+            mock_dependencies["mqtt_transport"].stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_stop_stops_auth_manager(self, reset_application_singleton, mock_dependencies):
@@ -413,89 +409,31 @@ class TestApplicationStop:
 
 
 class TestHandleAuthentication:
-    """Tests for Application._handle_authentication()."""
+    """Tests for Application._handle_authentication() (non-blocking pairing)."""
 
     @pytest.mark.asyncio
-    async def test_already_authenticated_and_ready(
-        self, reset_application_singleton, mock_dependencies
-    ):
-        """Test when client is already authenticated and ready."""
+    async def test_already_paired_returns(self, reset_application_singleton, mock_dependencies):
+        """When already paired it returns immediately without blocking."""
         mock_dependencies["auth_manager"].is_authenticated.return_value = True
-        mock_dependencies["auth_manager"].is_ready_for_data.return_value = True
 
         with patch("app.main.signal.signal"):
             app = Application()
             await app._handle_authentication()
 
-            mock_dependencies["auth_manager"].validate_credentials.assert_called_once()
-            # Should not attempt registration
-            mock_dependencies["auth_manager"].register_client.assert_not_called()
+            mock_dependencies["auth_manager"].is_authenticated.assert_called()
 
     @pytest.mark.asyncio
-    async def test_already_authenticated_needs_validation(
+    async def test_unpaired_does_not_block_or_exit(
         self, reset_application_singleton, mock_dependencies
     ):
-        """Test when client needs credential validation."""
-        mock_dependencies["auth_manager"].is_authenticated.return_value = True
-        mock_dependencies["auth_manager"].is_ready_for_data.return_value = False
-        mock_dependencies["auth_manager"].validate_credentials.return_value = True
-
-        with patch("app.main.signal.signal"):
-            app = Application()
-            await app._handle_authentication()
-
-            mock_dependencies["auth_manager"].wait_for_space_creation.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_needs_registration(self, reset_application_singleton, mock_dependencies):
-        """Test when client needs registration."""
+        """When unpaired it logs and returns without blocking or exiting."""
         mock_dependencies["auth_manager"].is_authenticated.return_value = False
-        mock_dependencies["auth_manager"].register_client.return_value = True
-        mock_dependencies["auth_manager"].wait_for_connection.return_value = True
-        mock_dependencies["auth_manager"].check_connection_status.return_value = (True, "connected")
-        mock_dependencies["auth_manager"].wait_for_space_creation.return_value = True
 
-        with patch("app.main.signal.signal"):
+        with patch("app.main.signal.signal"), patch("sys.exit") as mock_exit:
             app = Application()
+            # Must complete (not block) and must not exit.
             await app._handle_authentication()
 
-            mock_dependencies["auth_manager"].register_client.assert_called_once()
-            mock_dependencies["auth_manager"].display_auth_code.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_registration_failure_exits(self, reset_application_singleton, mock_dependencies):
-        """Test that registration failure exits the application."""
-        mock_dependencies["auth_manager"].is_authenticated.return_value = False
-        mock_dependencies["auth_manager"].register_client.return_value = False
-
-        with (
-            patch("app.main.signal.signal"),
-            patch("sys.exit") as mock_exit,
-            patch("builtins.print"),
-        ):
-            app = Application()
-            await app._handle_authentication()
-
-            mock_exit.assert_called_once_with(1)
-
-    @pytest.mark.asyncio
-    async def test_connection_timeout_continues(
-        self, reset_application_singleton, mock_dependencies
-    ):
-        """Test that connection timeout lets the app continue running."""
-        mock_dependencies["auth_manager"].is_authenticated.return_value = False
-        mock_dependencies["auth_manager"].register_client.return_value = True
-        mock_dependencies["auth_manager"].wait_for_connection.return_value = False
-
-        with (
-            patch("app.main.signal.signal"),
-            patch("sys.exit") as mock_exit,
-            patch("builtins.print"),
-        ):
-            app = Application()
-            await app._handle_authentication()
-
-            # App should continue running, not exit
             mock_exit.assert_not_called()
 
 
@@ -696,7 +634,7 @@ class TestDataTransmissionTask:
             asyncio.create_task(stop_after_one())
             await app._data_transmission_task()
 
-            mock_dependencies["api_client"].send_data.assert_called()
+            mock_dependencies["mqtt_transport"].send_data.assert_called()
 
     @pytest.mark.asyncio
     async def test_waits_when_not_ready_for_data(
@@ -717,7 +655,7 @@ class TestDataTransmissionTask:
             await app._data_transmission_task()
 
             # send_data should not be called
-            mock_dependencies["api_client"].send_data.assert_not_called()
+            mock_dependencies["mqtt_transport"].send_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_marks_processed_on_success(self, reset_application_singleton, mock_dependencies):
@@ -725,7 +663,7 @@ class TestDataTransmissionTask:
         mock_dependencies["auth_manager"].is_ready_for_data.return_value = True
         data_points = [{"type": "temperature", "value": 25.5}]
         mock_dependencies["queue_manager"].get_data_points.return_value = data_points
-        mock_dependencies["api_client"].send_data.return_value = (True, "Success")
+        mock_dependencies["mqtt_transport"].send_data.return_value = (True, "Success")
 
         with patch("app.main.signal.signal"):
             app = Application()
@@ -746,7 +684,7 @@ class TestDataTransmissionTask:
         mock_dependencies["auth_manager"].is_ready_for_data.return_value = True
         data_points = [{"type": "temperature", "value": 25.5}]
         mock_dependencies["queue_manager"].get_data_points.return_value = data_points
-        mock_dependencies["api_client"].send_data.return_value = (False, "Error")
+        mock_dependencies["mqtt_transport"].send_data.return_value = (False, "Error")
 
         with patch("app.main.signal.signal"):
             app = Application()
@@ -805,7 +743,7 @@ class TestCommandExecutionTask:
                 return None
 
             with patch.object(
-                mock_dependencies["api_client"],
+                mock_dependencies["mqtt_transport"],
                 "get_command",
                 AsyncMock(side_effect=get_command_and_stop),
             ):
@@ -834,7 +772,7 @@ class TestCommandExecutionTask:
                 pass
 
             # get_command should not be called when not ready
-            mock_dependencies["api_client"].get_command.assert_not_called()
+            mock_dependencies["mqtt_transport"].get_command.assert_not_called()
 
 
 class TestProcessCommand:
@@ -848,7 +786,7 @@ class TestProcessCommand:
             await app._process_command({"action": "test"})
 
             # send_command_result should not be called without ID
-            mock_dependencies["api_client"].send_command_result.assert_not_called()
+            mock_dependencies["mqtt_transport"].send_command_result.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_missing_required_fields(self, reset_application_singleton, mock_dependencies):
@@ -857,7 +795,7 @@ class TestProcessCommand:
             app = Application()
             await app._process_command({"id": "cmd-1"})
 
-            mock_dependencies["api_client"].send_command_result.assert_called_with(
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
                 "cmd-1", False, "Missing required fields"
             )
 
@@ -875,7 +813,7 @@ class TestProcessCommand:
                 }
             )
 
-            mock_dependencies["api_client"].send_command_result.assert_called_with(
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
                 "cmd-1", False, "Unknown target type: unknown"
             )
 
@@ -895,8 +833,8 @@ class TestProcessCommand:
                 }
             )
 
-            mock_dependencies["api_client"].send_command_result.assert_called()
-            call_args = mock_dependencies["api_client"].send_command_result.call_args
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called()
+            call_args = mock_dependencies["mqtt_transport"].send_command_result.call_args
             assert call_args[0][1] is False  # success = False
 
     @pytest.mark.asyncio
@@ -964,7 +902,7 @@ class TestProcessCommand:
                 }
             )
 
-            mock_dependencies["api_client"].send_command_result.assert_called_with(
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
                 "cmd-1", True, "Command executed successfully"
             )
 
@@ -989,7 +927,7 @@ class TestProcessCommand:
                 }
             )
 
-            mock_dependencies["api_client"].send_command_result.assert_called_with(
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
                 "cmd-1", False, "Command execution failed"
             )
 
@@ -1014,7 +952,7 @@ class TestProcessCommand:
                 }
             )
 
-            call_args = mock_dependencies["api_client"].send_command_result.call_args
+            call_args = mock_dependencies["mqtt_transport"].send_command_result.call_args
             assert call_args[0][0] == "cmd-1"
             assert call_args[0][1] is False
             assert "Error" in call_args[0][2]

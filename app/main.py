@@ -15,7 +15,6 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from app.api_client import api_client
 from app.auth import auth_manager
 from app.config import config, init_logging
 from app.config_store import config_store
@@ -25,6 +24,7 @@ from app.integrations import (
     get_integration_class,
     get_integration_class_by_config_key,
 )
+from app.mqtt_transport import mqtt_transport
 from app.queue_manager import queue_manager
 from app.registry import registry
 
@@ -102,27 +102,17 @@ class Application:
         await queue_manager.start()
         config_store.start()
 
-        await api_client.start()
-        api_client.register_settings_callback(self._apply_settings)
+        await mqtt_transport.start()
+        mqtt_transport.register_settings_callback(self._apply_settings)
 
-        # Load config from local store and apply settings before SSE connects
+        # Load config from local store and apply settings on startup.
         await self._load_config_from_store()
 
         await self._load_integrations()
 
-        # Push the initial device manifest now that integrations have
-        # registered their devices. Skipped silently if not yet
-        # authenticated — the registry change callback will retry once
-        # auth completes (and the API treats it as a normal upsert).
-        if auth_manager.is_authenticated():
-            success, msg = await api_client.send_manifest()
-            if success:
-                logger.info(f"Initial manifest pushed: {msg}")
-            else:
-                logger.warning(f"Initial manifest push failed: {msg}")
-
-        # Start SSE listener (replaces command polling)
-        await api_client.start_sse_listener()
+        # The transport's maintainer task connects once credentials are
+        # present, and on_connect publishes state + manifest. The initial
+        # manifest is therefore driven by the connection, not pushed here.
         self._create_tasks()
 
         logger.info("Application started")
@@ -137,47 +127,19 @@ class Application:
         logger.info("Web server started in background thread")
 
     async def _handle_authentication(self):
-        """Handle client authentication with the Spring API."""
+        """Report pairing state without blocking startup.
+
+        Pairing is driven by the web UI (the operator enters the app-issued
+        code). The transport's maintainer task connects once credentials
+        appear, so startup must not block or exit while unpaired.
+        """
         if auth_manager.is_authenticated():
-            logger.info("Client already authenticated, validating credentials...")
-            if await auth_manager.validate_credentials():
-                logger.info("Credentials validated successfully")
-                if auth_manager.is_ready_for_data():
-                    logger.info("Client is ready to send data")
-                    return
-                logger.info("Client connected but space not created, waiting...")
-                await auth_manager.wait_for_space_creation()
-                return
-            logger.warning("Stored credentials are invalid, re-registering client")
+            logger.info("Bridge already paired")
+            return
 
-        logger.info("Registering client with API...")
-        if not await auth_manager.register_client():
-            logger.error("Failed to register client")
-            print("\nFailed to register client with API. Check connection and try again.\n")
-            await asyncio.sleep(2)
-            sys.exit(1)
-
-        auth_manager.display_auth_code()
-        print("\nWaiting for you to enter this code in the GrowAssistant app...")
-        print("Press Ctrl+C to cancel.\n")
-
-        connection_timeout = config.get("api.connection_timeout", 300)
-        if not await auth_manager.wait_for_connection(connection_timeout):
-            print("\nTimeout waiting for connection.")
-            print("You can get a new code from the web interface.\n")
-            logger.info("Connection polling timed out - app will continue running")
-            return  # Don't exit, just return and let the app continue
-
-        print("\nConnection successful! Client connected to your environment.\n")
-
-        _, status = await auth_manager.check_connection_status()
-        if status == "connected":
-            print("\nWaiting for space creation in the GrowAssistant app...")
-            space_timeout = config.get("api.space_creation_timeout", 1800)
-            if await auth_manager.wait_for_space_creation(space_timeout):
-                print("\nSpace created! Client is now ready to send data.\n")
-            else:
-                print("\nTimeout waiting for space creation. Will check periodically.\n")
+        logger.info(
+            "Awaiting pairing — enter the code from the GrowAssistant app into this bridge's web UI"
+        )
 
     async def _load_config_from_store(self):
         """Load config from local ConfigStore and apply settings on startup."""
@@ -193,7 +155,7 @@ class Application:
             }
             await self._apply_settings(settings)
         else:
-            logger.info("No stored config found, waiting for SSE config push")
+            logger.info("No stored config found")
 
     async def stop(self):
         """Stop the application, cancelling tasks and stopping all services."""
@@ -218,7 +180,7 @@ class Application:
                 logger.error(f"Error stopping integration {integration.name}: {e}")
         self._integrations.clear()
 
-        await api_client.stop()
+        await mqtt_transport.stop()
         await auth_manager.stop()
         await queue_manager.stop()
         config_store.stop()
@@ -325,31 +287,20 @@ class Application:
 
         batch_size = config.get("api.batch_size", 100)
         transmission_interval = config.get("api.transmission_interval", 60)
-        consecutive_failures = 0
-        max_failures_before_check = 5
 
         try:
             while self._running:
                 start_time = time.time()
 
-                if not auth_manager.is_ready_for_data():
-                    consecutive_failures += 1
-                    if consecutive_failures >= max_failures_before_check:
-                        logger.info("Checking if space has been created...")
-                        _, status = await auth_manager.check_connection_status()
-                        if status == "ready":
-                            logger.info("Space created, resuming data transmission")
-                            consecutive_failures = 0
-                        else:
-                            logger.info(f"Space not created yet ({status}), waiting...")
+                # No-op cleanly while unpaired or not connected to the broker.
+                if not auth_manager.is_ready_for_data() or not mqtt_transport.is_connected():
                     await asyncio.sleep(transmission_interval)
                     continue
 
-                consecutive_failures = 0
                 data_points = await queue_manager.get_data_points(batch_size)
 
                 if data_points:
-                    success, message = await api_client.send_data(data_points)
+                    success, message = await mqtt_transport.send_data(data_points)
                     if success:
                         await queue_manager.mark_processed(data_points)
                     else:
@@ -368,29 +319,17 @@ class Application:
         logger.info("Data transmission task stopped")
 
     async def _command_execution_task(self):
-        """Task for executing commands from the API."""
+        """Task for executing commands from the app (delivered over MQTT)."""
         logger.info("Command execution task started")
-
-        consecutive_failures = 0
-        max_failures_before_check = 5
 
         try:
             while self._running:
-                if not auth_manager.is_ready_for_data():
-                    consecutive_failures += 1
-                    if consecutive_failures >= max_failures_before_check:
-                        logger.info("Checking if space has been created...")
-                        _, status = await auth_manager.check_connection_status()
-                        if status == "ready":
-                            logger.info("Space created, resuming command processing")
-                            consecutive_failures = 0
-                        else:
-                            logger.info(f"Space not created yet ({status}), waiting...")
+                # No-op cleanly while unpaired or not connected to the broker.
+                if not auth_manager.is_ready_for_data() or not mqtt_transport.is_connected():
                     await asyncio.sleep(5)
                     continue
 
-                consecutive_failures = 0
-                command = await api_client.get_command(timeout=1.0)
+                command = await mqtt_transport.get_command(timeout=1.0)
                 if command:
                     await self._process_command(command)
 
@@ -417,7 +356,7 @@ class Application:
 
         if not all([target_type, target_id, action]):
             logger.error(f"Command missing required fields: {command}")
-            await api_client.send_command_result(command_id, False, "Missing required fields")
+            await mqtt_transport.send_command_result(command_id, False, "Missing required fields")
             return
 
         try:
@@ -427,14 +366,14 @@ class Application:
                 integration_name = registry.get_actuator_integration(target_id)
             else:
                 logger.error(f"Unknown target type: {target_type}")
-                await api_client.send_command_result(
+                await mqtt_transport.send_command_result(
                     command_id, False, f"Unknown target type: {target_type}"
                 )
                 return
 
             if not integration_name or integration_name not in self._integrations:
                 logger.error(f"No integration found for {target_type} {target_id}")
-                await api_client.send_command_result(
+                await mqtt_transport.send_command_result(
                     command_id, False, f"No integration for {target_type} {target_id}"
                 )
                 return
@@ -443,12 +382,12 @@ class Application:
             success = await integration.execute_command(target_id, action, payload)
 
             result_msg = "Command executed successfully" if success else "Command execution failed"
-            await api_client.send_command_result(command_id, success, result_msg)
+            await mqtt_transport.send_command_result(command_id, success, result_msg)
             logger.info(f"Command {command_id}: success={success}")
 
         except Exception as e:
             logger.error(f"Error processing command: {e}")
-            await api_client.send_command_result(command_id, False, f"Error: {e}")
+            await mqtt_transport.send_command_result(command_id, False, f"Error: {e}")
 
 
 async def main():
