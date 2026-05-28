@@ -217,13 +217,37 @@ class DeviceRegistry(metaclass=SingletonMeta):
         digest = hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()
         return digest
 
+    @staticmethod
+    def _ha_entity_domain(d: DeviceInfo) -> str:
+        """Map a device to its Home-Assistant-style entity domain.
+
+        The app accepts exactly four values here:
+          - SENSOR                                  → "sensor"
+          - ACTUATOR, device_type "light"           → "light"
+          - ACTUATOR with a "settable" capability   → "number"
+            (capabilities include any of speed/level/temperature/set)
+          - any other ACTUATOR                       → "switch"
+        """
+        if d.category == DeviceCategory.SENSOR:
+            return "sensor"
+        if d.device_type == "light":
+            return "light"
+        if any(cap in {"speed", "level", "temperature", "set"} for cap in d.capabilities):
+            return "number"
+        return "switch"
+
     def serialize_manifest(self, version: int) -> dict[str, Any]:
         """Build the JSON-serializable manifest payload for the API.
 
         ``version`` is the monotonic ``manifestVersion`` supplied by the
-        caller (typically ``api_client``, which persists it via
+        caller (typically the transport, which persists it via
         ``config_store``). The registry deliberately does not read it
         directly to avoid a cyclic import / coupling.
+
+        Each device carries the original 7 fields (unchanged, so the
+        ``compute_manifest_hash`` parity check stays valid) plus three
+        wire-only fields the app needs: ``entityDomain`` (HA entity
+        domain), ``writable`` (True for actuators) and ``unit``.
         """
         devices = []
         for entity_id in sorted(self._devices.keys()):
@@ -238,6 +262,9 @@ class DeviceRegistry(metaclass=SingletonMeta):
                     "integrationName": d.integration_name,
                     "capabilities": list(d.capabilities),
                     "metadata": dict(d.metadata),
+                    "entityDomain": self._ha_entity_domain(d),
+                    "writable": d.category == DeviceCategory.ACTUATOR,
+                    "unit": d.metadata.get("unit"),
                 }
             )
         return {

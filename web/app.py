@@ -221,22 +221,40 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/onboarding")
+@app.route("/onboarding", methods=["GET", "POST"])
 @login_required
 def onboarding():
-    """Render the onboarding page for device registration."""
+    """Render the onboarding page and handle pairing-code submission.
+
+    The operator gets a pairing code from the GrowAssistant app and enters it
+    here; on POST we claim it via the HTTPS bootstrap (``pair_with_code``).
+    """
     if auth_manager.is_ready_for_data():
         return redirect(url_for("index"))
 
-    auth_code = auth_manager.get_auth_code()
-    connection_timed_out = auth_manager.is_connection_timed_out()
-    is_authenticated = auth_manager.is_authenticated()
+    error = None
+    paired = False
+
+    if request.method == "POST":
+        code = (request.form.get("code") or "").strip()
+        if not code:
+            error = "Please enter the pairing code from the GrowAssistant app."
+        else:
+            success = _run_async(auth_manager.pair_with_code(code), timeout=30.0)
+            if success is True:
+                paired = True
+            elif success is None:
+                error = "Pairing request timed out. Please try again."
+            else:
+                error = "Pairing failed. Check the code and try again."
+
+        if paired:
+            return redirect(url_for("index"))
 
     return render_template(
         "onboarding.html",
-        auth_code=auth_code,
-        connection_timed_out=connection_timed_out,
-        is_authenticated=is_authenticated,
+        error=error,
+        is_authenticated=auth_manager.is_authenticated(),
     )
 
 
@@ -269,6 +287,26 @@ def get_device_types():
     except Exception as e:
         logger.error("Error getting device types: %s", e)
         return jsonify({"error": str(e)}), 500
+
+
+def _run_async(coro, timeout: float = 10.0):
+    """Run a coroutine on the application's event loop from the web thread.
+
+    Returns the coroutine's result, or None if the loop is unavailable or the
+    call times out. Mirrors the run_coroutine_threadsafe pattern used by the
+    other web→async bridges in this module.
+    """
+    app_instance = current_app.config.get("APPLICATION_INSTANCE")
+    loop = getattr(app_instance, "loop", None) if app_instance else None
+    if loop is None:
+        logger.error("Cannot run async call: application loop not available")
+        return None
+    try:
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        logger.warning("Async call timed out")
+        return None
 
 
 def _get_app_instance(endpoint_name: str):
@@ -577,7 +615,7 @@ def send_command():
         if not registry.has_integration_for_action(action_key):
             return jsonify({"error": f"No integration found for action: {action_key}"}), 404
 
-        from app.api_client import api_client
+        from app.mqtt_transport import mqtt_transport
 
         command = {
             "id": f"web-{int(time.time())}",
@@ -586,7 +624,7 @@ def send_command():
             "payload": data.get("payload", {}),
         }
 
-        asyncio.create_task(api_client._command_queue.put(command))
+        mqtt_transport._enqueue_command(command)
         return jsonify({"success": True, "message": "Command sent for processing"})
     except Exception as e:
         logger.error("Error sending command: %s", e)
@@ -653,7 +691,6 @@ def _build_status_response(
     connected: bool = False,
     status: str = "initializing",
     ready: bool = False,
-    api_initialized: bool = False,
     **extra,
 ) -> dict:
     """Build a standardized connection status response."""
@@ -662,91 +699,38 @@ def _build_status_response(
         "connected": connected,
         "status": status,
         "ready": ready,
-        "api_client_initialized": api_initialized,
         **extra,
     }
-
-
-async def _check_auth_status(api_initialized: bool) -> dict:
-    """Check authentication and connection status asynchronously."""
-    if not hasattr(auth_manager, "_client") or auth_manager._client is None:
-        return _build_status_response(
-            status="initializing",
-            message="Authentication manager is initializing",
-            api_initialized=api_initialized,
-        )
-
-    auth_code = auth_manager.get_auth_code()
-    connection_timed_out = auth_manager.is_connection_timed_out()
-
-    # Check if we timed out waiting for connection (before checking authenticated status)
-    # This takes priority because even with credentials, the connection may have timed out
-    if connection_timed_out:
-        return _build_status_response(
-            status="connection_timeout",
-            message="Connection polling timed out. Click 'Get New Code' to try again.",
-            api_initialized=api_initialized,
-        )
-
-    # If we have an auth code, we're still in registration phase waiting for the user
-    # to enter the code - regardless of whether credentials are saved
-    if auth_code:
-        return _build_status_response(
-            status="registration",
-            auth_code=auth_code,
-            api_initialized=api_initialized,
-        )
-
-    if not auth_manager.is_authenticated():
-        return _build_status_response(
-            status="not_registered",
-            api_initialized=api_initialized,
-        )
-
-    connected, status = await auth_manager.check_connection_status()
-    return _build_status_response(
-        authenticated=True,
-        connected=connected,
-        status=status,
-        ready=auth_manager.is_ready_for_data(),
-        api_initialized=api_initialized,
-        client_id=auth_manager.get_client_id(),
-    )
 
 
 @app.route("/api/connection-status", methods=["GET"])
 @login_required
 def get_connection_status():
-    """Get the current connection status of the application."""
+    """Get the current pairing & MQTT connection status of the bridge."""
     try:
-        from app.api_client import api_client
+        from app.mqtt_transport import mqtt_transport
 
-        api_init_state = api_client.get_init_state()
-        api_initialized = api_init_state.get("initialized", False)
-
-        app_instance = current_app.config.get("APPLICATION_INSTANCE")
-        if app_instance is None or not getattr(app_instance, "loop", None):
+        if not auth_manager.is_authenticated():
             return jsonify(
                 _build_status_response(
-                    message="Application is still initializing",
-                    api_initialized=api_initialized,
+                    status="unpaired",
+                    message=(
+                        "Awaiting pairing — enter the code from the "
+                        "GrowAssistant app to connect this bridge."
+                    ),
                 )
             )
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                _check_auth_status(api_initialized),
-                app_instance.loop,
+        connected = mqtt_transport.is_connected()
+        return jsonify(
+            _build_status_response(
+                authenticated=True,
+                connected=connected,
+                status="connected" if connected else "connecting",
+                ready=auth_manager.is_ready_for_data(),
+                client_id=auth_manager.get_client_id(),
             )
-            return jsonify(future.result(timeout=5.0))
-        except concurrent.futures.TimeoutError:
-            return jsonify(
-                _build_status_response(
-                    status="busy",
-                    message="Server is busy processing authentication",
-                    api_initialized=api_initialized,
-                )
-            )
+        )
 
     except Exception as e:
         logger.exception("Error getting connection status: %s", e)
@@ -756,53 +740,6 @@ def get_connection_status():
                 error=str(e),
             )
         ), 500
-
-
-async def _request_new_auth_code() -> dict:
-    """Request a new authentication code asynchronously."""
-    success = await auth_manager.request_new_code()
-    if success:
-        return {
-            "success": True,
-            "auth_code": auth_manager.get_auth_code(),
-            "message": "New authentication code generated",
-        }
-    return {
-        "success": False,
-        "error": "Failed to generate new authentication code",
-    }
-
-
-@app.route("/api/request-new-code", methods=["POST"])
-@login_required
-def request_new_code():
-    """Request a new authentication code after timeout.
-
-    This endpoint clears the timeout state and generates a new auth code,
-    allowing the user to retry the connection process without restarting the app.
-    """
-    try:
-        app_instance = current_app.config.get("APPLICATION_INSTANCE")
-        if app_instance is None or not getattr(app_instance, "loop", None):
-            return jsonify({"error": "Application is not fully initialized"}), 503
-
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                _request_new_auth_code(),
-                app_instance.loop,
-            )
-            result = future.result(timeout=10.0)
-
-            if result.get("success"):
-                return jsonify(result)
-            return jsonify(result), 500
-
-        except concurrent.futures.TimeoutError:
-            return jsonify({"error": "Request timed out"}), 504
-
-    except Exception as e:
-        logger.exception("Error requesting new code: %s", e)
-        return jsonify({"error": str(e)}), 500
 
 
 def _ensure_secret_key() -> str:

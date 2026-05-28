@@ -107,34 +107,17 @@ const Dashboard = {
         let iconClass = '';
 
         switch (this.connectionStatus.status) {
-            case 'ready':
-                stateText = 'Ready';
+            case 'connected':
+                stateText = 'Connected';
                 iconClass = 'success';
                 break;
-            case 'connected':
-                stateText = 'Awaiting Space';
-                iconClass = 'warning';
-                break;
-            case 'registration':
-                stateText = 'Registration';
-                iconClass = 'warning';
-                break;
-            case 'connection_timeout':
-                stateText = 'Timed Out';
-                iconClass = 'error';
-                break;
-            case 'not_registered':
-            case 'not_connected':
-                stateText = 'Disconnected';
-                iconClass = 'error';
-                break;
-            case 'initializing':
-                stateText = 'Initializing';
+            case 'connecting':
+                stateText = 'Connecting';
                 iconClass = 'info';
                 break;
-            case 'busy':
-                stateText = 'Busy';
-                iconClass = 'info';
+            case 'unpaired':
+                stateText = 'Not Paired';
+                iconClass = 'error';
                 break;
             case 'error':
                 stateText = 'Error';
