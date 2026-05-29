@@ -55,6 +55,7 @@ class MqttTransport(metaclass=SingletonMeta):
         self._refresh_in_progress: bool = False
 
         self._settings_callback: Optional[Callable] = None
+        self._automations_callback: Optional[Callable] = None
         self._keepalive = config.get("api.mqtt_keepalive", DEFAULT_MQTT_KEEPALIVE)
 
         logger.info("MQTT transport initialized")
@@ -140,6 +141,13 @@ class MqttTransport(metaclass=SingletonMeta):
         """Store a settings callback. No-op channel in this slice (no settings
         topic), kept for API symmetry with ApiClient."""
         self._settings_callback = callback
+
+    def register_automations_callback(self, callback: Callable):
+        """Store the coroutine invoked with the raw bytes of an inbound
+        ``…/automations`` message. Called on paho's thread via ``_schedule`` so
+        it runs on the asyncio loop (it touches the SQLite-backed config_store
+        and the registry)."""
+        self._automations_callback = callback
 
     # ─── Connection management ──────────────────────────────────────
 
@@ -255,15 +263,24 @@ class MqttTransport(metaclass=SingletonMeta):
     def _on_message(self, client, userdata, message):
         """Handle an inbound MQTT message. Runs on paho's thread."""
         topic = message.topic
+
+        # Automations rule set (retained). Handled from the RAW bytes and before
+        # JSON-decoding: the payload may be empty (the app clears the retained
+        # message when the last automation is deleted), and the validator needs
+        # the exact bytes to echo their SHA-256. We subscribe to `…/automations`
+        # only, never `…/automations/status` (which we publish), so this branch
+        # never sees the status echo.
+        if topic.endswith("/automations"):
+            if self._automations_callback is not None:
+                self._schedule(self._automations_callback(message.payload))
+            else:
+                logger.debug(f"Received automations on {topic} but no callback registered")
+            return
+
         try:
             payload = json.loads(message.payload.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             logger.error(f"Inbound MQTT message on {topic} has invalid JSON")
-            return
-
-        # Automations (Phase 4 — log only for now).
-        if topic.endswith("/automations"):
-            logger.info(f"Received automations message on {topic} (logged only)")
             return
 
         # Ignore our own ack echoes (cmd/+ also matches cmd/{id}/ack).
@@ -446,6 +463,27 @@ class MqttTransport(metaclass=SingletonMeta):
             return True
         except Exception as e:
             logger.error(f"Error sending command result: {e}")
+            return False
+
+    async def publish_automations_status(self, status: dict[str, Any]) -> bool:
+        """Publish the rule-set validation/apply result to the retained
+        ``…/automations/status`` topic (the round-trip the app uses to tell
+        "saved" from "confirmed by the bridge")."""
+        if not self._connected or not self._client:
+            return False
+
+        status_topic = self._topic("automations/status")
+        if not status_topic:
+            return False
+
+        try:
+            self._client.publish(status_topic, json.dumps(status), qos=1, retain=True)
+            logger.info(
+                f"Automations status published: ok={status.get('ok')}, count={status.get('count')}"
+            )
+            return True
+        except Exception as e:
+            logger.exception(f"Error publishing automations status: {e}")
             return False
 
     # ─── Command queue (consumed by main.py) ────────────────────────
