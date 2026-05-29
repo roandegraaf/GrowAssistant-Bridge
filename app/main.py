@@ -16,7 +16,13 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from app.auth import auth_manager
-from app.automations import AutomationManager
+from app.automations import (
+    ActionExecutor,
+    AutomationEngine,
+    AutomationManager,
+    EventBus,
+    StateStore,
+)
 from app.config import config, init_logging
 from app.config_store import config_store
 from app.integrations import (
@@ -58,6 +64,9 @@ class Application:
         self._running = False
         self._tasks: set[asyncio.Task] = set()
         self._automations: Optional[AutomationManager] = None
+        self._state_store: Optional[StateStore] = None
+        self._event_bus: Optional[EventBus] = None
+        self._engine: Optional[AutomationEngine] = None
         self._initialized = True
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -107,12 +116,29 @@ class Application:
         await mqtt_transport.start()
         mqtt_transport.register_settings_callback(self._apply_settings)
 
-        # Automation engine (Phase 4 push path): receive + validate the app's
-        # retained rule set and report status. config_store is already started
-        # above, so the manager can restore its cached set in __init__.
+        # Automations (Phase 4): receive + validate the app's retained rule set,
+        # report status, and run the rules locally. config_store is already
+        # started above, so the manager can restore its cached set in __init__.
         self._automations = AutomationManager()
         self._automations.set_status_publisher(mqtt_transport.publish_automations_status)
         mqtt_transport.register_automations_callback(self._automations.apply_payload)
+
+        # Evaluator (slice 005): the manager drives an AutomationEngine that
+        # actually runs the rules. The StateStore is fed from the data-collection
+        # loop; the EventBus carries lifecycle events + fire_event; the executor
+        # translates HA services to bridge actions and resolves the entity to a
+        # currently-loaded integration (lazily — a device that appears later just
+        # starts working). The engine runs even while the broker is unreachable
+        # (pillar P5: automations keep the grow alive when the internet drops).
+        self._state_store = StateStore()
+        self._event_bus = EventBus()
+        executor = ActionExecutor(
+            integration_provider=lambda name: self._integrations.get(name),
+            state_store=self._state_store,
+        )
+        self._engine = AutomationEngine(self._state_store, self._event_bus, executor)
+        self._automations.set_engine(self._engine)
+
         # Re-validate + re-report whenever the device set changes — the rule set
         # arrives retained (possibly before integrations register their devices),
         # so a receipt-only check would spuriously fail entity refs on boot.
@@ -122,6 +148,11 @@ class Application:
         await self._load_config_from_store()
 
         await self._load_integrations()
+
+        # Start the evaluator now that integrations are loaded (so the executor
+        # can resolve them). This runs the cached rule set locally immediately —
+        # no broker connection required.
+        self._automations.start_engine()
 
         # The transport's maintainer task connects once credentials are
         # present, and on_connect publishes state + manifest. The initial
@@ -184,6 +215,12 @@ class Application:
         except Exception:
             logger.debug("Failed to deregister automations registry callback", exc_info=True)
 
+        if self._automations is not None:
+            try:
+                await self._automations.stop_engine()
+            except Exception:
+                logger.debug("Failed to stop automation engine", exc_info=True)
+
         for task in self._tasks:
             task.cancel()
 
@@ -214,6 +251,10 @@ class Application:
         if self._automations is None or self.loop is None or self.loop.is_closed():
             return
         asyncio.run_coroutine_threadsafe(self._automations.revalidate(), self.loop)
+        # Seed a lifecycle event for rules that react to device changes. The
+        # registry callback may fire off-loop, so marshal the emit onto the loop.
+        if self._engine is not None:
+            self.loop.call_soon_threadsafe(self._engine.emit_event, "manifest_changed", {})
 
     async def _apply_settings(self, settings: dict[str, Any]):
         """Apply settings received from the API to integrations."""
@@ -295,6 +336,14 @@ class Application:
                                 item["timestamp"] = timestamp
                                 item["integration"] = name
                                 await queue_manager.put(item)
+                                # Feed the automation StateStore using the SAME
+                                # entity-id derivation as telemetry, so trigger /
+                                # condition entity refs line up with the manifest.
+                                if self._state_store is not None:
+                                    value = item.get("value")
+                                    entity_id = mqtt_transport._derive_entity_id(item)
+                                    if entity_id and value is not None:
+                                        await self._state_store.set(entity_id, value)
                     except Exception as e:
                         logger.error(f"Error collecting data from {name}: {e}")
 
@@ -408,6 +457,14 @@ class Application:
 
             integration = self._integrations[integration_name]
             success = await integration.execute_command(target_id, action, payload)
+
+            # Seed a real lifecycle event so rules can react to app-issued
+            # commands (fresh chain — a rule reacting to this is depth-guarded).
+            if self._engine is not None:
+                self._engine.emit_event(
+                    "command_executed",
+                    {"targetId": target_id, "action": action, "success": bool(success)},
+                )
 
             result_msg = "Command executed successfully" if success else "Command execution failed"
             await mqtt_transport.send_command_result(command_id, success, result_msg)

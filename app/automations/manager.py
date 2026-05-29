@@ -1,12 +1,12 @@
-"""Automation rule-set handling on the bridge (Phase 4 — push path).
+"""Automation rule-set handling on the bridge (Phase 4).
 
-The app is the editor + viewer; the bridge owns execution. In this slice the
-bridge *receives* the app's retained automation rule set, *validates* it
-(structure + entity existence against the device registry) and reports the
-result on the retained ``…/automations/status`` topic. It does **not** yet
-evaluate or execute rules — that is the evaluator slice. The full HA-subset
-vocabulary is recognised here so a rule that validates now is a rule the
-evaluator can later run without a schema change.
+The app is the editor + viewer; the bridge owns execution. The manager
+*receives* the app's retained automation rule set, *validates* it (structure +
+entity existence against the device registry), reports the result on the
+retained ``…/automations/status`` topic, **and drives the evaluator** — it hands
+the enabled rules to an ``AutomationEngine`` (slice 005) that actually runs them
+(triggers/conditions/actions). The full HA-subset vocabulary is recognised here
+so a rule that validates is a rule the engine runs.
 
 Why validate on registry change, not only on receipt
 -----------------------------------------------------
@@ -15,15 +15,25 @@ instant the bridge subscribes. Depending on boot ordering that can be before an
 integration has registered its devices — a receipt-only check would then fail
 every entity reference as "unknown" until the next push. Re-validating whenever
 the registry changes (the same hook the manifest re-push uses) makes the status
-self-correct, and also handles "a rule references a device that appears later".
+self-correct. The engine itself resolves entities lazily (a rule for a device
+that appears later just starts working), so it needs no rebuild on registry
+change — only the *status* re-validates.
 
-Hash round-trip
----------------
+Hash round-trip + versioning
+----------------------------
 The app records the SHA-256 of the exact bytes it published; the bridge echoes
 ``validatedHash`` = SHA-256 of the bytes it received. Because it is the same
 retained message, the bytes are identical and the hashes match without any
 cross-language canonical-form parity (unlike the manifest hash). The app uses
 the match (plus ``ok``) to distinguish "saved" from "confirmed by the bridge".
+
+The payload also carries a monotonic ``version``. The manager persists the last
+version it applied to the engine and rebuilds the engine only for a
+*strictly-newer* version — so the retained message redelivered on every
+reconnect does not reset edge-trigger baselines. This is the clear-while-offline
+fix: a clear now arrives as ``{automations:[], version:N}`` (the retained
+message is never deleted), so a bridge offline at clear time empties its engine
+when it reconnects rather than running deleted rules from cache.
 """
 
 import hashlib
@@ -35,6 +45,8 @@ from typing import Any, Callable, Optional
 
 from app.config_store import config_store
 from app.registry import registry
+
+from .engine import AutomationEngine
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +75,63 @@ class AutomationManager:
         self._raw: Optional[str] = None  # exact payload string last received ("" = cleared)
         self._automations: list[dict[str, Any]] = []
         self._publish_status: Optional[StatusPublisher] = None
+        self._engine: Optional[AutomationEngine] = None
+        # Last rule-set version applied to the engine (None = none applied yet).
+        self._applied_version: Optional[int] = None
 
         # Restore the last-applied rule set so a restart re-validates + re-reports
-        # without needing the app to re-push.
+        # — and runs the cached rules locally — without needing the app to re-push.
         cached = config_store.get_config(CONFIG_KEY)
         if cached is not None and isinstance(cached.get("payload"), str):
             self._raw = cached["payload"]
             self._automations = self._parse_list(self._raw)
+            v = cached.get("version")
+            self._applied_version = v if isinstance(v, int) else None
         logger.info(
-            "AutomationManager initialized (%d cached automation(s))", len(self._automations)
+            "AutomationManager initialized (%d cached automation(s), version=%s)",
+            len(self._automations),
+            self._applied_version,
         )
 
     def set_status_publisher(self, fn: StatusPublisher) -> None:
         """Register the coroutine that publishes a status dict (transport-provided)."""
         self._publish_status = fn
+
+    # ─── Engine wiring ──────────────────────────────────────────────
+
+    def set_engine(self, engine: AutomationEngine) -> None:
+        """Attach the evaluator the manager drives."""
+        self._engine = engine
+
+    def start_engine(self) -> None:
+        """Load the cached enabled rules into the engine and start it.
+
+        Called once at startup (after wiring). The cached rules run locally even
+        before the bridge reconnects to the broker — pillar P5 (offline-tolerant
+        automations)."""
+        if self._engine is None:
+            return
+        self._engine.apply_rules(self._enabled_rules())
+        self._engine.start()
+
+    async def stop_engine(self) -> None:
+        """Stop the evaluator (cancels in-flight runs + the scheduler)."""
+        if self._engine is not None:
+            await self._engine.stop()
+
+    def _enabled_rules(self) -> list[dict[str, Any]]:
+        """The subset of the cached rule set that is enabled (runs on the engine)."""
+        return [
+            r for r in self._automations if isinstance(r, dict) and r.get("enabled", True) is True
+        ]
+
+    def _persist(self, text: str) -> None:
+        """Cache the raw payload + applied version for restart recovery."""
+        config_store.save_config(
+            CONFIG_KEY,
+            {"payload": text, "version": self._applied_version},
+            len(self._automations),
+        )
 
     # ─── Inbound ────────────────────────────────────────────────────
 
@@ -91,9 +146,15 @@ class AutomationManager:
         text = payload.decode("utf-8") if payload else ""
 
         if not text.strip():
+            # Empty *bytes* — a deleted retained message (legacy/edge; the app now
+            # clears via a non-empty `{automations:[], version:N}`). Stop running
+            # any rules but KEEP the applied version, so this never *downgrades*
+            # the reconciliation guard and let a future versioned set win.
             self._raw = ""
             self._automations = []
-            config_store.save_config(CONFIG_KEY, {"payload": ""}, 0)
+            self._persist("")
+            if self._engine is not None:
+                self._engine.apply_rules([])
             return await self._emit_status(ok=True, errors=[], validated_hash=validated_hash)
 
         try:
@@ -110,10 +171,36 @@ class AutomationManager:
                 validated_hash=validated_hash,
             )
 
-        self._raw = text
-        self._automations = automations
-        config_store.save_config(CONFIG_KEY, {"payload": text}, len(automations))
+        raw_version = data.get("version")
+        incoming_version = raw_version if isinstance(raw_version, int) else None
         errors = self.validate(automations)
+
+        # Reconcile against the version guard: apply (and rebuild the engine) only
+        # for a strictly-newer version. A versionless payload (legacy) always
+        # applies; the retained set redelivered on reconnect (same version) is a
+        # no-op for the engine so edge-trigger baselines are not reset.
+        if (
+            incoming_version is None
+            or self._applied_version is None
+            or incoming_version > self._applied_version
+        ):
+            self._raw = text
+            self._automations = automations
+            if incoming_version is not None:
+                self._applied_version = incoming_version
+            self._persist(text)
+            if self._engine is not None:
+                enabled = self._enabled_rules()
+                self._engine.apply_rules(enabled)
+                # Seed a real lifecycle event so rules can react to a (re)deploy.
+                self._engine.emit_event("rule_set_applied", {"count": len(enabled)})
+        else:
+            logger.info(
+                "Ignoring stale automations payload (version=%s, applied=%s)",
+                incoming_version,
+                self._applied_version,
+            )
+
         return await self._emit_status(ok=not errors, errors=errors, validated_hash=validated_hash)
 
     async def revalidate(self) -> Optional[dict[str, Any]]:
