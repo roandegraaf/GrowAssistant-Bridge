@@ -127,17 +127,57 @@ def test_on_message_ignores_own_ack_echo(transport):
     assert enqueued == []
 
 
-def test_on_message_automations_logged_only(transport):
-    """An automations message is logged only, never enqueued."""
+def test_on_message_routes_automations_to_callback(transport):
+    """An automations message is handed (raw bytes) to the automations callback
+    via _schedule, not enqueued as a command."""
+    transport._schedule = MagicMock()
+    transport._automations_callback = MagicMock()
     enqueued = []
     transport._enqueue_command = enqueued.append
 
     msg = MagicMock()
     msg.topic = "ga/tenantX/bridge/bridgeY/automations"
-    msg.payload = json.dumps({"rules": []}).encode()
+    raw = json.dumps({"automations": []}).encode()
+    msg.payload = raw
 
     transport._on_message(None, None, msg)
+
     assert enqueued == []
+    transport._schedule.assert_called_once()
+    # The callback is invoked with the RAW bytes (the validator hashes them).
+    transport._automations_callback.assert_called_once_with(raw)
+
+
+def test_on_message_routes_empty_automations_without_decoding(transport):
+    """An EMPTY automations payload (the app's clear-of-last) must route to the
+    callback without hitting json.loads — the regression that an unconditional
+    decode at the top of _on_message would raise on."""
+    transport._schedule = MagicMock()
+    transport._automations_callback = MagicMock()
+
+    msg = MagicMock()
+    msg.topic = "ga/tenantX/bridge/bridgeY/automations"
+    msg.payload = b""  # empty = clear the retained rule set
+
+    transport._on_message(None, None, msg)  # must not raise
+
+    transport._schedule.assert_called_once()
+    transport._automations_callback.assert_called_once_with(b"")
+
+
+@pytest.mark.asyncio
+async def test_publish_automations_status_retained_topic(transport):
+    """publish_automations_status publishes to …/automations/status, retained."""
+    status = {"ok": True, "count": 1, "validatedHash": "abc", "errors": []}
+    ok = await transport.publish_automations_status(status)
+    assert ok is True
+
+    transport._client.publish.assert_called_once()
+    args, kwargs = transport._client.publish.call_args
+    assert args[0] == "ga/tenantX/bridge/bridgeY/automations/status"
+    assert json.loads(args[1]) == status
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is True
 
 
 def test_on_disconnect_does_not_loop_stop_inline(transport):

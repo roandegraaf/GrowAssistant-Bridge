@@ -16,6 +16,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from app.auth import auth_manager
+from app.automations import AutomationManager
 from app.config import config, init_logging
 from app.config_store import config_store
 from app.integrations import (
@@ -56,6 +57,7 @@ class Application:
         self._integrations: dict[str, Integration] = {}
         self._running = False
         self._tasks: set[asyncio.Task] = set()
+        self._automations: Optional[AutomationManager] = None
         self._initialized = True
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -104,6 +106,17 @@ class Application:
 
         await mqtt_transport.start()
         mqtt_transport.register_settings_callback(self._apply_settings)
+
+        # Automation engine (Phase 4 push path): receive + validate the app's
+        # retained rule set and report status. config_store is already started
+        # above, so the manager can restore its cached set in __init__.
+        self._automations = AutomationManager()
+        self._automations.set_status_publisher(mqtt_transport.publish_automations_status)
+        mqtt_transport.register_automations_callback(self._automations.apply_payload)
+        # Re-validate + re-report whenever the device set changes — the rule set
+        # arrives retained (possibly before integrations register their devices),
+        # so a receipt-only check would spuriously fail entity refs on boot.
+        registry.add_change_callback(self._on_registry_change_automations)
 
         # Load config from local store and apply settings on startup.
         await self._load_config_from_store()
@@ -166,6 +179,11 @@ class Application:
         logger.info("Stopping application")
         self._running = False
 
+        try:
+            registry.remove_change_callback(self._on_registry_change_automations)
+        except Exception:
+            logger.debug("Failed to deregister automations registry callback", exc_info=True)
+
         for task in self._tasks:
             task.cancel()
 
@@ -186,6 +204,16 @@ class Application:
         config_store.stop()
 
         logger.info("Application stopped")
+
+    def _on_registry_change_automations(self) -> None:
+        """Registry change → re-validate + re-report the cached rule set.
+
+        The registry callback is synchronous; schedule the async revalidation
+        onto the running loop (thread-safe — the callback may fire from any
+        thread an integration registers from)."""
+        if self._automations is None or self.loop is None or self.loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(self._automations.revalidate(), self.loop)
 
     async def _apply_settings(self, settings: dict[str, Any]):
         """Apply settings received from the API to integrations."""
