@@ -14,6 +14,9 @@ flask-wtf>=1.2.0
 # MQTT integration
 paho-mqtt>=2.1.0
 
+# Automation rule templating (safe {{ … }} expression evaluation)
+simpleeval>=1.0.0
+
 # ESPHome native API integration
 aioesphomeapi>=24.0.0
 

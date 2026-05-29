@@ -195,3 +195,106 @@ class TestRevalidateOnRegistryChange:
 
 async def _noop():
     return None
+
+
+class StubEngine:
+    """Records how the manager drives the engine (no real evaluation)."""
+
+    def __init__(self):
+        self.applied: list[list] = []
+        self.events: list = []
+        self.started = False
+        self.stopped = False
+
+    def apply_rules(self, rules):
+        self.applied.append(list(rules))
+
+    def emit_event(self, event_type, event_data=None):
+        self.events.append((event_type, event_data))
+
+    def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+
+_R1 = {
+    "id": "a1",
+    "name": "Vent",
+    "enabled": True,
+    "triggers": [{"type": "time", "at": "06:00"}],
+    "actions": [{"type": "fire_event", "event_type": "z"}],
+}
+_R_DISABLED = {**_R1, "id": "a2", "enabled": False}
+
+
+def _ruleset(automations, version) -> bytes:
+    return json.dumps({"automations": automations, "version": version}).encode("utf-8")
+
+
+class TestVersionedReconciliation:
+    async def test_newer_version_applies_enabled_rules_and_emits_event(self):
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        status = await mgr.apply_payload(_ruleset([_R1, _R_DISABLED], 1))
+        assert eng.applied == [[_R1]]  # only the enabled rule runs
+        assert ("rule_set_applied", {"count": 1}) in eng.events
+        assert status["ok"] is True
+
+    async def test_equal_or_older_version_is_ignored(self):
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        await mgr.apply_payload(_ruleset([_R1], 5))
+        await mgr.apply_payload(_ruleset([_R1], 5))  # redelivery (reconnect) → ignored
+        await mgr.apply_payload(_ruleset([_R1], 3))  # stale → ignored
+        assert eng.applied == [[_R1]]  # engine rebuilt exactly once (no baseline reset)
+        await mgr.apply_payload(_ruleset([_R1], 6))  # strictly newer → rebuilt
+        assert len(eng.applied) == 2
+
+    async def test_versioned_clear_empties_engine(self):
+        # The real clear-while-offline path: a non-empty {automations:[], version:N}.
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        await mgr.apply_payload(_ruleset([_R1], 5))
+        status = await mgr.apply_payload(_ruleset([], 6))
+        assert eng.applied[-1] == []
+        assert status["count"] == 0
+        # an older set arriving afterwards must not resurrect the deleted rules
+        await mgr.apply_payload(_ruleset([_R1], 5))
+        assert eng.applied[-1] == []
+
+    async def test_empty_bytes_clear_keeps_version(self):
+        # A deleted retained message (empty bytes) stops execution but must NOT
+        # downgrade the version guard.
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        await mgr.apply_payload(_ruleset([_R1], 5))
+        await mgr.apply_payload(b"")
+        assert eng.applied[-1] == []
+        await mgr.apply_payload(_ruleset([_R1], 4))  # older → still ignored
+        assert eng.applied[-1] == []
+        await mgr.apply_payload(_ruleset([_R1], 6))  # newer → applied
+        assert eng.applied[-1] == [_R1]
+
+    def test_restores_version_from_cache_and_primes_engine(self, monkeypatch):
+        cached = {"payload": json.dumps({"automations": [_R1], "version": 7}), "version": 7}
+        monkeypatch.setattr("app.automations.manager.config_store.get_config", lambda key: cached)
+        mgr = AutomationManager()
+        assert mgr._applied_version == 7
+        eng = StubEngine()
+        mgr.set_engine(eng)
+        mgr.start_engine()  # cached enabled rules run locally on restart (P5)
+        assert eng.applied == [[_R1]]
+        assert eng.started is True
+
+    async def test_stop_engine_delegates(self):
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        await mgr.stop_engine()
+        assert eng.stopped is True
