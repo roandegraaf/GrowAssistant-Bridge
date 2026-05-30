@@ -132,8 +132,47 @@ class TestGo2rtcConfigGeneration:
             written = yaml.safe_load(f)
 
         assert written["api"]["listen"] == ":1984"
-        assert written["webrtc"]["candidates"] == ["127.0.0.1:8555"]
-        assert written["streams"] == {"camera.tent1": "ffmpeg:test"}
+        # Host candidate + a stun:<port> candidate for public-IP discovery.
+        assert written["webrtc"]["candidates"] == ["127.0.0.1:8555", "stun:8555"]
+        # No ICE servers fetched → no ice_servers key (host-only / STUN P2P).
+        assert "ice_servers" not in written["webrtc"]
+        # The base stream plus its reduced-framerate variant.
+        assert written["streams"] == {
+            "camera.tent1": "ffmpeg:test",
+            "camera.tent1_lofps": "ffmpeg:camera.tent1#video=h264#raw=-vf fps=0.5",
+        }
+
+    def test_write_config_includes_ice_servers_when_present(self, tmp_path):
+        integration = CameraIntegration(_config())
+        integration._ice_servers = [
+            {"urls": ["stun:stun.example.com:3478"]},
+            {"urls": ["turn:turn.example.com:3478"], "username": "u", "credential": "c"},
+        ]
+        with patch("app.integrations.camera.camera.config") as mock_config:
+            mock_config.get.return_value = str(tmp_path)
+            path = integration._write_go2rtc_config()
+
+        import yaml
+
+        with open(path) as f:
+            written = yaml.safe_load(f)
+
+        assert written["webrtc"]["ice_servers"] == integration._ice_servers
+
+    def test_low_framerate_fps_configurable(self, tmp_path):
+        integration = CameraIntegration(_config(low_framerate_fps=1.5))
+        with patch("app.integrations.camera.camera.config") as mock_config:
+            mock_config.get.return_value = str(tmp_path)
+            path = integration._write_go2rtc_config()
+
+        import yaml
+
+        with open(path) as f:
+            written = yaml.safe_load(f)
+
+        assert written["streams"]["camera.tent1_lofps"] == (
+            "ffmpeg:camera.tent1#video=h264#raw=-vf fps=1.5"
+        )
 
 
 class TestConnect:
@@ -149,6 +188,10 @@ class TestConnect:
         integration = CameraIntegration(_config())
         with (
             patch("app.integrations.camera.camera.config") as mock_config,
+            patch(
+                "app.integrations.camera.camera.auth_manager.fetch_ice_servers",
+                AsyncMock(return_value=None),
+            ),
             patch(
                 "app.integrations.camera.camera.asyncio.create_subprocess_exec",
                 side_effect=FileNotFoundError(),
@@ -171,6 +214,12 @@ class TestConnect:
         with (
             patch("app.integrations.camera.camera.config") as mock_config,
             patch(
+                "app.integrations.camera.camera.auth_manager.fetch_ice_servers",
+                AsyncMock(
+                    return_value=[{"urls": ["turn:t:3478"], "username": "u", "credential": "c"}]
+                ),
+            ),
+            patch(
                 "app.integrations.camera.camera.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=proc),
             ),
@@ -179,6 +228,36 @@ class TestConnect:
             mock_config.get.return_value = str(tmp_path)
             assert await integration.connect() is True
         assert integration._process is proc
+        # ICE servers fetched from the app are stored for the go2rtc config.
+        assert integration._ice_servers == [
+            {"urls": ["turn:t:3478"], "username": "u", "credential": "c"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_connect_success_without_ice_servers(self, tmp_path):
+        """A failed ICE fetch doesn't block connect (host-only / STUN P2P)."""
+        integration = CameraIntegration(_config())
+        proc = MagicMock()
+        proc.pid = 1234
+        proc.returncode = None
+
+        mock_client = _mock_async_client(response=MagicMock(status_code=200))
+
+        with (
+            patch("app.integrations.camera.camera.config") as mock_config,
+            patch(
+                "app.integrations.camera.camera.auth_manager.fetch_ice_servers",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "app.integrations.camera.camera.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=proc),
+            ),
+            patch.object(httpx, "AsyncClient", return_value=mock_client),
+        ):
+            mock_config.get.return_value = str(tmp_path)
+            assert await integration.connect() is True
+        assert integration._ice_servers == []
 
     @pytest.mark.asyncio
     async def test_connect_process_dies_early(self, tmp_path):
@@ -193,6 +272,10 @@ class TestConnect:
 
         with (
             patch("app.integrations.camera.camera.config") as mock_config,
+            patch(
+                "app.integrations.camera.camera.auth_manager.fetch_ice_servers",
+                AsyncMock(return_value=None),
+            ),
             patch(
                 "app.integrations.camera.camera.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=proc),
@@ -224,6 +307,22 @@ class TestNegotiateWebRTC:
         assert args[0] == "http://127.0.0.1:1984/api/webrtc"
         assert kwargs["params"] == {"src": "camera.tent1"}
         assert kwargs["json"] == {"type": "offer", "sdp": "OFFER_SDP"}
+
+    @pytest.mark.asyncio
+    async def test_low_framerate_variant_accepted(self):
+        """The _lofps variant is a valid negotiation target (adaptive framerate)."""
+        integration = CameraIntegration(_config())
+        post_response = MagicMock()
+        post_response.status_code = 200
+        post_response.json = MagicMock(return_value={"type": "answer", "sdp": "ANSWER_SDP"})
+        mock_client = _mock_async_client(post_response=post_response)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            answer = await integration.negotiate_webrtc("camera.tent1_lofps", "OFFER_SDP")
+
+        assert answer == "ANSWER_SDP"
+        _, kwargs = mock_client.post.call_args
+        assert kwargs["params"] == {"src": "camera.tent1_lofps"}
 
     @pytest.mark.asyncio
     async def test_unknown_stream_rejected(self):

@@ -278,6 +278,26 @@ class CameraIntegrationConfig(BaseIntegrationConfig):
     cameras: list[CameraConfig] = Field(
         default_factory=list, description="List of cameras to expose as streams"
     )
+    low_framerate_fps: float = Field(
+        default=0.5,
+        gt=0,
+        le=30,
+        description=(
+            "Framerate of each camera's reduced-quality variant stream "
+            "(camera.<name>_lofps), requested by the browser when its WebRTC "
+            "path is TURN-relayed (adaptive framerate)."
+        ),
+    )
+    stun_candidate_port: int = Field(
+        default=8555,
+        ge=1,
+        le=65535,
+        description=(
+            "WebRTC port go2rtc advertises for STUN-based public-IP discovery "
+            "(stun:<port> candidate). Lets a NAT'd go2rtc be reachable for the "
+            "common remote case without a TURN relay of its own."
+        ),
+    )
 
 
 # =============================================================================

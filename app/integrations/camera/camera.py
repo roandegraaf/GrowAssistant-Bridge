@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import httpx
 import yaml
 
+from app.auth import auth_manager
 from app.config import config
 from app.integrations import Integration, register_integration
 from app.registry import DeviceCategory
@@ -43,6 +44,10 @@ NEGOTIATE_TIMEOUT_S = 10.0
 SHUTDOWN_TIMEOUT_S = 5.0
 # go2rtc's default WebRTC UDP/TCP port; advertised as a host candidate.
 WEBRTC_PORT = 8555
+# Suffix for a camera's reduced-framerate variant stream. Must match the app's
+# LOW_FRAMERATE_STREAM_SUFFIX (lib/bridge/webrtc.ts) — the browser requests
+# camera.<name><LOW_FRAMERATE_SUFFIX> when its WebRTC path is TURN-relayed.
+LOW_FRAMERATE_SUFFIX = "_lofps"
 
 
 @register_integration
@@ -58,10 +63,14 @@ class CameraIntegration(Integration):
         self.go2rtc_binary: str = self.config.get("go2rtc_binary", "go2rtc")
         self.go2rtc_host: str = self.config.get("go2rtc_host", "127.0.0.1")
         self.go2rtc_api_port: int = self.config.get("go2rtc_api_port", 1984)
+        self.low_framerate_fps: float = self.config.get("low_framerate_fps", 0.5)
+        self.stun_candidate_port: int = self.config.get("stun_candidate_port", WEBRTC_PORT)
 
         # Build the stream map (entity_id -> source) and the set of valid
         # stream ids up front from config — independent of register_capabilities
         # so negotiate_webrtc can reject unknown ids even before registration.
+        # Only the base cameras are registered as devices; the _lofps variants
+        # are negotiation-only (see _build_go2rtc_streams / negotiate_webrtc).
         self._streams: dict[str, str] = {}
         for cam in self.config.get("cameras", []) or []:
             if not isinstance(cam, dict):
@@ -73,6 +82,10 @@ class CameraIntegration(Integration):
                 logger.error(f"Invalid camera config (missing name/source): {cam}")
                 continue
             self._streams[f"camera.{name}"] = source
+
+        # ICE servers (STUN + TURN) for go2rtc, fetched from the app at connect().
+        # Empty until then; the TURN shared secret never lives on the bridge.
+        self._ice_servers: list = []
 
         self._process: Optional[asyncio.subprocess.Process] = None
         self._config_path: Optional[str] = None
@@ -87,21 +100,54 @@ class CameraIntegration(Integration):
         """Base URL for go2rtc's HTTP API."""
         return f"http://{self.go2rtc_host}:{self.go2rtc_api_port}"
 
+    def _build_go2rtc_streams(self) -> dict[str, str]:
+        """Build the full go2rtc stream map: each camera plus its reduced-
+        framerate variant.
+
+        The ``<id>_lofps`` variant re-encodes the base stream at
+        ``low_framerate_fps`` using go2rtc's ffmpeg module (referencing the base
+        stream name as the ffmpeg input). The browser requests it when its path
+        is TURN-relayed, trading smoothness for relay bandwidth.
+        """
+        streams: dict[str, str] = {}
+        for stream_id, source in self._streams.items():
+            streams[stream_id] = source
+            streams[f"{stream_id}{LOW_FRAMERATE_SUFFIX}"] = (
+                f"ffmpeg:{stream_id}#video=h264#raw=-vf fps={self.low_framerate_fps}"
+            )
+        return streams
+
+    @property
+    def _valid_stream_ids(self) -> set[str]:
+        """Stream ids negotiate_webrtc accepts (base cameras + _lofps variants)."""
+        return set(self._build_go2rtc_streams().keys())
+
     def _write_go2rtc_config(self) -> str:
         """Generate a go2rtc YAML config file and return its path.
 
-        The config wires the HTTP API listener, a no-TURN WebRTC section that
-        advertises host candidates on ``<host>:<WEBRTC_PORT>``, and the stream
-        map keyed by each camera's entity_id.
+        The config wires the HTTP API listener; a WebRTC section advertising a
+        host candidate on ``<host>:<WEBRTC_PORT>`` plus a ``stun:<port>``
+        candidate (public-IP discovery for the common remote case) and any ICE
+        servers fetched from the app (STUN/TURN, the relay fallback); and the
+        stream map (each camera plus its ``_lofps`` variant).
         """
         data_dir = config.get("general.data_dir", "data")
         os.makedirs(data_dir, exist_ok=True)
         path = os.path.join(data_dir, "go2rtc.yaml")
 
+        webrtc: dict[str, Any] = {
+            "candidates": [
+                f"{self.go2rtc_host}:{WEBRTC_PORT}",
+                f"stun:{self.stun_candidate_port}",
+            ]
+        }
+        if self._ice_servers:
+            webrtc["ice_servers"] = self._ice_servers
+
         go2rtc_config = {
             "api": {"listen": f":{self.go2rtc_api_port}"},
-            "webrtc": {"candidates": [f"{self.go2rtc_host}:{WEBRTC_PORT}"]},
-            "streams": dict(self._streams),
+            "webrtc": webrtc,
+            "streams": self._build_go2rtc_streams(),
             # Keep go2rtc's own log noise modest; it inherits our stdio.
             "log": {"level": "warn"},
         }
@@ -140,6 +186,16 @@ class CameraIntegration(Integration):
         if not self.config.get("enabled", False):
             logger.info("Camera Integration is disabled in configuration.")
             return False
+
+        # Fetch go2rtc's ICE servers (STUN + TURN relay) from the app before
+        # writing the config. Best-effort: on failure go2rtc still gets its host
+        # + stun candidates (host-only / STUN P2P), just no TURN relay.
+        try:
+            ice_servers = await auth_manager.fetch_ice_servers()
+            if ice_servers is not None:
+                self._ice_servers = ice_servers
+        except Exception as e:
+            logger.warning(f"Could not fetch ICE servers (continuing without TURN): {e}")
 
         try:
             self._config_path = self._write_go2rtc_config()
@@ -192,8 +248,9 @@ class CameraIntegration(Integration):
         """Relay an SDP offer to go2rtc and return its answer SDP.
 
         Args:
-            stream_id: The camera entity_id (``camera.<name>``). Must be one of
-                this integration's configured cameras.
+            stream_id: The camera entity_id (``camera.<name>``) or its
+                reduced-framerate variant (``camera.<name>_lofps``). Must be one
+                of this integration's configured cameras (or their variants).
             offer_sdp: The browser's SDP offer.
 
         Returns:
@@ -203,7 +260,7 @@ class CameraIntegration(Integration):
             ValueError: If ``stream_id`` is not a configured camera.
             RuntimeError: If go2rtc returns a non-200 or an answer without sdp.
         """
-        if stream_id not in self._streams:
+        if stream_id not in self._valid_stream_ids:
             raise ValueError(f"Unknown stream id: {stream_id}")
 
         url = f"{self._api_base}/api/webrtc"

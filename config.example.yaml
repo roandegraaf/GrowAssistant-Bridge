@@ -116,6 +116,16 @@ integrations:
     go2rtc_binary: go2rtc      # path to, or name on PATH of, the go2rtc binary
     go2rtc_api_port: 1984      # go2rtc HTTP API port
     go2rtc_host: 127.0.0.1     # host go2rtc's API is reachable on
+    # Reduced-framerate variant: when the browser's WebRTC path is TURN-relayed
+    # it requests camera.<name>_lofps (auto-generated) at this fps, trading
+    # smoothness for relay bandwidth. Full quality stays on the direct P2P path.
+    low_framerate_fps: 0.5
+    # WebRTC port go2rtc advertises for STUN public-IP discovery (stun:<port>).
+    stun_candidate_port: 8555
+    # NOTE: go2rtc's STUN/TURN ICE servers are fetched from the app at startup
+    # (POST /api/bridge/ice-servers, authenticated with the bridge secret) — the
+    # TURN shared secret is never stored on the bridge. STUN covers the common
+    # remote case; TURN is the symmetric-NAT double-relay fallback.
     cameras:
       - name: tent1            # entity_id becomes camera.tent1
         # Any go2rtc stream source string (ffmpeg:/rtsp:/exec:/...). Example

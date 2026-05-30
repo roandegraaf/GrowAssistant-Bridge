@@ -268,3 +268,51 @@ class TestAuthManagerTokenRefresh:
         auth_manager._client = MagicMock()
         auth_manager._credentials = None
         assert await auth_manager.refresh_token() is False
+
+
+class TestAuthManagerFetchIceServers:
+    """Tests for fetch_ice_servers (go2rtc WebRTC ICE config)."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_ice_servers_success(self, auth_manager):
+        """Returns the iceServers list, authenticating with bridgeId + secret."""
+        ice = [{"urls": ["turn:t:3478"], "username": "u", "credential": "c"}]
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._client.post = AsyncMock(return_value=_response(200, {"iceServers": ice}))
+
+        assert await auth_manager.fetch_ice_servers() == ice
+        args, kwargs = auth_manager._client.post.call_args
+        assert args[0].endswith("/api/bridge/ice-servers")
+        assert kwargs["json"] == {"bridgeId": "b1", "bridgeSecret": "s1"}
+
+    @pytest.mark.asyncio
+    async def test_fetch_ice_servers_empty_list(self, auth_manager):
+        """An empty list (no TURN/STUN configured) is returned verbatim."""
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._client.post = AsyncMock(return_value=_response(200, {"iceServers": []}))
+        assert await auth_manager.fetch_ice_servers() == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_ice_servers_401(self, auth_manager):
+        """A 401 returns None (camera proceeds host-only)."""
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._client.post = AsyncMock(return_value=_response(401, {"error": "bad"}))
+        assert await auth_manager.fetch_ice_servers() is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_ice_servers_malformed(self, auth_manager):
+        """A response missing the iceServers list returns None."""
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._client.post = AsyncMock(return_value=_response(200, {"nope": 1}))
+        assert await auth_manager.fetch_ice_servers() is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_ice_servers_unpaired(self, auth_manager):
+        """Returns None when not paired."""
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = None
+        assert await auth_manager.fetch_ice_servers() is None
