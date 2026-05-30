@@ -193,6 +193,55 @@ class AuthManager(metaclass=SingletonMeta):
         logger.info("Token refreshed successfully")
         return True
 
+    async def fetch_ice_servers(self) -> Optional[list]:
+        """Fetch go2rtc's WebRTC ICE servers (STUN + TURN) from the app.
+
+        POSTs ``/api/bridge/ice-servers`` with the stored bridgeId + bridgeSecret
+        (same auth as token rotation). The app mints a long-TTL TURN credential
+        server-side, so the TURN shared secret never lives on the bridge.
+
+        Returns the ICE servers list (possibly empty if the app has no TURN/STUN
+        configured), or ``None`` on an auth/transport failure — the camera
+        integration then proceeds without relay candidates (host-only P2P).
+        """
+        if not self._client:
+            logger.error("Authentication manager not started")
+            return None
+
+        bridge_id = self.get_client_id()
+        bridge_secret = self.get_bridge_secret()
+        if not bridge_id or not bridge_secret:
+            logger.warning("Cannot fetch ICE servers: bridge is not paired")
+            return None
+
+        url = f"{self._base_url}/api/bridge/ice-servers"
+
+        try:
+            response = await self._client.post(
+                url, json={"bridgeId": bridge_id, "bridgeSecret": bridge_secret}
+            )
+        except httpx.HTTPError as e:
+            logger.error(f"Error fetching ICE servers: {e}")
+            return None
+
+        if response.status_code != 200:
+            logger.warning(f"ICE servers fetch failed ({response.status_code})")
+            return None
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning("ICE servers response was not JSON")
+            return None
+
+        ice_servers = data.get("iceServers")
+        if not isinstance(ice_servers, list):
+            logger.warning("ICE servers response missing iceServers list")
+            return None
+
+        logger.info(f"Fetched {len(ice_servers)} ICE server(s) for go2rtc")
+        return ice_servers
+
     def _hostname(self) -> str:
         """Return this host's name for the pairing call."""
         if hasattr(os, "uname"):
