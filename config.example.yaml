@@ -106,6 +106,22 @@ integrations:
     stopbits: 1
     timeout: 1
 
+  camera:
+    # WebRTC camera streaming brokered through a locally-supervised go2rtc
+    # process. go2rtc is an EXTERNAL binary (not a pip dependency) — install it
+    # separately (https://github.com/AlexxIT/go2rtc) and put it on PATH or set
+    # go2rtc_binary to its full path. The bridge spawns/manages it and relays
+    # SDP between the app and go2rtc; go2rtc is the actual WebRTC media peer.
+    enabled: false
+    go2rtc_binary: go2rtc      # path to, or name on PATH of, the go2rtc binary
+    go2rtc_api_port: 1984      # go2rtc HTTP API port
+    go2rtc_host: 127.0.0.1     # host go2rtc's API is reachable on
+    cameras:
+      - name: tent1            # entity_id becomes camera.tent1
+        # Any go2rtc stream source string (ffmpeg:/rtsp:/exec:/...). Example
+        # below is a self-contained test pattern (no real camera needed):
+        source: "exec:ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=15 -f lavfi -i sine=frequency=1000 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 30 -c:a aac -f rtsp {output}"
+
 queue:
   flush_interval: 300
   max_queue_size: 10000

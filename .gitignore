@@ -115,6 +115,7 @@ venv.bak/
 # Local configuration files
 config.local.yaml
 data/credentials.json
+data/go2rtc.yaml
 .python-version
 
 # Project documentation

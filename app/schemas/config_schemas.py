@@ -247,6 +247,40 @@ class GenericIntegrationConfig(BaseIntegrationConfig):
 
 
 # =============================================================================
+# Camera Integration Schemas
+# =============================================================================
+
+
+class CameraConfig(BaseModel):
+    """Configuration for a single camera stream.
+
+    ``name`` becomes the entity_id ``camera.<name>`` and is used verbatim as
+    the go2rtc stream key and ``?src=`` value. ``source`` is any go2rtc stream
+    source string (e.g. ``ffmpeg:...``, ``rtsp://...``, ``exec:...``).
+    """
+
+    name: str = Field(..., min_length=1, description="Camera name; entity_id is camera.<name>")
+    source: str = Field(..., min_length=1, description="go2rtc stream source string")
+
+
+class CameraIntegrationConfig(BaseIntegrationConfig):
+    """Configuration schema for the camera (go2rtc WebRTC broker) integration."""
+
+    go2rtc_binary: str = Field(
+        default="go2rtc", description="Path to, or name on PATH of, the go2rtc binary"
+    )
+    go2rtc_api_port: int = Field(
+        default=1984, ge=1, le=65535, description="Port go2rtc's HTTP API listens on"
+    )
+    go2rtc_host: str = Field(
+        default="127.0.0.1", description="Host go2rtc's HTTP API is reachable on"
+    )
+    cameras: list[CameraConfig] = Field(
+        default_factory=list, description="List of cameras to expose as streams"
+    )
+
+
+# =============================================================================
 # Validation Utilities
 # =============================================================================
 

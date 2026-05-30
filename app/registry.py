@@ -22,6 +22,7 @@ class DeviceCategory(str, Enum):
 
     SENSOR = "sensor"
     ACTUATOR = "actuator"
+    CAMERA = "camera"
 
 
 @dataclass
@@ -65,6 +66,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         self._by_category: dict[DeviceCategory, set[str]] = {
             DeviceCategory.SENSOR: set(),
             DeviceCategory.ACTUATOR: set(),
+            DeviceCategory.CAMERA: set(),
         }
 
         # Legacy mappings for backward compatibility
@@ -126,10 +128,11 @@ class DeviceRegistry(metaclass=SingletonMeta):
         self._devices[entity_id] = device_info
         self._update_indexes(entity_id, device_info)
 
-        # Update legacy mappings
+        # Update legacy mappings. Cameras belong to neither map — they are
+        # neither commanded as actuators nor polled as sensors.
         if category == DeviceCategory.SENSOR:
             self._sensors[name] = integration_name
-        else:
+        elif category == DeviceCategory.ACTUATOR:
             self._actuators[name] = integration_name
 
         logger.info(
@@ -221,8 +224,9 @@ class DeviceRegistry(metaclass=SingletonMeta):
     def _ha_entity_domain(d: DeviceInfo) -> str:
         """Map a device to its Home-Assistant-style entity domain.
 
-        The app accepts exactly four values here:
+        The app accepts these values here:
           - SENSOR                                  → "sensor"
+          - CAMERA                                   → "camera"
           - ACTUATOR, device_type "light"           → "light"
           - ACTUATOR with a "settable" capability   → "number"
             (capabilities include any of speed/level/temperature/set)
@@ -230,6 +234,8 @@ class DeviceRegistry(metaclass=SingletonMeta):
         """
         if d.category == DeviceCategory.SENSOR:
             return "sensor"
+        if d.category == DeviceCategory.CAMERA:
+            return "camera"
         if d.device_type == "light":
             return "light"
         if any(cap in {"speed", "level", "temperature", "set"} for cap in d.capabilities):
@@ -436,6 +442,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         self._by_category = {
             DeviceCategory.SENSOR: set(),
             DeviceCategory.ACTUATOR: set(),
+            DeviceCategory.CAMERA: set(),
         }
         logger.info("Registry cleared")
 

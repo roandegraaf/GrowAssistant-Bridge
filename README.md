@@ -35,6 +35,13 @@ A bridge application to connect various sensors and controllers for cannabis gro
 - Python 3.9+
 - Node.js 18+ (for building frontend assets, optional)
 - Dependencies listed in `requirements.txt`
+- [go2rtc](https://github.com/AlexxIT/go2rtc) (optional) — only for the
+  `camera` integration's WebRTC streaming. It is an **external binary, not a
+  pip dependency**: install it separately and put it on `PATH` (or set
+  `integrations.camera.go2rtc_binary` to its full path). The bridge spawns and
+  supervises go2rtc and relays SDP between the app and go2rtc, which acts as
+  the actual WebRTC media peer. `ffmpeg` is required if you use an
+  `ffmpeg:`/`exec:ffmpeg ...` stream source.
 
 ## Quick Start (Recommended)
 

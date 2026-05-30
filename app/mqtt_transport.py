@@ -56,6 +56,7 @@ class MqttTransport(metaclass=SingletonMeta):
 
         self._settings_callback: Optional[Callable] = None
         self._automations_callback: Optional[Callable] = None
+        self._webrtc_callback: Optional[Callable] = None
         self._keepalive = config.get("api.mqtt_keepalive", DEFAULT_MQTT_KEEPALIVE)
 
         logger.info("MQTT transport initialized")
@@ -149,6 +150,14 @@ class MqttTransport(metaclass=SingletonMeta):
         and the registry)."""
         self._automations_callback = callback
 
+    def register_webrtc_callback(self, callback: Callable):
+        """Store the coroutine invoked with the JSON-decoded payload of an
+        inbound ``…/webrtc/offer`` message. Called on paho's thread via
+        ``_schedule`` so it runs on the asyncio loop. The callback performs the
+        go2rtc SDP negotiation and publishes the answer via
+        ``send_webrtc_answer``."""
+        self._webrtc_callback = callback
+
     # ─── Connection management ──────────────────────────────────────
 
     async def _maintainer_loop(self):
@@ -229,10 +238,13 @@ class MqttTransport(metaclass=SingletonMeta):
 
         cmd_topic = self._topic("cmd/+")
         automations_topic = self._topic("automations")
+        webrtc_offer_topic = self._topic("webrtc/offer")
         if cmd_topic:
             client.subscribe(cmd_topic, qos=1)
         if automations_topic:
             client.subscribe(automations_topic, qos=1)
+        if webrtc_offer_topic:
+            client.subscribe(webrtc_offer_topic, qos=1)
 
         # Publish state(online) + manifest on the asyncio loop (config_store is
         # SQLite, thread-affine to the loop).
@@ -286,6 +298,16 @@ class MqttTransport(metaclass=SingletonMeta):
         # Ignore our own ack echoes (cmd/+ also matches cmd/{id}/ack).
         if topic.endswith("/ack"):
             logger.debug(f"Ignoring own ack echo on {topic}")
+            return
+
+        # WebRTC offer (JSON, non-retained). The callback negotiates with go2rtc
+        # and publishes the answer. We publish (never subscribe) webrtc/answer,
+        # so there is no echo-loop concern. Must not fall through to /cmd/.
+        if topic.endswith("/webrtc/offer"):
+            if self._webrtc_callback is not None:
+                self._schedule(self._webrtc_callback(payload))
+            else:
+                logger.debug(f"Received webrtc offer on {topic} but no callback registered")
             return
 
         if "/cmd/" in topic:
@@ -463,6 +485,32 @@ class MqttTransport(metaclass=SingletonMeta):
             return True
         except Exception as e:
             logger.error(f"Error sending command result: {e}")
+            return False
+
+    async def send_webrtc_answer(self, answer: dict[str, Any]) -> bool:
+        """Publish a WebRTC answer to ``webrtc/answer`` (qos1, not retained).
+
+        ``answer`` is the full payload the app expects — including the echoed
+        ``sessionId`` and either ``{ok: True, sdp}`` or ``{ok: False, error}``.
+        Always called (success or failure) so the app's awaited answer doesn't
+        time out on errors.
+        """
+        if not self._connected or not self._client:
+            logger.error("MQTT not connected; cannot send webrtc answer")
+            return False
+
+        answer_topic = self._topic("webrtc/answer")
+        if not answer_topic:
+            return False
+
+        try:
+            self._client.publish(answer_topic, json.dumps(answer), qos=1, retain=False)
+            logger.info(
+                f"WebRTC answer sent: session={answer.get('sessionId')}, ok={answer.get('ok')}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error sending webrtc answer: {e}")
             return False
 
     async def publish_automations_status(self, status: dict[str, Any]) -> bool:

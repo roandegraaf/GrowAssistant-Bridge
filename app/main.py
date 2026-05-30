@@ -115,6 +115,7 @@ class Application:
 
         await mqtt_transport.start()
         mqtt_transport.register_settings_callback(self._apply_settings)
+        mqtt_transport.register_webrtc_callback(self._handle_webrtc_offer)
 
         # Automations (Phase 4): receive + validate the app's retained rule set,
         # report status, and run the rules locally. config_store is already
@@ -268,6 +269,44 @@ class Application:
                 logger.debug(f"Integration {name} does not support settings")
             except Exception as e:
                 logger.error(f"Error applying settings to integration {name}: {e}")
+
+    async def _handle_webrtc_offer(self, payload: dict[str, Any]):
+        """Broker a WebRTC offer to the camera integration and publish the answer.
+
+        The app correlates its awaited answer by ``sessionId``, which we echo
+        verbatim. We ALWAYS publish an answer (success or failure) so the app's
+        wait never times out on errors.
+        """
+        session_id = payload.get("sessionId")
+        stream_id = payload.get("streamId")
+        sdp = payload.get("sdp")
+
+        if not all([session_id, stream_id, sdp]):
+            logger.error(f"WebRTC offer missing required fields: {payload}")
+            await mqtt_transport.send_webrtc_answer(
+                {"sessionId": session_id, "ok": False, "error": "missing fields"}
+            )
+            return
+
+        integration = self._integrations.get("CameraIntegration")
+        if integration is None:
+            logger.error("WebRTC offer received but no camera integration is loaded")
+            await mqtt_transport.send_webrtc_answer(
+                {"sessionId": session_id, "ok": False, "error": "no camera integration"}
+            )
+            return
+
+        try:
+            answer_sdp = await integration.negotiate_webrtc(stream_id, sdp)
+            await mqtt_transport.send_webrtc_answer(
+                {"sessionId": session_id, "ok": True, "sdp": answer_sdp}
+            )
+            logger.info(f"WebRTC negotiation succeeded for session {session_id} ({stream_id})")
+        except Exception as e:
+            logger.error(f"WebRTC negotiation failed for session {session_id}: {e}")
+            await mqtt_transport.send_webrtc_answer(
+                {"sessionId": session_id, "ok": False, "error": str(e)}
+            )
 
     async def _load_integrations(self):
         """Load and initialize integrations using self-registration pattern."""
