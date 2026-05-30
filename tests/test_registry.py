@@ -723,3 +723,77 @@ class TestDeviceRegistryEdgeCases:
         assert len(registry._by_integration) == 0
         assert len(registry._by_category[DeviceCategory.SENSOR]) == 0
         assert len(registry._by_category[DeviceCategory.ACTUATOR]) == 0
+        assert len(registry._by_category[DeviceCategory.CAMERA]) == 0
+
+
+class TestDeviceRegistryCamera:
+    """Tests for CAMERA-category device handling."""
+
+    @pytest.fixture
+    def registry(self):
+        """Create a fresh DeviceRegistry instance."""
+        from app.utils.singleton import SingletonMeta
+
+        if DeviceRegistry in SingletonMeta._instances:
+            del SingletonMeta._instances[DeviceRegistry]
+
+        reg = DeviceRegistry()
+        yield reg
+        reg.clear()
+
+    def test_camera_category_value(self):
+        """CAMERA enum value is 'camera'."""
+        assert DeviceCategory.CAMERA.value == "camera"
+
+    def _register_camera(self, registry):
+        return registry.register_device(
+            name="tent1",
+            domain="camera",
+            device_type="camera",
+            category=DeviceCategory.CAMERA,
+            integration_name="CameraIntegration",
+            metadata={"streamId": "camera.tent1"},
+        )
+
+    def test_register_camera_entity_id(self, registry):
+        """A camera registers under camera.<name> and lands in the camera index."""
+        entity_id = self._register_camera(registry)
+        assert entity_id == "camera.tent1"
+
+        device = registry.get_device("camera.tent1")
+        assert device is not None
+        assert device.category == DeviceCategory.CAMERA
+        assert "camera.tent1" in registry._by_category[DeviceCategory.CAMERA]
+
+    def test_camera_not_in_sensor_or_actuator_maps(self, registry):
+        """Cameras must not pollute the legacy sensor/actuator maps."""
+        self._register_camera(registry)
+        assert registry.get_all_sensors() == {}
+        assert registry.get_all_actuators() == {}
+        assert "tent1" not in registry._sensors
+        assert "tent1" not in registry._actuators
+
+    def test_camera_ha_entity_domain(self, registry):
+        """_ha_entity_domain maps a camera device to 'camera'."""
+        self._register_camera(registry)
+        device = registry.get_device("camera.tent1")
+        assert DeviceRegistry._ha_entity_domain(device) == "camera"
+
+    def test_camera_serialize_manifest(self, registry):
+        """serialize_manifest emits camera entityDomain, writable False, no unit."""
+        self._register_camera(registry)
+        manifest = registry.serialize_manifest(version=1)
+        cameras = [d for d in manifest["devices"] if d["entityId"] == "camera.tent1"]
+        assert len(cameras) == 1
+        cam = cameras[0]
+        assert cam["entityDomain"] == "camera"
+        assert cam["writable"] is False
+        assert cam["unit"] is None
+        assert cam["category"] == "CAMERA"
+        assert cam["metadata"]["streamId"] == "camera.tent1"
+
+    def test_camera_in_manifest_hash(self, registry):
+        """compute_manifest_hash includes the camera (uppercased category)."""
+        self._register_camera(registry)
+        # Hash is stable and non-empty; the app recomputes it identically.
+        assert len(registry.compute_manifest_hash()) == 64

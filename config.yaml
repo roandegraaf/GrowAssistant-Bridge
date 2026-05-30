@@ -109,6 +109,14 @@ integrations:
     port: /dev/ttyUSB0
     stopbits: 1
     timeout: 1
+  camera:
+    enabled: true
+    go2rtc_binary: /tmp/ga-go2rtc/go2rtc
+    go2rtc_api_port: 1984
+    go2rtc_host: 127.0.0.1
+    cameras:
+      - name: tent1
+        source: "exec:ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=15 -f lavfi -i sine=frequency=1000 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 30 -c:a aac -f rtsp {output}"
 queue:
   flush_interval: 300
   max_queue_size: 10000

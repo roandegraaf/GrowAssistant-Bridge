@@ -1002,3 +1002,89 @@ class TestApplySettings:
 
             # Should not raise
             await app._apply_settings({"key": "value"})
+
+
+class TestHandleWebRTCOffer:
+    """Tests for _handle_webrtc_offer (the MQTT webrtc/offer broker)."""
+
+    @pytest.mark.asyncio
+    async def test_success_publishes_answer(self, reset_application_singleton, mock_dependencies):
+        """A valid offer negotiates with the camera integration and publishes
+        an ok answer echoing the sessionId."""
+        mock_dependencies["mqtt_transport"].send_webrtc_answer = AsyncMock()
+        camera = MagicMock()
+        camera.negotiate_webrtc = AsyncMock(return_value="ANSWER_SDP")
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"CameraIntegration": camera}
+
+            await app._handle_webrtc_offer(
+                {"sessionId": "s-1", "streamId": "camera.tent1", "sdp": "OFFER"}
+            )
+
+        camera.negotiate_webrtc.assert_awaited_once_with("camera.tent1", "OFFER")
+        mock_dependencies["mqtt_transport"].send_webrtc_answer.assert_awaited_once_with(
+            {"sessionId": "s-1", "ok": True, "sdp": "ANSWER_SDP"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_fields_publishes_failure(
+        self, reset_application_singleton, mock_dependencies
+    ):
+        """An offer missing fields publishes a failure answer without touching
+        the camera integration."""
+        mock_dependencies["mqtt_transport"].send_webrtc_answer = AsyncMock()
+        camera = MagicMock()
+        camera.negotiate_webrtc = AsyncMock()
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"CameraIntegration": camera}
+
+            await app._handle_webrtc_offer({"sessionId": "s-1", "streamId": "camera.tent1"})
+
+        camera.negotiate_webrtc.assert_not_called()
+        mock_dependencies["mqtt_transport"].send_webrtc_answer.assert_awaited_once_with(
+            {"sessionId": "s-1", "ok": False, "error": "missing fields"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_camera_integration_publishes_failure(
+        self, reset_application_singleton, mock_dependencies
+    ):
+        """With no camera integration loaded, a valid offer publishes failure."""
+        mock_dependencies["mqtt_transport"].send_webrtc_answer = AsyncMock()
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {}
+
+            await app._handle_webrtc_offer(
+                {"sessionId": "s-1", "streamId": "camera.tent1", "sdp": "OFFER"}
+            )
+
+        mock_dependencies["mqtt_transport"].send_webrtc_answer.assert_awaited_once_with(
+            {"sessionId": "s-1", "ok": False, "error": "no camera integration"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_negotiation_exception_publishes_failure(
+        self, reset_application_singleton, mock_dependencies
+    ):
+        """A negotiation exception publishes a failure answer with str(e)."""
+        mock_dependencies["mqtt_transport"].send_webrtc_answer = AsyncMock()
+        camera = MagicMock()
+        camera.negotiate_webrtc = AsyncMock(side_effect=ValueError("Unknown stream id"))
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"CameraIntegration": camera}
+
+            await app._handle_webrtc_offer(
+                {"sessionId": "s-1", "streamId": "camera.bogus", "sdp": "OFFER"}
+            )
+
+        mock_dependencies["mqtt_transport"].send_webrtc_answer.assert_awaited_once_with(
+            {"sessionId": "s-1", "ok": False, "error": "Unknown stream id"}
+        )

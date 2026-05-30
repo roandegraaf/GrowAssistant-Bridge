@@ -180,6 +180,88 @@ async def test_publish_automations_status_retained_topic(transport):
     assert kwargs["retain"] is True
 
 
+def test_on_message_routes_webrtc_offer_to_callback(transport):
+    """A webrtc/offer message is handed (JSON-decoded payload) to the webrtc
+    callback via _schedule, and is NOT enqueued as a command."""
+    transport._schedule = MagicMock()
+    transport._webrtc_callback = MagicMock()
+    enqueued = []
+    transport._enqueue_command = enqueued.append
+
+    msg = MagicMock()
+    msg.topic = "ga/tenantX/bridge/bridgeY/webrtc/offer"
+    offer = {"sessionId": "s-1", "streamId": "camera.tent1", "sdp": "OFFER"}
+    msg.payload = json.dumps(offer).encode()
+
+    transport._on_message(None, None, msg)
+
+    assert enqueued == []
+    transport._schedule.assert_called_once()
+    # The callback receives the JSON-decoded dict, not raw bytes.
+    transport._webrtc_callback.assert_called_once_with(offer)
+
+
+def test_on_message_webrtc_offer_no_callback_does_not_enqueue(transport):
+    """With no webrtc callback registered, a webrtc/offer is dropped, not
+    treated as a command."""
+    transport._schedule = MagicMock()
+    transport._webrtc_callback = None
+    enqueued = []
+    transport._enqueue_command = enqueued.append
+
+    msg = MagicMock()
+    msg.topic = "ga/tenantX/bridge/bridgeY/webrtc/offer"
+    msg.payload = json.dumps({"sessionId": "s-1"}).encode()
+
+    transport._on_message(None, None, msg)
+
+    assert enqueued == []
+    transport._schedule.assert_not_called()
+
+
+def test_register_webrtc_callback_stores_it(transport):
+    """register_webrtc_callback stores the callable for _on_message routing."""
+    cb = MagicMock()
+    transport.register_webrtc_callback(cb)
+    assert transport._webrtc_callback is cb
+
+
+@pytest.mark.asyncio
+async def test_send_webrtc_answer_success_payload(transport):
+    """send_webrtc_answer publishes the verbatim answer to webrtc/answer at
+    qos1, not retained."""
+    answer = {"sessionId": "s-1", "ok": True, "sdp": "ANSWER"}
+    ok = await transport.send_webrtc_answer(answer)
+    assert ok is True
+
+    transport._client.publish.assert_called_once()
+    args, kwargs = transport._client.publish.call_args
+    assert args[0] == "ga/tenantX/bridge/bridgeY/webrtc/answer"
+    assert json.loads(args[1]) == answer
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is False
+
+
+@pytest.mark.asyncio
+async def test_send_webrtc_answer_failure_payload(transport):
+    """A failure answer (ok False + error) publishes the same way."""
+    answer = {"sessionId": "s-1", "ok": False, "error": "no camera integration"}
+    ok = await transport.send_webrtc_answer(answer)
+    assert ok is True
+
+    args, _ = transport._client.publish.call_args
+    assert args[0] == "ga/tenantX/bridge/bridgeY/webrtc/answer"
+    assert json.loads(args[1]) == answer
+
+
+@pytest.mark.asyncio
+async def test_send_webrtc_answer_not_connected(transport):
+    """send_webrtc_answer returns False when not connected."""
+    transport._connected = False
+    ok = await transport.send_webrtc_answer({"sessionId": "s-1", "ok": True})
+    assert ok is False
+
+
 def test_on_disconnect_does_not_loop_stop_inline(transport):
     """on_disconnect (paho thread) must NOT call loop_stop() inline — that would
     join the network thread from itself. It only flips the flag and schedules
