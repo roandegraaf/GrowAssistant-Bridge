@@ -792,7 +792,7 @@ class ApiClient(metaclass=SingletonMeta):
         raw_assignments = payload.get("deviceAssignments", [])
         if not isinstance(raw_assignments, list):
             logger.warning(
-                "deviceAssignments in config event is not a list (got %s); " "treating as empty",
+                "deviceAssignments in config event is not a list (got %s); treating as empty",
                 type(raw_assignments).__name__,
             )
             raw_assignments = []
