@@ -7,7 +7,7 @@ decorator, config schema validation, and integration discovery.
 
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel
@@ -385,64 +385,3 @@ class TestIntegrationRegistration:
         keys = get_all_config_keys()
 
         assert "key" in keys
-
-
-class TestIntegrationApiMethods:
-    """Tests for integration API helper methods."""
-
-    @pytest.fixture
-    def integration_with_mocks(self):
-        """Create integration with mocked api_client."""
-
-        class ApiIntegration(Integration):
-            async def connect(self):
-                return True
-
-            async def send_data(self, data):
-                return True
-
-            async def receive_data(self):
-                yield {}
-
-            async def get_device_data(self):
-                return {}
-
-        with patch("app.integrations.api_client") as mock_api:
-            integration = ApiIntegration({})
-            integration._mock_api = mock_api
-            yield integration
-
-    def test_log_data(self, integration_with_mocks):
-        """Test log_data delegates to api_client."""
-        from app.api_types import LogType
-
-        integration_with_mocks.log_data(LogType.TEMPERATURE, 25.5)
-
-        integration_with_mocks._mock_api.add_data_log.assert_called_once()
-
-    def test_report_problem(self, integration_with_mocks):
-        """Test report_problem delegates to api_client."""
-        from app.api_types import ProblemStatus, ProblemType
-
-        integration_with_mocks.report_problem(
-            ProblemType.TEMPERATURE, ProblemStatus.RANGE, "Temperature out of range"
-        )
-
-        integration_with_mocks._mock_api.add_problem.assert_called_once()
-
-    def test_register_action_handler(self, integration_with_mocks):
-        """Test register_action_handler delegates to api_client."""
-        from app.api_types import ActionType
-
-        handler = MagicMock()
-        integration_with_mocks.register_action_handler(ActionType.LIGHT, handler)
-
-        integration_with_mocks._mock_api.register_action_handler.assert_called_once()
-
-    def test_acknowledge_action(self, integration_with_mocks):
-        """Test acknowledge_action delegates to api_client."""
-        integration_with_mocks.acknowledge_action("action-123", True, False)
-
-        integration_with_mocks._mock_api.acknowledge_action.assert_called_once_with(
-            "action-123", True, False
-        )

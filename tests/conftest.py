@@ -489,17 +489,6 @@ def mock_application_dependencies(mock_config, mock_httpx_client):
     mock_auth.display_auth_code = MagicMock()
     mocks["auth_manager"] = mock_auth
 
-    # Mock api_client
-    mock_api = AsyncMock()
-    mock_api.start = AsyncMock()
-    mock_api.stop = AsyncMock()
-    mock_api.start_command_polling = AsyncMock()
-    mock_api.register_settings_callback = MagicMock()
-    mock_api.send_data = AsyncMock(return_value=(True, "Success"))
-    mock_api.get_command = AsyncMock(return_value=None)
-    mock_api.send_command_result = AsyncMock()
-    mocks["api_client"] = mock_api
-
     # Mock queue_manager
     mock_queue = AsyncMock()
     mock_queue.start = AsyncMock()

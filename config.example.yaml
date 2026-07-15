@@ -3,17 +3,12 @@
 # IMPORTANT: Never commit config.yaml with real credentials to version control
 
 api:
-  batch_size: 100
-  log_values: true
+  batch_size: 100  # max telemetry samples per publish
   mqtt_keepalive: 60  # MQTT keepalive interval in seconds
-  retry_max_attempts: 5
-  retry_max_backoff: 60
-  retry_min_backoff: 1
-  transmission_interval: 10
+  transmission_interval: 10  # seconds between telemetry publishes
   url: http://localhost:3000  # GrowAssistant app base URL (HTTPS pairing bootstrap)
 
 general:
-  api_logs_dir: logs/api_values
   collection_interval: 10
   data_dir: data
   external_integrations_dir: external_integrations
@@ -78,8 +73,8 @@ integrations:
         # Optional explicit entity mapping. Without this, sensors are auto-mapped
         # by their ESPHome `device_class` (temperature/humidity/pressure/...).
         # ESPHome's `device_class: moisture` is ambiguous (soil/leak/tank), so
-        # soil moisture sensors must be mapped explicitly. The `soil_moisture`
-        # type is automatically logged as SOIL_MOISTURE.
+        # soil moisture sensors must be mapped explicitly to the `soil_moisture`
+        # type.
         entities:
           soil_moisture_1:
             type: soil_moisture

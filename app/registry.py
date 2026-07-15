@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Optional
 
+from app.entity_id import derive_domain
 from app.utils.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
@@ -280,11 +281,12 @@ class DeviceRegistry(metaclass=SingletonMeta):
         }
 
     def _derive_domain(self, integration_name: str) -> str:
-        """Derive domain from integration class name (e.g., GPIOIntegration -> gpio)."""
-        name = integration_name
-        if name.endswith("Integration"):
-            name = name[:-11]
-        return name.lower()
+        """Derive domain from integration class name (e.g., GPIOIntegration -> gpio).
+
+        Delegates to the shared :func:`app.entity_id.derive_domain` so the
+        manifest and telemetry paths never disagree on the join key's domain.
+        """
+        return derive_domain(integration_name)
 
     def register_sensor(
         self,

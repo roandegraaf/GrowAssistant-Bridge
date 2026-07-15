@@ -1,14 +1,9 @@
 api:
   batch_size: 100
-  log_values: true
   mqtt_keepalive: 60
-  retry_max_attempts: 3
-  retry_max_backoff: 120
-  retry_min_backoff: 5
   transmission_interval: 30
   url: http://localhost:3000
 general:
-  api_logs_dir: logs/api
   collection_interval: 30
   data_dir: data
   external_integrations_dir: external_integrations

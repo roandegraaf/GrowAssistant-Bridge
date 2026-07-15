@@ -7,6 +7,7 @@ bridge-minted auth code, no self-registration, and no separate "space" gate —
 once paired, the bridge is ready.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -23,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 # Credential keys persisted to data/credentials.json.
 CREDENTIAL_KEYS = ("bridgeId", "tenantId", "bridgeSecret", "token", "brokerUrl")
+
+# Refresh the MQTT token once this fraction of its lifetime remains ahead of us
+# — i.e. proactively at ~90% of the TTL, so rotation is seamless and never waits
+# for a "Not authorized" CONNACK. The app hands us ``tokenExpiresIn`` (24h) on
+# pair and refresh; the reactive CONNACK path stays as a fallback.
+TOKEN_REFRESH_FRACTION = 0.9
+# TTL assumed when a token/refresh response omits ``tokenExpiresIn`` (keeps the
+# proactive loop from busy-spinning on a missing field).
+DEFAULT_TOKEN_TTL_SECONDS = 24 * 60 * 60
+# How often the proactive loop re-checks while unpaired (no token to schedule).
+UNPAIRED_RECHECK_INTERVAL = 60.0
+# Delay before retrying a proactive refresh that failed (app briefly down, etc.).
+REFRESH_RETRY_INTERVAL = 60.0
 
 
 class AuthManager(metaclass=SingletonMeta):
@@ -43,6 +57,15 @@ class AuthManager(metaclass=SingletonMeta):
 
         self._credentials: Optional[dict] = None
 
+        # Proactive-refresh state. ``_token_expires_in`` is the TTL (seconds) of
+        # the current token, learned from the pair/refresh response; it is None
+        # only before the first token is obtained or when creds are loaded from
+        # disk (which triggers one refresh-now to relearn it).
+        self._running: bool = False
+        self._token_expires_in: Optional[int] = None
+        self._refresh_loop_task: Optional[asyncio.Task] = None
+        self._refresh_inflight: Optional[asyncio.Task] = None
+
         logger.info("Authentication manager initialized")
 
     async def start(self):
@@ -53,10 +76,20 @@ class AuthManager(metaclass=SingletonMeta):
             verify=config.get("api.verify_ssl", True),
         )
         self._load_credentials()
+        self._running = True
+        self._refresh_loop_task = asyncio.create_task(self._proactive_refresh_loop())
         logger.info("Authentication manager started")
 
     async def stop(self):
         """Stop the authentication manager."""
+        self._running = False
+        if self._refresh_loop_task and not self._refresh_loop_task.done():
+            self._refresh_loop_task.cancel()
+            try:
+                await self._refresh_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._refresh_loop_task = None
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -148,15 +181,36 @@ class AuthManager(metaclass=SingletonMeta):
             "token": data.get("token"),
             "brokerUrl": data.get("brokerUrl"),
         }
+        self._token_expires_in = self._parse_expires_in(data)
         self._save_credentials()
         logger.info(f"Paired successfully as bridge {self._credentials.get('bridgeId')}")
         return True
 
     async def refresh_token(self) -> bool:
+        """Rotate the JWT, coalescing concurrent callers.
+
+        The proactive-refresh loop and the reactive CONNACK-failure path
+        (``mqtt_transport``) can both fire near-simultaneously; a single
+        in-flight refresh is shared so we never mint two tokens or race the
+        credentials file.
+        """
+        inflight = self._refresh_inflight
+        if inflight is not None and not inflight.done():
+            return await inflight
+
+        task = asyncio.ensure_future(self._do_refresh_token())
+        self._refresh_inflight = task
+        try:
+            return await task
+        finally:
+            if self._refresh_inflight is task:
+                self._refresh_inflight = None
+
+    async def _do_refresh_token(self) -> bool:
         """Rotate the JWT using the stored bridgeId + bridgeSecret.
 
-        POSTs ``/api/bridge/token`` and updates the stored token on success.
-        Returns False on a bad secret (401) or transport errors.
+        POSTs ``/api/bridge/token`` and updates the stored token (and TTL) on
+        success. Returns False on a bad secret (401) or transport errors.
         """
         if not self._client:
             logger.error("Authentication manager not started")
@@ -189,9 +243,67 @@ class AuthManager(metaclass=SingletonMeta):
             return False
 
         self._credentials["token"] = token
+        self._token_expires_in = self._parse_expires_in(data)
         self._save_credentials()
         logger.info("Token refreshed successfully")
         return True
+
+    @staticmethod
+    def _parse_expires_in(data: dict) -> int:
+        """Read ``tokenExpiresIn`` (seconds) from a pair/refresh response.
+
+        Falls back to the default TTL when the field is missing or invalid, so
+        the proactive loop always has a positive interval to schedule against.
+        """
+        value = data.get("tokenExpiresIn")
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+        return DEFAULT_TOKEN_TTL_SECONDS
+
+    # ─── Proactive token refresh ────────────────────────────────────
+
+    async def _proactive_refresh_loop(self) -> None:
+        """Refresh the token at ~90% of its TTL, ahead of broker rejection.
+
+        Sleeps until the next scheduled refresh, rotates, and reschedules off
+        the fresh TTL. While unpaired it re-checks periodically; on a failed
+        refresh it retries sooner than a full TTL. The reactive CONNACK path
+        remains the fallback if this ever misses the window.
+        """
+        logger.info("Proactive token-refresh loop started")
+        try:
+            next_delay = self._initial_refresh_delay()
+            while self._running:
+                await asyncio.sleep(next_delay)
+                if not self._running:
+                    break
+                if not self.is_authenticated():
+                    next_delay = UNPAIRED_RECHECK_INTERVAL
+                    continue
+                if await self.refresh_token():
+                    next_delay = self._scheduled_refresh_delay()
+                else:
+                    next_delay = REFRESH_RETRY_INTERVAL
+        except asyncio.CancelledError:
+            pass
+        logger.info("Proactive token-refresh loop stopped")
+
+    def _initial_refresh_delay(self) -> float:
+        """Delay before the loop's first action.
+
+        Unpaired → re-check interval. Paired with an unknown TTL (creds loaded
+        from disk) → 0, so we refresh immediately to relearn the lifetime.
+        """
+        if not self.is_authenticated():
+            return UNPAIRED_RECHECK_INTERVAL
+        if self._token_expires_in is None:
+            return 0.0
+        return self._scheduled_refresh_delay()
+
+    def _scheduled_refresh_delay(self) -> float:
+        """Seconds to wait after minting a token before refreshing it (~90% TTL)."""
+        ttl = self._token_expires_in or DEFAULT_TOKEN_TTL_SECONDS
+        return max(0.0, ttl * TOKEN_REFRESH_FRACTION)
 
     async def fetch_ice_servers(self) -> Optional[list]:
         """Fetch go2rtc's WebRTC ICE servers (STUN + TURN) from the app.

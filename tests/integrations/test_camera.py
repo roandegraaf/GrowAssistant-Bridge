@@ -1,8 +1,8 @@
 """Tests for the CameraIntegration (go2rtc WebRTC broker).
 
 go2rtc is fully mocked — no real binary, subprocess, or HTTP server is used.
-httpx is patched the same way ``tests/test_api_client.py`` does it
-(``patch.object(httpx, "AsyncClient", ...)`` with an AsyncMock).
+httpx is patched via ``patch.object(httpx, "AsyncClient", ...)`` with an
+AsyncMock.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch

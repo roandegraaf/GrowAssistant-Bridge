@@ -1,7 +1,9 @@
 """MQTT transport for communicating with the GrowAssistant app.
 
-Replaces the old REST + SSE transport (``api_client``). Mirrors the
-``ApiClient`` public surface so ``main.py`` changes stay minimal.
+This is the sole transport to the app (the old REST + SSE ``ApiClient`` has
+been removed). Manifest/state/telemetry/command-acks/automations-status are
+published to the broker; commands, automations, and WebRTC offers are
+subscribed.
 
 Threading model
 ---------------
@@ -25,6 +27,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from app.auth import auth_manager
 from app.config import config
 from app.config_store import config_store
+from app.entity_id import derive_domain
 from app.utils.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
@@ -551,12 +554,14 @@ class MqttTransport(metaclass=SingletonMeta):
 
     @staticmethod
     def _derive_entity_id(point: dict[str, Any]) -> Optional[str]:
-        """Derive a stable ``<domain>.<name>`` entity_id from a legacy point.
+        """Derive a stable ``<domain>.<name>`` entity_id from a telemetry point.
 
-        Ported from ``api_client._derive_entity_id``: each integration yields a
-        different key for the device name, so we strip a trailing ``Integration``
-        suffix from the integration name to get the domain, then probe a series
-        of keys in order of specificity. Returns None when no name can be found.
+        The domain half is derived by the shared
+        :func:`app.entity_id.derive_domain` — the same helper the manifest side
+        (``registry.py``) uses, so telemetry and manifest never disagree on the
+        domain. Each integration yields a different key for the device name, so
+        we probe a series of keys in order of specificity. Returns None when no
+        name can be found.
         """
         explicit = point.get("entity_id")
         if isinstance(explicit, str) and "." in explicit:
@@ -565,9 +570,7 @@ class MqttTransport(metaclass=SingletonMeta):
         integration = point.get("integration")
         if not integration:
             return None
-        domain = integration.lower()
-        if domain.endswith("integration"):
-            domain = domain[: -len("integration")]
+        domain = derive_domain(integration)
 
         name = (
             point.get("device_id")

@@ -1,634 +1,300 @@
 # GrowAssistant Bridge Protocol Specification
 
 This document specifies the over-the-wire contract between a **GrowAssistant
-Bridge** instance (this repository) and a **GrowAssistant API** server.
-A backend engineer should be able to implement an API server that fully
-interoperates with the bridge by reading this document alone, without
-opening the bridge source tree.
+Bridge** instance (this repository) and the **GrowAssistant app**. The transport
+is **MQTT**: the bridge and the app both connect to a shared broker; neither
+connects directly to the other. A backend engineer should be able to implement
+the app side (or a compatible bridge) by reading this document alone.
 
-The contract described here is the **post-Phase-5** contract. All legacy
-`pump_num` / `pumpNum` / `pumpNumber` fields have been removed from the
-bridge's outbound payloads and inbound action handling. Devices are
-identified exclusively by `entity_id` (`<domain>.<name>`).
+The **app side of this contract is the source of truth.** The bridge conforms to
+the app's payload builders/parsers in `lib/bridge/{topics,manifest,telemetry,
+commands,webrtc,turn,jwt,mqtt-auth}.ts` and `lib/automations/{publish,status,
+schema}.ts` (paths relative to the app repo). Where this document cites bridge
+source it uses the form `app/mqtt_transport.py:390` (relative to the bridge repo).
 
-Where the document cites bridge source it uses the form
-`app/api_client.py:402`. Cited paths are relative to the bridge repo.
+Devices are identified exclusively by `entityId` (`<domain>.<name>`). All legacy
+REST/SSE transport (`api_client`, `/bridge/{id}/…` endpoints, the SSE event
+stream) has been removed.
 
 ---
 
 ## Table of contents
 
 - [1. Overview](#1-overview)
-- [2. Connection lifecycle](#2-connection-lifecycle)
-- [3. Outbound HTTP endpoints (bridge → API)](#3-outbound-http-endpoints-bridge--api)
-- [4. Inbound SSE event stream (API → bridge)](#4-inbound-sse-event-stream-api--bridge)
-- [5. Manifest payload reference](#5-manifest-payload-reference)
-- [6. Role taxonomy (`GrowRole`)](#6-role-taxonomy-growrole)
-- [7. Stable identity rules](#7-stable-identity-rules)
-- [8. Liveness model](#8-liveness-model)
-- [9. Multi-pod / failure-mode notes](#9-multi-pod--failure-mode-notes)
-- [10. Glossary](#10-glossary)
-- [11. Open questions / future contract notes](#11-open-questions--future-contract-notes)
+- [2. Identity & pairing (HTTPS bootstrap)](#2-identity--pairing-https-bootstrap)
+- [3. Broker authentication & ACL](#3-broker-authentication--acl)
+- [4. Topic scheme](#4-topic-scheme)
+- [5. Connection lifecycle](#5-connection-lifecycle)
+- [6. Manifest (`…/manifest`, retained)](#6-manifest-manifest-retained)
+- [7. State (`…/state`, retained)](#7-state-state-retained)
+- [8. Telemetry (`…/telemetry`)](#8-telemetry-telemetry)
+- [9. Commands (`…/cmd/<id>` + `…/cmd/<id>/ack`)](#9-commands-cmdid--cmdidack)
+- [10. Automations (`…/automations` + `…/automations/status`)](#10-automations-automations--automationsstatus)
+- [11. WebRTC camera signalling (`…/webrtc/offer` + `…/webrtc/answer`)](#11-webrtc-camera-signalling-webrtcoffer--webrtcanswer)
+- [12. Role taxonomy (`GrowRole`)](#12-role-taxonomy-growrole)
+- [13. Stable identity rules](#13-stable-identity-rules)
+- [14. Liveness model](#14-liveness-model)
+- [15. Glossary](#15-glossary)
+- [16. Open questions / pending contract notes](#16-open-questions--pending-contract-notes)
 
 ---
 
 ## 1. Overview
 
-The bridge is a NAT-bound agent. It runs inside the operator's grow room,
-behind their home router, and never accepts inbound TCP connections.
-The API server is reachable on a public hostname. All transport is bridge-
-initiated:
-
-- **REST POSTs** push the device manifest, telemetry, and command results
-  from bridge to API.
-- **A single long-lived SSE GET** (`text/event-stream`) is held open by the
-  bridge. The API uses it to deliver config snapshots, command requests,
-  and heartbeats.
-
-The bridge is the **source of truth for which devices physically exist**.
-The API is the **source of truth for desired state** (light schedules,
-climate setpoints, role assignments, etc.). Cardinality conflicts,
-role-compatibility validation, and persistence of the inventory across
-bridge restarts are all the API's responsibility.
+The bridge is a NAT-bound agent running inside the operator's grow room. It never
+accepts inbound TCP connections. All communication is via a shared MQTT broker
+that both the bridge and the app connect to as clients:
 
 ```
-                         ┌────────────────────┐
-                         │  GrowAssistant API │
-                         │  (public host)     │
-                         └─────────┬──────────┘
-                                   │
-                  POST /bridge/{id}/manifest    ← device inventory + hash
-                  POST /bridge/{id}/data        ← telemetry batch
-                  POST /bridge/{id}/actions/{aid}/result
-                  GET  /bridge/{id}/stream      ← SSE (held open by bridge)
-                                   │
-   ┌───────────────────────────────┴──────────────────────────────┐
-   │  Bridge                                                       │
-   │  ─ DeviceRegistry (entity_id = domain.name)                   │
-   │  ─ ConfigStore (sqlite: configVersion, manifestVersion, hash) │
-   │  ─ Integrations (GPIO, MQTT, HTTP, plugins)                   │
-   │  ─ SSE consumer:                                              │
-   │     event:connected   → log handshake                         │
-   │     event:config      → save snapshot, fan out settings       │
-   │     event:heartbeat   → drift detection (config + manifest)   │
-   │     event:action      → enqueue command for execution         │
-   └───────────────────────────────────────────────────────────────┘
+   ┌──────────────────────┐        ┌───────────────────┐        ┌──────────────┐
+   │  Bridge (grow room)  │  MQTT  │   MQTT broker     │  MQTT  │ GrowAssistant│
+   │  paho client         │◀──────▶│ (mosquitto +      │◀──────▶│ app          │
+   │                      │        │  go-auth backend) │        │ (subscriber) │
+   └──────────────────────┘        └───────────────────┘        └──────────────┘
+            ▲                                                          │
+            │ HTTPS bootstrap (pair / token / ice-servers)             │
+            └──────────────────────────────────────────────────────────┘
 ```
+
+- **The broker** is reachable on a public hostname. Both sides connect *out* to
+  it, so the bridge needs no port-forwarding.
+- **The app's subscriber** (`lib/bridge/subscriber.ts`) connects as a broker
+  **superuser** and receives every tenant's bridge → app traffic.
+- **A bridge** connects with `username = bridgeId`, `password = <JWT>`, and is
+  ACL-scoped to its own `ga/<tenantId>/bridge/<bridgeId>/` subtree.
+
+The bridge is the **source of truth for which devices physically exist** (the
+manifest). The app is the **source of truth for desired state** (automations,
+role assignments, commands). Retained messages carry the last-known desired and
+reported state across reconnects.
 
 ### Identity primitives
 
-There are exactly two stable identifiers in the protocol:
+| Name        | Format             | Lifetime                                            | Source |
+|-------------|--------------------|-----------------------------------------------------|--------|
+| `bridgeId`  | UUID/cuid (string) | Stable for the bridge's install                     | Issued by the app at pairing, persisted in `data/credentials.json` (`app/auth.py`) |
+| `tenantId`  | string             | Stable                                              | Issued by the app at pairing |
+| `entityId`  | `<domain>.<name>`  | Stable across bridge restarts and registry rebuilds | Built by the shared `derive_entity_id` (`app/entity_id.py`); see §13 |
 
-| Name        | Format                  | Lifetime                                          | Source            |
-|-------------|-------------------------|---------------------------------------------------|-------------------|
-| `bridge_id` | UUID (string)           | Stable for the bridge's hardware install          | Issued by API at pairing time, persisted in `data/credentials.json` (`auth.py:84`) |
-| `entity_id` | `<domain>.<name>`       | Stable across bridge restarts and registry rebuilds | Constructed by `DeviceRegistry.register_device` (`registry.py:106`) |
-
-Everything else (`configVersion`, `manifestVersion`, action `id`) is
-either monotonic per-bridge state or per-request scratch.
-
----
-
-## 2. Connection lifecycle
-
-### 2.1 Pairing
-
-The bridge has no preconfigured credentials. On first start (or after
-`request_new_code`) it registers itself, receives a `bridge_id` and a
-five-character pairing code, then polls until the operator binds the
-bridge to a space in the consumer app.
-
-Endpoints involved (all caller: bridge):
-
-1. `POST /bridge` — register a new bridge instance.
-   Request body:
-   ```json
-   {"customId": "raspberrypi-3a7c1b9e"}
-   ```
-   `customId` is `<hostname>-<8-hex-uuid>` (`auth.py:182`). It is
-   informational only — the API generates and returns the canonical
-   `bridge_id`.
-
-   Response body (200 OK):
-   ```json
-   {"id": "<bridge_id-uuid>", "code": "AB12C"}
-   ```
-   The bridge persists `id` to `data/credentials.json` and displays
-   `code` to the operator. The operator types `code` into the
-   GrowAssistant app to bind this bridge to their space.
-   See `auth.py:131-180`.
-
-2. `GET /bridge/{bridge_id}` — poll for connection state.
-   Returns:
-   - **204 No Content** — bridge is registered but no space has been
-     created/linked yet. Bridge interprets this as "connected, not
-     ready" and continues polling on `AUTH_POLL_INTERVAL`. (`auth.py:266`)
-   - **200 OK** — space exists, bridge is fully provisioned. The
-     response body is the full `BridgeSpaceResp` (see §4.2 `config`).
-     The bridge marks itself `ready` and stops polling. (`auth.py:273`)
-   - Any other status — treated as transient and retried.
-
-   This endpoint is **also** used as an SSE-fallback fetch any time the
-   bridge needs the current config snapshot synchronously
-   (`fetch_full_config`, `api_client.py:623`).
-
-### 2.2 Authentication
-
-The bridge currently authenticates by including its `bridge_id` in the
-URL path (`/bridge/{bridge_id}/...`) and as the `X-Client-ID` header.
-There is **no HMAC or bearer token** in the current bridge implementation
-on the bulk-data and SSE paths. Headers are produced by
-`build_auth_headers(client_id=...)` in `app/utils/http_utils.py:35-60`.
-
-The exact header set sent on every authenticated request:
-
-| Header           | Value                                  |
-|------------------|----------------------------------------|
-| `Content-Type`   | `application/json`                     |
-| `Accept`         | `application/json` (or `text/event-stream` for SSE) |
-| `X-Client-ID`    | `<bridge_id>`                          |
-| `Authorization`  | `Bearer <token>` *(only when a token is present in stored credentials; `auth.py:128`)* |
-
-See `api_client.py:139-142`. Note: the `Authorization` header is wired
-through `build_auth_headers` for forward compatibility but the bridge
-never receives a token in the current pairing flow. **The new API
-should treat `X-Client-ID` as the only proven identity claim today and
-should add HMAC signing as a follow-up** — see §11.
-
-### 2.3 Startup sequence
-
-`Application.start()` (`main.py:85-128`) runs in this order:
-
-1. `auth_manager.start()` — load credentials, open auth HTTP client.
-2. Web UI thread starts (Flask, `web/app.py`).
-3. `_handle_authentication()` — register if needed; poll for connection;
-   poll for space creation. Bridge sleeps here until paired.
-4. `queue_manager.start()` and `config_store.start()` — open SQLite.
-5. `api_client.start()` — open the main HTTP client; subscribe to
-   `registry.add_change_callback` for manifest re-push.
-6. `_load_config_from_store()` — apply any locally-cached config from a
-   previous run so the bridge has working setpoints before SSE connects.
-7. `_load_integrations()` — discover plugin classes, instantiate enabled
-   ones, call `connect()`, then `register_capabilities(registry)`. This
-   populates the device registry.
-8. **First manifest push** — `api_client.send_manifest()` is awaited
-   inline. If auth completed and the registry has any devices, the API
-   gets v1 of the manifest before SSE opens.
-9. `start_sse_listener()` — begin the SSE consumer loop.
-10. Internal asyncio tasks (`_data_collection_task`,
-    `_data_transmission_task`, `_command_execution_task`) are spawned.
-
-If step 3 has not completed (operator hasn't entered the pairing code),
-step 8 is skipped silently. The registry-change callback re-fires the
-manifest push the moment auth succeeds.
-
-### 2.4 Reconnection / retry / backoff
-
-REST calls (`/manifest`, `/data`, action result) use `tenacity`
-with exponential backoff. Defaults from `app/constants.py`:
-
-| Setting              | Default | Config key (`config.yaml`)        |
-|----------------------|---------|-----------------------------------|
-| Max attempts         | 5       | `api.retry_max_attempts`          |
-| Min backoff (s)      | 1       | `api.retry_min_backoff`           |
-| Max backoff (s)      | 60      | `api.retry_max_backoff`           |
-| HTTP timeout (s)     | (TIMEOUT default) | `api.timeout`           |
-
-Retried exception classes: `httpx.HTTPError`, `httpx.ConnectError`,
-`asyncio.TimeoutError`. 4xx responses raised as `HTTPStatusError` are
-**not** retried — they are treated as a hard reject and the batch is
-dropped (data) or the manifest version is left unchanged
-(manifest).
-
-The SSE consumer (`api_client.py:674-694`) uses its own backoff:
-
-| Setting                  | Value | Defined in              |
-|--------------------------|-------|-------------------------|
-| Initial reconnect delay  | 1 s   | `SSE_RECONNECT_MIN`     |
-| Max reconnect delay      | 60 s  | `SSE_RECONNECT_MAX`     |
-| Stream read timeout      | 90 s  | `SSE_STREAM_TIMEOUT`    |
-
-The 90 s read timeout is intentionally longer than the 15 s heartbeat
-cadence (see §4.2) so a missed heartbeat eventually trips the timeout
-and forces a reconnect. Backoff doubles up to `SSE_RECONNECT_MAX` until
-a connection succeeds, then resets.
-
-On reconnect, the bridge sends the current local `configVersion` as a
-query parameter (see §4.1). The API uses this to decide whether to
-re-send a `config` event immediately.
-
-### 2.5 Connection state
-
-The bridge has three operationally-meaningful states, derived from
-`auth_manager`:
-
-| State            | Test                                          | Meaning                                         |
-|------------------|-----------------------------------------------|-------------------------------------------------|
-| `not_authenticated` | `is_authenticated()` is False              | No `bridge_id` issued yet.                      |
-| `connected`      | `is_authenticated()` and not `is_ready_for_data()` | Bridge has a `bridge_id`; no space linked yet (API returns 204 to `GET /bridge/{id}`). |
-| `ready`          | `is_ready_for_data()` returns True            | Space linked; manifest/data may flow.           |
-
-REST writes (`/data`, `/actions/.../result`) are gated by `ready`.
-The manifest push and SSE listener also gate on at least
-`is_authenticated()`.
+Everything else (`manifestVersion`, automations `version`, command `id`,
+`sessionId`) is monotonic per-bridge state or per-request scratch.
 
 ---
 
-## 3. Outbound HTTP endpoints (bridge → API)
+## 2. Identity & pairing (HTTPS bootstrap)
 
-All paths are relative to `api.url` from `config.yaml` (default
-`http://localhost:8080`). Trailing slashes are stripped on construction.
-Headers are as listed in §2.2.
+MQTT credentials are bootstrapped over HTTPS — the only non-MQTT channel. The
+pairing direction is app-issued: the app shows the operator a pairing code, the
+operator enters it into the bridge's web UI, and the bridge claims it.
 
-### 3.1 `POST /bridge` — register
+All three endpoints are POSTs to `api.url` (the app base URL).
 
-See §2.1. The only endpoint the bridge calls before it has a `bridge_id`.
+### 2.1 `POST /api/bridge/pair` — claim a pairing code
 
-Request body:
+Request:
 ```json
-{"customId": "string (required)"}
+{"code": "ABC123", "name": "raspberrypi"}
 ```
+`name` is this host's name (informational). Source: `app/auth.py` `pair_with_code`.
 
-Response body (200 OK):
-```json
-{"id": "string (uuid, required)", "code": "string (5 chars, required)"}
-```
-
-The bridge raises on any non-2xx; retried per §2.4.
-
-### 3.2 `GET /bridge/{bridge_id}` — fetch full config / probe state
-
-Used both during the pairing poll (§2.1) and as an SSE fallback
-(`fetch_full_config`, `api_client.py:623-653`).
-
-| Status | Bridge interpretation                                              |
-|--------|--------------------------------------------------------------------|
-| 200    | Body parsed as full `BridgeSpaceResp` (§4.2). Cached locally.       |
-| 204    | "Connected but no space yet" — the bridge stays in `connected` state. |
-| Other  | Logged; treated as transient by the pairing poll, fatal-for-this-fetch by the SSE fallback. |
-
-### 3.3 `POST /bridge/{bridge_id}/manifest` — push device inventory
-
-The full schema and example are in §5. Wire details:
-
-| Item               | Value                                                              |
-|--------------------|--------------------------------------------------------------------|
-| Method             | `POST`                                                             |
-| Path               | `/bridge/{bridge_id}/manifest`                                     |
-| Headers            | `Content-Type: application/json`, `Accept: application/json`, `X-Client-ID: {bridge_id}` |
-| Body               | See §5 — `{manifestVersion, generatedAt, devices: [...]}`          |
-| Response (success) | 200 OK with optional body `{"acceptedVersion": <int>}` (`api_client.py:558-566`). Empty body is also accepted; the bridge falls back to the version it sent. |
-| Response (reject)  | Any 4xx or 5xx is treated as a failure. The bridge does **not** advance its persisted `manifest_version`; the next change-driven push retries with the same `next_version = current + 1`. |
-| Idempotency        | Re-pushing the same manifest content is safe — the API should de-dup by content hash (it produces the same hash; see §5.2). |
-| Ordering           | The bridge serializes pushes via an `asyncio.Lock` (`api_client.py:523`); concurrent registry changes coalesce into one push. |
-
-**When the bridge fires this:**
-
-- Once on startup, after integrations finish loading and the registry
-  is populated (`main.py:117-122`).
-- Whenever `DeviceRegistry` fires a change callback — i.e. any
-  `register_device` or removal (`registry.py:181-188`,
-  `api_client.py:474-500`).
-- Whenever an SSE `heartbeat` event reports a `manifestHash` that
-  differs from the bridge's locally-stored one (`api_client.py:858-869`).
-
-**Versioning semantics (this is the critical contract):**
-
-- The bridge persists a monotonic `manifest_version` integer in
-  `config_store` (`local_config` table, key `manifest_version`).
-- Each push uses `next_version = stored_version + 1`
-  (`api_client.py:527-529`).
-- On 2xx response the bridge writes back **the API's
-  `acceptedVersion`** (or `next_version` if the body is empty).
-- The API SHOULD reject a push whose `manifestVersion` is **less than**
-  the highest version it has accepted for this `bridge_id`. The
-  recommended response is **409 Conflict** with body
-  `{"acceptedVersion": <currentHighest>}`. The bridge currently treats
-  any 4xx as a hard reject and does not advance. *(This 409-with-version
-  contract is recommended; the current bridge does not yet bump its
-  local counter on a soft reject — see §11.)*
-- `acceptedVersion < manifestVersion` in a 200 response is allowed and
-  means "I'm overriding your version downward"; the bridge will use
-  whatever the API echoes.
-
-### 3.4 `POST /bridge/{bridge_id}/data` — telemetry batch
-
-Source: `api_client.send_data` (`api_client.py:381-470`).
-
-| Item    | Value                                                                                |
-|---------|--------------------------------------------------------------------------------------|
-| Method  | `POST`                                                                               |
-| Path    | `/bridge/{bridge_id}/data`                                                           |
-| Headers | Standard auth headers (§2.2)                                                         |
-| Body    | `{"dataLogs": [DataLogReq, ...]}` *(only `dataLogs` is sent on the post-Phase-5 path)* |
-| Response (success) | 200 OK with **no body**. Config and action delivery happen exclusively over SSE. |
-
-**`DataLogReq` schema** (`app/api_types.py:79-94`, `app/types.py:7-12`):
-
-| Field      | Type    | Required | Notes                                                           |
-|------------|---------|----------|-----------------------------------------------------------------|
-| `logDate`  | string  | yes      | ISO-8601, UTC. Produced via `datetime.utcnow().isoformat()`.    |
-| `logType`  | string  | yes      | Uppercase `LogType` enum value (see §3.4.1).                    |
-| `value`    | string  | yes      | Always serialized as a string, even for numerics. Float/int are coerced via `str(value)`. |
-| `deviceId` | string  | optional | The device's `entity_id` (`<domain>.<name>`). Drives the **liveness touch** (§8). When absent, the API SHOULD still record the value but MUST NOT touch any device's `lastSeen`. |
-
-Ordering of entries within `dataLogs` is **not** significant. Duplicates
-within a batch are not deduped by the bridge.
-
-**Cadence:** The bridge runs `_data_transmission_task` every
-`api.transmission_interval` seconds (default 60, `main.py:327`). It
-pulls up to `api.batch_size` (default 100, `main.py:326`) points from
-`queue_manager` and posts them in one request. On HTTP failure the
-points are re-queued (`main.py:355-357`).
-
-**Out-of-band problem reporting:** The bridge maintains a `_problems`
-list (`api_client.py:194-198`) and an `_actions` ack list
-(`api_client.py:201-202`), but the post-Phase-5 wire format only sends
-`dataLogs`. Detected sensor faults (range/connection failures, see
-`_detect_problems_from_data` at `api_client.py:317-377`) are currently
-logged locally but no longer sent in the data batch payload. **The new
-API can either ignore these fields or, if it wants problem visibility,
-the bridge can re-introduce a `problems: [ProblemReq]` field; that is
-a forward-compatible extension.**
-
-#### 3.4.1 `LogType` enum
-
-Defined in `app/api_types.py:49-77`. The bridge sends these uppercase
-strings verbatim. The API MUST accept the full set:
-
-| Value | Category |
-|-------|----------|
-| `TEMPERATURE` | sensor |
-| `HUMIDITY` | sensor |
-| `LIGHT` | sensor |
-| `FAN` | sensor |
-| `TANK_ML` | sensor (water level) |
-| `TANK_LEVEL` | sensor |
-| `PH_VALUE` | sensor |
-| `PH_LEVEL` | sensor |
-| `PH_ML` | sensor (dosing) |
-| `SUPPLEMENT_ML` | sensor (dosing) |
-| `SUPPLEMENT_LEVEL` | sensor |
-| `PLANT_WATER` | sensor |
-| `SOIL_MOISTURE` | sensor |
-| `HEATER_STATE` | actuator state (binary) |
-| `FAN_STATE` | actuator state (binary) |
-| `HUMIDIFIER_STATE` | actuator state (binary) |
-| `DEHUMIDIFIER_STATE` | actuator state (binary) |
-| `LIGHT_STATE` | actuator state (binary) |
-| `FAN_SPEED` | actuator state (variable) |
-| `LIGHT_LEVEL` | actuator state (variable) |
-
-Unknown values from custom integrations are passed through as the
-caller specified — the API should accept any uppercase string but
-SHOULD validate against this enum and reject obvious typos with 400.
-
-#### 3.4.2 Example data batch
-
-```json
-POST /bridge/9d7e4c2a-3f9b-4f15-87b6-1a45c0d12345/data
-X-Client-ID: 9d7e4c2a-3f9b-4f15-87b6-1a45c0d12345
-Content-Type: application/json
-
-{
-  "dataLogs": [
-    {
-      "logDate": "2026-05-04T14:22:31.412000",
-      "logType": "TEMPERATURE",
-      "value": "23.6",
-      "deviceId": "mqtt.tent_temp"
-    },
-    {
-      "logDate": "2026-05-04T14:22:31.412000",
-      "logType": "HUMIDITY",
-      "value": "58.2",
-      "deviceId": "mqtt.tent_humidity"
-    },
-    {
-      "logDate": "2026-05-04T14:22:31.500000",
-      "logType": "PH_VALUE",
-      "value": "6.1",
-      "deviceId": "http.tank_ph"
-    }
-  ]
-}
-```
-
-### 3.5 `POST /bridge/{bridge_id}/actions/{action_id}/result` — action result
-
-Source: `api_client.send_command_result` (`api_client.py:595-619`).
-
-| Item    | Value                                                                |
-|---------|----------------------------------------------------------------------|
-| Method  | `POST`                                                               |
-| Path    | `/bridge/{bridge_id}/actions/{action_id}/result`                     |
-| Headers | Standard auth headers                                                |
-| Body    | `{"success": bool, "message": "string", "timestamp": <ms-epoch int>}` |
-| Response (success) | 200 OK; body ignored.                                     |
-
-Fired exactly once per inbound `action` SSE event, after the bridge has
-attempted the command via `integration.execute_command(target_id,
-action, payload)` (`main.py:443-446`). On any exception in command
-processing the bridge still posts a result with `success=false` and a
-diagnostic message.
-
-There is currently **no retry** on this path; it's a single best-effort
-post. If it fails the API will time out the action on its own
-expiration policy.
-
----
-
-## 4. Inbound SSE event stream (API → bridge)
-
-### 4.1 Connection
-
-```
-GET /bridge/{bridge_id}/stream?configVersion={local_version}
-Accept: text/event-stream
-X-Client-ID: {bridge_id}
-```
-
-`local_version` is the bridge's locally-stored `configVersion` (or `0`
-if the bridge has never received a config). The API uses this to decide
-whether to push a `config` event immediately on connect:
-
-- If `local_version` < server version: the API SHOULD send a `config`
-  event right away to bring the bridge up to date.
-- If equal: no immediate `config`; the bridge has cached state.
-
-The bridge maintains the stream open with a 90 s read timeout
-(`SSE_STREAM_TIMEOUT`, `api_client.py:49`). On read timeout, network
-error, or 5xx, the bridge reconnects with exponential backoff (§2.4).
-
-### 4.2 Event types
-
-The SSE parser in `api_client.py:721-779` recognises four `event:`
-names. Any other event name is logged at DEBUG and dropped. The
-`data:` line is always a single JSON object (multi-line `data:` is
-joined with `\n` and JSON-parsed once).
-
-#### 4.2.1 `event: connected`
-
-Sent once immediately after the API accepts the SSE upgrade
-(`_handle_connected_event`, `api_client.py:871-874`).
-
-```json
-{"configVersion": 7}
-```
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `configVersion` | int | yes | The current server-side config version. The bridge logs this for diagnostics; the actual sync of stored data happens on the subsequent `config` event (if any). |
-
-#### 4.2.2 `event: config`
-
-Full snapshot push (`_handle_config_event`, `api_client.py:781-815`).
-The payload is the same shape as the body of `GET /bridge/{bridge_id}`
-when status is 200 — call this `BridgeSpaceResp`.
-
-| Field             | Type     | Required | Notes |
-|-------------------|----------|----------|-------|
-| `configVersion`   | int      | yes      | Monotonic per-bridge. Stored in `config_store` under key `full`. |
-| `rdhMode`         | bool     | optional | "Run-Dry-Harvest" mode flag passed through to integration `apply_settings`. |
-| `status`          | string   | optional | Free-form lifecycle status from the API (e.g. `"GROWING"`). |
-| `light`           | object   | optional | Light schedule; structure consumed by integrations. Typical: `{"day": "06:00-18:00", "night": "...", "intensity": ...}`. |
-| `climate`         | object   | optional | Climate setpoints. Typical: `{"temperature": 24.5, "humidity": 60, "baseFanSpeed": 30}`. |
-| `tank`            | object   | optional | Tank/dosing config. Typical: `{"waters": [...], "ph": {...}, "amountML": ...}`. |
-| `actions`         | array    | optional | Pending one-shot actions. Same shape as the `action` event payload (§4.2.4). The bridge currently does not act on these — actions are processed only when delivered as their own `event: action`. |
-| `deviceAssignments` | array  | optional | **The role-assignment list — see below.** |
-
-**`deviceAssignments` shape** (`config_store.save_device_assignments`,
-`config_store.py:217-232`; consumer at `web/app.py:398-432`):
-
-```json
-"deviceAssignments": [
-  {"entityId": "gpio.water_pump", "role": "WATER_PUMP", "slot": 1},
-  {"entityId": "mqtt.tent_temp",  "role": "TEMPERATURE_SENSOR", "slot": null},
-  {"entityId": "gpio.spare_pump", "role": "IGNORED", "slot": null}
-]
-```
-
-Each entry is `{entityId: string, role: string, slot: int|null}`.
-
-- `entityId` MUST be a `<domain>.<name>` that the bridge has previously
-  pushed in a manifest. The API is responsible for validation.
-- `role` is one of the `GrowRole` enum values (§6) as a string.
-- `slot` is required for `MULTIPLE`-cardinality roles (e.g.
-  `CIRCULATION_FAN` slot=1, slot=2). For `SINGLETON` roles `slot` is
-  `null` or omitted.
-
-**The bridge treats this list as display-only.** Command routing always
-goes by `entityId` via `registry.get_*_integration` — never by role
-(`web/app.py:790`, doc-comment at `config_store.py:215`). Operators see
-"WATER_PUMP" labels on the bridge web UI; that's the only effect.
-
-If the field is missing or not a list, the bridge logs a warning and
-treats it as an empty list. The list is wholly replacing — every
-`config` event publishes the complete current set, not a delta.
-
-#### 4.2.3 `event: heartbeat`
-
-Periodic keep-alive every ~15 s (the value isn't enforced bridge-side;
-the bridge only uses `SSE_STREAM_TIMEOUT=90` to detect a *missing*
-heartbeat). Source: `_handle_heartbeat_event`, `api_client.py:832-869`.
-
+Response (200):
 ```json
 {
-  "ts": 1746375751412,
-  "configVersion": 7,
-  "manifestHash": "e82f0160f741cd2d64e80a315abf0d4014efafc64865a875f6e9971880e77af3"
+  "bridgeId": "…",
+  "tenantId": "…",
+  "bridgeSecret": "…",
+  "token": "<JWT>",
+  "tokenExpiresIn": 86400,
+  "brokerUrl": "mqtt://broker.example:1883"
 }
 ```
+The bridge persists `{bridgeId, tenantId, bridgeSecret, token, brokerUrl}` to
+`data/credentials.json` and remembers `tokenExpiresIn` for proactive refresh
+(§5.4). `bridgeSecret` is the long-lived rotation credential — returned **once**;
+`token` is the short-lived MQTT password. Non-200 (400 missing/invalid, 404
+bad/used code) → pairing failed.
 
-| Field          | Type | Required | Notes |
-|----------------|------|----------|-------|
-| `ts`           | int  | optional | Server epoch milliseconds. Logged by the bridge; not used for clock sync. |
-| `configVersion`| int  | yes      | Drift check. If `≠ local_version`, the bridge fires `fetch_full_config()` (a synchronous `GET /bridge/{bridge_id}`) to resync, then re-runs `_apply_settings`. |
-| `manifestHash` | string | optional | Drift check. If present and `≠ stored_manifest_hash`, the bridge schedules a fresh `send_manifest()`. |
+### 2.2 `POST /api/bridge/token` — rotate the MQTT token
 
-The two drift checks are independent and either or both may fire on a
-single heartbeat.
-
-#### 4.2.4 `event: action`
-
-A command targeted at one device. Source: `_handle_action_event`,
-`api_client.py:817-830`; consumed by `_process_command`, `main.py:404-451`.
-
+Request:
 ```json
-{
-  "id": "act_8f2c...",
-  "type": "TANK_ML",
-  "targetType": "actuator",
-  "targetId": "gpio.water_pump",
-  "action": "on",
-  "payload": {"durationMs": 12000, "amountML": 250}
-}
+{"bridgeId": "…", "bridgeSecret": "…"}
 ```
+Response (200): `{"token": "<JWT>", "tokenExpiresIn": 86400}`. A 401 means the
+secret is bad (or was revoked by a `credentialVersion` bump). Source:
+`app/auth.py` `refresh_token`.
 
-| Field        | Type   | Required | Notes |
-|--------------|--------|----------|-------|
-| `id`         | string | yes      | API-generated UUID. The bridge echoes it back in the result POST (§3.5). If absent, the bridge drops the event. |
-| `type`       | string | optional | Mirrors `ActionType` (§3.4.1). The bridge does not route on this — it's only logged. The new API can rely on `targetType`/`targetId` to identify the device. |
-| `targetType` | string | yes      | `"sensor"` or `"actuator"`. Drives the registry lookup table (`get_sensor_integration` vs `get_actuator_integration`, `main.py:424-433`). |
-| `targetId`   | string | yes      | The `entity_id` of the target device. For backward-compat the registry's legacy index also accepts a bare `name`, but new APIs SHOULD always send the fully qualified `entity_id`. |
-| `action`     | string | yes      | The command verb. Common values: `"on"`, `"off"`, `"set"`, `"speed"`, `"temperature"`, `"level"`. The integration interprets these. |
-| `payload`    | object | optional | Free-form parameters. Passed verbatim to `integration.execute_command(target_id, action, payload)`. |
+### 2.3 `POST /api/bridge/ice-servers` — fetch WebRTC ICE servers
 
-**Routing flow:**
+Same auth as token refresh (`{bridgeId, bridgeSecret}`). Response:
+`{"iceServers": [ … ]}` (STUN + short-lived TURN, for go2rtc). The bridge fetches
+these via `app/auth.py` `fetch_ice_servers` for its camera path (§11). Source:
+`app/api/bridge/ice-servers/route.ts` + `lib/bridge/turn.ts`.
 
-1. `_handle_action_event` puts the raw payload onto an internal queue.
-2. `_command_execution_task` (`main.py:370-402`) drains the queue.
-3. `_process_command` looks up the integration:
-   - `targetType == "sensor"`: `registry.get_sensor_integration(targetId)`
-   - `targetType == "actuator"`: `registry.get_actuator_integration(targetId)`
-4. The integration's `execute_command(target_id, action, payload)` is awaited.
-5. The bridge POSTs `/bridge/{id}/actions/{action_id}/result` with success/failure.
+### 2.4 The MQTT token (JWT)
 
-If the target is unknown or has no integration, the bridge replies with
-`success=false` and message `"No integration for {targetType} {targetId}"`.
+The token is an **HS256 JWT** signed by the app with `MQTT_JWT_SECRET`
+(`lib/bridge/jwt.ts`). Claims:
+
+| Claim | Meaning |
+|-------|---------|
+| `sub` | `bridgeId` — must equal the connecting MQTT username. |
+| `tid` | `tenantId`. |
+| `ver` | `credentialVersion` at issue time — checked against the DB on every connect. |
+| `exp` | Expiry (`TOKEN_TTL_SECONDS` = 24h after issue). |
+
+**Revocation** = the app bumps `Bridge.credentialVersion`; every previously-issued
+token then fails the `ver` check at the broker and every later refresh mints
+tokens with the new version.
 
 ---
 
-## 5. Manifest payload reference
+## 3. Broker authentication & ACL
 
-### 5.1 Schema
+The broker delegates auth to the app's `/api/mqtt/{user,superuser,acl}` routes
+(mosquitto-go-auth HTTP backend). Logic lives in `lib/bridge/mqtt-auth.ts`.
 
-Top-level (`registry.serialize_manifest`, `registry.py:220-247`):
+- **App subscriber:** static username/password (env). It is a **superuser** — the
+  broker skips ACL, so it reads/writes every tenant's topics.
+- **Bridge:** `username = bridgeId`, `password = <JWT>`. On connect the app
+  verifies the JWT signature, that `sub == username`, that the bridge exists and
+  is paired, that `tid` matches the bridge's tenant, and that `ver` matches the
+  current `credentialVersion`. Any mismatch → connection refused (the broker
+  returns a "Not authorized" CONNACK).
+- **ACL:** a bridge may only publish/subscribe within its own
+  `ga/<tenantId>/bridge/<bridgeId>/` subtree (`isTopicWithinBridge`). A
+  `startsWith` on the fully-qualified prefix rejects cross-tenant, cross-bridge,
+  and over-broad wildcard topics alike.
 
-| Field             | Type    | Required | Notes |
-|-------------------|---------|----------|-------|
-| `manifestVersion` | int     | yes      | Monotonically increasing per-bridge. See §3.3 for versioning semantics. |
-| `generatedAt`     | string  | yes      | ISO-8601 UTC with `Z` suffix, generated at serialize time (`datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")`). Informational; not used for ordering. |
-| `devices`         | array   | yes      | One entry per registered device. Order is alphabetical by `entityId` (`registry.py:229`). |
+A "Not authorized" CONNACK triggers the bridge's reactive token refresh
+(`app/mqtt_transport.py` `_handle_auth_failure`), which is the fallback for the
+proactive refresh in §5.4.
+
+---
+
+## 4. Topic scheme
+
+Every topic is tenant- and bridge-scoped under a
+`ga/<tenantId>/bridge/<bridgeId>/` prefix — the authorization boundary (§3).
+Canonical helpers: `lib/bridge/topics.ts` (app) and `app/mqtt_transport.py`
+`_topic` (bridge).
+
+| Topic suffix              | Direction     | Retained | Payload | Status |
+|---------------------------|---------------|----------|---------|--------|
+| `manifest`                | bridge → app  | yes      | §6      | live |
+| `state`                   | bridge → app  | yes      | §7      | live |
+| `telemetry`               | bridge → app  | no       | §8      | live |
+| `cmd/<cmdId>`             | app → bridge  | no       | §9      | live |
+| `cmd/<cmdId>/ack`         | bridge → app  | no       | §9      | live |
+| `automations`             | app → bridge  | yes      | §10     | live |
+| `automations/status`      | bridge → app  | yes      | §10     | live |
+| `webrtc/offer`            | app → bridge  | no       | §11     | live |
+| `webrtc/answer`           | bridge → app  | no       | §11     | live |
+
+The app subscribes to per-channel wildcards across all tenants, e.g.
+`ga/+/bridge/+/manifest`, `ga/+/bridge/+/cmd/+/ack` (`inboundSubscription`,
+`commandAckSubscription`, `webrtcAnswerSubscription`).
+
+---
+
+## 5. Connection lifecycle
+
+Source: `app/mqtt_transport.py`.
+
+### 5.1 Connect
+
+The bridge owns reconnection via a **maintainer task** (`_maintainer_loop`) that
+connects once credentials are present and rebuilds a fresh client after any drop
+(paho's own auto-reconnect is disabled so a dropped client can't run in parallel
+with the maintainer's replacement). On connect it:
+
+1. Sets the **Last-Will-and-Testament** on `…/state`:
+   `{"online": false}` (retained, qos 1) — the broker publishes it if the bridge
+   dies without a clean disconnect.
+2. Connects with `username = bridgeId`, `password = token`.
+3. On a successful CONNACK: subscribes to `cmd/+` and `automations`, then
+   publishes the manifest + online state (§6, §7).
+
+### 5.2 Retained state & reconnect
+
+`…/manifest`, `…/state`, and `…/automations` are **retained**, so a reconnecting
+party (app or bridge) immediately receives the last-known values from the broker
+without waiting for a fresh publish. Telemetry and command/ack messages are not
+retained.
+
+On a clean `stop()` the bridge publishes `{"online": false}` retained to
+`…/state` and disconnects.
+
+### 5.3 Offline queue
+
+Telemetry produced while disconnected is buffered by `app/queue_manager.py`
+(SQLite-backed, survives restarts). On reconnect the bridge replays the queue —
+so telemetry ingest on the app **must be idempotent** and tolerant of
+out-of-order timestamps (the app dedupes on `(entity, loggedAt)`, see
+`lib/bridge/ingest.ts`).
+
+### 5.4 Token refresh
+
+The 24h MQTT token is refreshed **proactively** at ~90% of its TTL by a timer in
+`app/auth.py` (`_proactive_refresh_loop`), so rotation is seamless and the bridge
+never waits for the broker to reject an expired token. `tokenExpiresIn` from the
+pair/refresh responses drives the schedule; after each refresh the timer
+reschedules off the fresh TTL. Concurrent refreshes (proactive timer + reactive
+CONNACK path) are coalesced into a single round-trip.
+
+The **reactive** path remains as a fallback: a "Not authorized" CONNACK triggers
+one refresh, then the maintainer reconnects with the new token.
+
+---
+
+## 6. Manifest (`…/manifest`, retained)
+
+The bridge's announcement of which devices/entities it exposes. Published
+retained; republished (with a bumped `manifestVersion`) on startup and on any
+registry change. Sources: `app/registry.py` `serialize_manifest`;
+app-side parser/mapper `lib/bridge/manifest.ts`.
+
+### 6.1 Schema
+
+Top-level:
+
+| Field             | Type   | Notes |
+|-------------------|--------|-------|
+| `manifestVersion` | int    | Monotonically increasing per-bridge; persisted in `config_store`. |
+| `generatedAt`     | string | ISO-8601 UTC (`Z` suffix). Informational. |
+| `devices`         | array  | One entry per registered device, ASCII-sorted by `entityId`. |
 
 Each device entry:
 
-| Field             | Type     | Required | Notes |
+| Field             | Type     | In hash? | Notes |
 |-------------------|----------|----------|-------|
-| `entityId`        | string   | yes      | `<domain>.<name>`. Stable identifier (§7). |
-| `domain`          | string   | yes      | Lowercase. The integration's class name with trailing `Integration` stripped, e.g. `"gpio"`, `"mqtt"`, `"http"`. Custom integrations can override via `register_device(domain=...)`. |
-| `name`            | string   | yes      | The device's local name within its domain. Free-form, must be unique per domain. |
-| `deviceType`      | string   | yes      | Free-form type string. Common values: `"pump"`, `"fan"`, `"light"`, `"heater"`, `"humidity"`, `"temperature"`, `"water_level"`, `"light_sensor"`, `"ph"`, `"ec"`, `"pressure"`, `"flow"` (`registry.py:78-91`). The taxonomy is open; custom integrations can introduce their own types. |
-| `category`        | string   | yes      | **Uppercase.** One of `"SENSOR"` or `"ACTUATOR"`. The bridge stores the `DeviceCategory` enum lowercase but uppercases on serialize (`registry.py:210`, `registry.py:237`). |
-| `integrationName` | string   | yes      | The integration's class name (e.g. `"GPIOIntegration"`). Used by the bridge for routing; the API can store it as opaque metadata. |
-| `capabilities`    | string[] | yes      | Sorted in the *hash* but emitted in registration order in the manifest (`registry.py:212` vs `:239`). The list of action verbs the device supports — typical values for a `"pump"` are `["on", "off"]`. |
-| `metadata`        | object   | yes      | Free-form; defaults to `{}`. Whatever the integration passed to `register_device(metadata=...)`. |
+| `entityId`        | string   | yes      | `<domain>.<name>` — stable id and telemetry join key (§13). |
+| `domain`          | string   | yes      | Integration/transport domain (`gpio`/`mqtt`/`http`/`esphome`…), lowercase. |
+| `name`            | string   | yes      | Device's local name within its domain. |
+| `deviceType`      | string   | yes      | Free-form type (`pump`, `fan`, `light`, `temperature`, …). |
+| `category`        | string   | yes      | **Uppercase** `SENSOR` or `ACTUATOR`. |
+| `integrationName` | string   | yes      | Integration class name (`GPIOIntegration`). |
+| `capabilities`    | string[] | yes (sorted) | Action verbs the device supports (`["on","off"]`). |
+| `metadata`        | object   | **no**   | Free-form; defaults to `{}`. Excluded from the hash. |
+| `entityDomain`    | string   | **no**   | HA entity domain the app stores: `sensor`/`switch`/`number`/`light`/`camera`. |
+| `writable`        | bool     | **no**   | True for actuators — whether the app may command it. |
+| `unit`            | string?  | **no**   | Unit of measurement, or null. |
 
-**Important deviation between hash and serialized form:**
+The bridge emits the HA `entityDomain` explicitly (rather than the app inferring
+it): `SENSOR → sensor`; `ACTUATOR` with `deviceType == "light" → light`;
+`ACTUATOR` with a settable capability (`speed`/`level`/`temperature`/`set`) →
+`number`; any other `ACTUATOR → switch` (`app/registry.py` `_ha_entity_domain`).
+The `camera` entity domain is used by the bridge's camera integration
+(`app/integrations/camera/`), whose WebRTC path is described in §11. The
+app's domain enum is closed — an `entityDomain` the app doesn't model is
+rejected (`lib/bridge/manifest.ts` `mapManifestDevice`).
 
-- For *hashing* (`compute_manifest_hash`, `registry.py:192-218`), `capabilities` is **sorted** and `metadata` is **excluded**.
-- For *serialization* (`serialize_manifest`), `capabilities` is the registration-order list and `metadata` is included.
+### 6.2 Manifest hash algorithm
 
-This means changes to `metadata` do **not** invalidate the manifest
-hash. The new API's hash computation MUST follow the same rule (see
-§5.2).
-
-### 5.2 Manifest hash algorithm
-
-Source: `registry.py:192-218`. Used by the heartbeat drift check (§4.2.3)
-and SHOULD also be computed independently by the API to verify integrity.
-
-Pseudocode:
+Both sides compute a SHA-256 over a deterministic serialization of the device set
+to detect drift. Bridge: `app/registry.py` `compute_manifest_hash`. App:
+`lib/bridge/manifest.ts` `computeManifestHash`. **The two must stay byte-exact**
+or the app will treat every manifest as changed.
 
 ```python
 items = []
@@ -639,7 +305,7 @@ for entity_id in sorted(devices.keys()):
         "domain": d.domain,
         "name": d.name,
         "deviceType": d.device_type,
-        "category": d.category.upper(),       # "SENSOR" or "ACTUATOR"
+        "category": d.category.upper(),   # "SENSOR" | "ACTUATOR"
         "integrationName": d.integration_name,
         "capabilities": sorted(d.capabilities),
     }
@@ -647,24 +313,15 @@ for entity_id in sorted(devices.keys()):
 hash = sha256("\n".join(items).encode("utf-8")).hexdigest()
 ```
 
-Byte-exact requirements for the API implementation:
+Byte-exact requirements: ASCII-sorted `entityId` iteration; exactly the seven
+keys above; compact separators `(",", ":")` (no spaces); `sort_keys=True`;
+uppercase `category`; **sorted** `capabilities`; `metadata`/`entityDomain`/
+`writable`/`unit` **excluded**; lines joined with `\n` (no trailing newline);
+UTF-8 → SHA-256 → lowercase hex.
 
-1. Iterate devices in **ASCII-sorted** `entityId` order.
-2. Build the payload object with exactly the seven keys above, in any
-   order — `sort_keys=True` will canonicalize.
-3. Use compact JSON separators: `(",", ":")` — **no spaces**.
-4. `category` is uppercase.
-5. `capabilities` is **sorted** ASCII order.
-6. `metadata` is **not** in the hash input.
-7. Join the per-device JSON strings with `\n` (LF, no trailing newline).
-8. Encode UTF-8, SHA-256, hex digest, lowercase.
+#### 6.2.1 Verified fixture
 
-#### 5.2.1 Verified fixture
-
-The following minimal two-device registry produces a deterministic hash
-that the new API can use as a unit-test sanity check.
-
-Devices:
+Two-device registry:
 
 ```python
 [
@@ -677,35 +334,25 @@ Devices:
 ]
 ```
 
-Hash input (two lines, joined with one `\n`):
+Hash input (two lines joined with one `\n`):
 
 ```
 {"capabilities":["off","on"],"category":"ACTUATOR","deviceType":"pump","domain":"gpio","entityId":"gpio.pump1","integrationName":"GPIOIntegration","name":"pump1"}
 {"capabilities":[],"category":"SENSOR","deviceType":"temperature","domain":"mqtt","entityId":"mqtt.temp1","integrationName":"MQTTIntegration","name":"temp1"}
 ```
 
-Expected SHA-256 hex digest:
+Expected SHA-256:
 
 ```
 f5b1954d657d7247d578bd15ff4e4bca827986bd88bc1c6a086886ac0ed158df
 ```
 
-Verified by running the bridge's `compute_manifest_hash` algorithm
-end-to-end on 2026-05-04 against this codebase. If the API's
-implementation produces a different digest for this input, the
-implementation is wrong and the bridge will erroneously re-push on
-every heartbeat.
-
-### 5.3 Example manifest
+### 6.3 Example manifest
 
 ```json
-POST /bridge/9d7e4c2a-3f9b-4f15-87b6-1a45c0d12345/manifest
-X-Client-ID: 9d7e4c2a-3f9b-4f15-87b6-1a45c0d12345
-Content-Type: application/json
-
 {
   "manifestVersion": 12,
-  "generatedAt": "2026-05-04T14:22:00.123456Z",
+  "generatedAt": "2026-07-15T14:22:00.123456Z",
   "devices": [
     {
       "entityId": "gpio.water_pump",
@@ -715,7 +362,10 @@ Content-Type: application/json
       "category": "ACTUATOR",
       "integrationName": "GPIOIntegration",
       "capabilities": ["on", "off"],
-      "metadata": {"pin": 17, "active_high": true}
+      "metadata": {"pin": 17},
+      "entityDomain": "switch",
+      "writable": true,
+      "unit": null
     },
     {
       "entityId": "mqtt.tent_temp",
@@ -725,54 +375,242 @@ Content-Type: application/json
       "category": "SENSOR",
       "integrationName": "MQTTIntegration",
       "capabilities": [],
-      "metadata": {"topic": "tent/sensors/temp"}
+      "metadata": {"topic": "tent/sensors/temp"},
+      "entityDomain": "sensor",
+      "writable": false,
+      "unit": "°C"
     }
   ]
 }
 ```
 
-Successful response:
+### 6.4 Versioning & soft-removal
 
-```json
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{"acceptedVersion": 12}
-```
-
-### 5.4 Triggers, idempotency, and soft-removal
-
-A manifest push happens on:
-
-- **Startup**, after integrations populate the registry.
-- **Registry change**: any `register_device` (or eventual remove) fires
-  `_on_registry_change` → schedules `send_manifest()` on the loop.
-- **Hash drift**: a heartbeat reporting a `manifestHash` different
-  from the bridge's local one schedules a re-push.
-
-The bridge does **not** push periodically as a heartbeat — the API can
-rely on heartbeat-echoed `manifestHash` as the freshness signal.
-
-**Soft removal:** The bridge does not currently call any "remove" path
-on the API when a device disappears from a manifest. The expected API
-behaviour is: any `BridgeDevice` row for `(bridge_id, entity_id)` that
-is **not present** in the latest accepted manifest is marked
-`removed=true` (soft delete). If the same `entity_id` re-appears in a
-later manifest, the same row is reactivated (`removed=false`) — never
-duplicated. This preserves historical `lastSeen`, role assignments, and
-audit history across transient hardware drop-outs.
+- `manifestVersion` is monotonic per-bridge, bumped by 1 on each publish
+  (`app/mqtt_transport.py` `send_manifest`, serialized under an async lock so
+  concurrent registry changes coalesce into one publish).
+- The manifest is **retained**, so the app always sees the latest on reconnect.
+- **Soft removal:** the app should mark any `(bridgeId, entityId)` not present in
+  the latest manifest as `removed` (soft delete), and reactivate the same row if
+  the `entityId` reappears — preserving history and assignments across transient
+  hardware drop-outs.
 
 ---
 
-## 6. Role taxonomy (`GrowRole`)
+## 7. State (`…/state`, retained)
 
-The bridge does not interpret roles — it only stores them as labels for
-the web UI (§4.2.2). However, the API and bridge must agree on the role
-*taxonomy* because the `deviceAssignments` payload uses these strings.
+Bridge liveness + manifest-freshness hints. Parser: `lib/bridge/telemetry.ts`
+`parseState`.
 
-The full enum (mirrors the existing API at
-`KweekVad3rAPI/.../GrowRole.java` for reference; the new API MUST
-implement an equivalent):
+| Field             | Type    | Notes |
+|-------------------|---------|-------|
+| `online`          | bool    | `false` only when the bridge said so (clean stop) or via LWT. Any state message without it implies online. |
+| `manifestHash`    | string? | SHA-256 of the current device set (§6.2), or null. |
+| `manifestVersion` | int?    | The current manifest version, or null. |
+
+Published retained on connect as `{"online": true, "manifestHash": …,
+"manifestVersion": …}` and set as the LWT `{"online": false}` so a hard death
+flips the bridge offline without a graceful disconnect.
+
+---
+
+## 8. Telemetry (`…/telemetry`)
+
+A batch of timestamped samples, bridge → app, qos 1, **not retained**. Source:
+`app/mqtt_transport.py` `send_data`; parser `lib/bridge/telemetry.ts`.
+
+```json
+{
+  "samples": [
+    {"entityId": "mqtt.tent_temp", "value": "23.6", "ts": "2026-07-15T14:22:31.412Z"},
+    {"entityId": "gpio.water_pump", "value": "on",  "ts": "2026-07-15T14:22:31.500Z"}
+  ]
+}
+```
+
+| Field      | Type                    | Notes |
+|------------|-------------------------|-------|
+| `entityId` | string                  | Must match a manifest `entityId` to be joinable (§13). |
+| `value`    | string \| number \| bool | Raw value; the app keeps the string form and parses a numeric form when possible. |
+| `ts`       | string                  | ISO-8601 bridge event time. |
+
+Ingest is idempotent and order-tolerant (§5.3): the bridge replays its offline
+queue on reconnect and may resend points. The bridge derives `entityId` for each
+sample from the integration name + device key via the shared
+`app/entity_id.py` `derive_domain` — the **same** derivation the manifest uses,
+so telemetry and manifest never disagree on the domain half of the key.
+
+---
+
+## 9. Commands (`…/cmd/<id>` + `…/cmd/<id>/ack`)
+
+The app→bridge write path (dashboard widgets). The app publishes a command to
+`cmd/<id>` and awaits the bridge's echo on `cmd/<id>/ack`. Sources:
+`lib/bridge/commands.ts` (app); `app/main.py` `_process_command` +
+`app/mqtt_transport.py` (bridge).
+
+### 9.1 Command (`cmd/<id>`, app → bridge)
+
+```json
+{
+  "id": "cmd_8f2c…",
+  "targetType": "actuator",
+  "targetId": "water_pump",
+  "action": "on",
+  "payload": {"value": 250}
+}
+```
+
+| Field        | Type   | Notes |
+|--------------|--------|-------|
+| `id`         | string | App-generated; echoed in the ack. |
+| `targetType` | string | Always `"actuator"` — only writable entities are commandable. |
+| `targetId`   | string | **The device *name* the bridge registered the actuator under — a bare name, not the full `entityId`.** See the note below. |
+| `action`     | string | Bridge vocabulary: `"on"` / `"off"` / `"set"`. The app has already translated any HA service to this (there is no service translation on the command path — that seam only exists in the bridge's automations executor). |
+| `payload`    | object | Free-form; a `set` carries `{"value": …}`. Passed verbatim to `integration.execute_command`. |
+
+> **Known wart — bare `targetId`.** The command carries the device **name**, not
+> the `<domain>.<name>` entityId, and relies on the bridge's legacy name-indexed
+> lookup (`registry.get_actuator_integration`). This works today because names
+> are unique across the actuator index, but it is ambiguous if two domains ever
+> register the same actuator name. Whether to move commands to the full
+> `entityId` on the wire (both repos change) is an open question (§16).
+
+### 9.2 Ack (`cmd/<id>/ack`, bridge → app)
+
+```json
+{"id": "cmd_8f2c…", "success": true, "message": "", "ts": 1752589351412}
+```
+
+Published exactly once per command, after `integration.execute_command` runs.
+`ts` is ms-epoch. On any failure the bridge still acks with `success:false` and a
+diagnostic message. The app correlates by `id` and materialises an optimistic
+value on success so the dashboard reflects the new state before the next
+telemetry cycle (`lib/bridge/commands.ts` `optimisticValueFor`).
+
+The app subscribes to `cmd/+/ack`; the bridge ignores its own ack echoes on the
+`cmd/+` subscription (`app/mqtt_transport.py` `_on_message`).
+
+---
+
+## 10. Automations (`…/automations` + `…/automations/status`)
+
+The app produces the rule set (`lib/automations/publish.ts`); the bridge consumes
+it, validates + evaluates it, and echoes status. Bridge implementation:
+`app/automations/` (engine, executor, event bus, state store, templates,
+manager) and `app/mqtt_transport.py` (subscription + status publish).
+
+### 10.1 Rule set (`…/automations`, app → bridge, retained)
+
+A full **snapshot** of every automation for the bridge (including disabled ones,
+carried with `enabled:false` so the bridge can tell "disabled" from "deleted") —
+never a delta. Republished in full on every mutation. Source:
+`lib/automations/publish.ts`; rule grammar in `lib/automations/schema.ts`.
+
+```json
+{
+  "automations": [
+    {
+      "id": "auto_1",
+      "name": "Vent on high temp",
+      "enabled": true,
+      "triggers": [ … ],
+      "conditions": [ … ],
+      "actions": [ … ]
+    }
+  ],
+  "version": 7
+}
+```
+
+- `version` is a monotonic per-bridge integer bumped on every publish. The bridge
+  applies a rule set **only if strictly newer** than the last applied version, so
+  a retained redelivery on reconnect is ignored.
+- **Clearing** the last automation publishes `{"automations": [], "version": N}`
+  **retained** (never an empty payload — an empty retained message would *delete*
+  the retained message, and a bridge offline at clear time would then never learn
+  the set was emptied). The retained message is never deleted, so the broker
+  always replays the latest desired set to a reconnecting bridge.
+
+The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
+(triggers `state`/`numeric_state`/`time`/`time_pattern`/`event`; recursive
+`and`/`or`/`not` + `state`/`numeric_state`/`time` conditions; actions `call`/
+`delay`/`wait_for_state`/`set_variable`/`fire_event`; `{{ }}` templating). The
+bridge evaluator (`app/automations/`) implements that full vocabulary.
+
+### 10.2 Status echo (`…/automations/status`, bridge → app, retained)
+
+After receiving a rule set the bridge validates + applies it and publishes the
+result retained. Source/parser: `lib/automations/status.ts`.
+
+```json
+{
+  "ok": true,
+  "count": 3,
+  "validatedHash": "…sha256 hex…",
+  "validatedAt": "2026-07-15T14:25:00Z",
+  "errors": [{"automationId": "auto_2", "message": "unknown entity light.foo"}]
+}
+```
+
+| Field           | Type    | Notes |
+|-----------------|---------|-------|
+| `ok`            | bool    | Whether the whole set validated/applied. |
+| `count`         | int     | Number of automations applied. |
+| `validatedHash` | string  | **SHA-256 of the exact bytes the bridge received** on `…/automations`. |
+| `validatedAt`   | string? | Bridge-reported time (the app records its own receipt time to avoid Pi clock skew). |
+| `errors`        | array   | `{automationId?, message}` per rejected rule. |
+
+**Cross-language hash parity is load-bearing.** The app records the SHA-256 of
+the exact bytes it published (`lib/automations/publish.ts` `hashPayload`); the
+bridge must echo the SHA-256 of the bytes it received. A set reads as **synced**
+only when `validatedHash == publishedHash` **and** `ok` is true; matching hash
+with `ok:false` → **error**; mismatched hash → **pending** (`deriveSyncState`).
+Count/timestamp alone are insufficient — a same-count edit must read as pending
+until the bridge confirms the new bytes.
+
+---
+
+## 11. WebRTC camera signalling (`…/webrtc/offer` + `…/webrtc/answer`)
+
+App-side signalling is in `lib/bridge/webrtc.ts` + `lib/bridge/turn.ts`; the
+bridge camera integration (`app/integrations/camera/`) supervises go2rtc,
+proxies the SDP, and publishes the answer via `app/mqtt_transport.py`
+`send_webrtc_answer`.
+
+The browser owns the offer, so this is request/response (not an unsolicited
+push). The app publishes an offer and awaits the answer, correlating by a
+`sessionId` (these topics carry no id segment, unlike `cmd/<id>/ack`).
+
+### 11.1 Offer (`…/webrtc/offer`, app → bridge)
+
+```json
+{"sessionId": "sess_…", "streamId": "camera.tent1", "sdp": "<SDP offer>"}
+```
+`streamId` is the camera entity's HA ref (`camera.<name>`), resolved server-side
+from the entity id and used as the go2rtc `?src=`. The bridge proxies the SDP to
+its local go2rtc `/api/webrtc` and echoes the answer.
+
+### 11.2 Answer (`…/webrtc/answer`, bridge → app)
+
+`{"sessionId": "sess_…", "ok": true, "sdp": "<SDP answer>"}` or, on failure,
+`{"sessionId": "sess_…", "ok": false, "error": "…"}`.
+
+### 11.3 Low-framerate variant
+
+The browser can request a reduced-framerate stream when its path is TURN-relayed;
+the app appends the `_lofps` suffix to the stream id server-side
+(`lib/bridge/webrtc.ts` `LOW_FRAMERATE_STREAM_SUFFIX`), so the bridge must expose
+a `camera.<name>_lofps` variant per camera. ICE servers for go2rtc are fetched
+via §2.3.
+
+---
+
+## 12. Role taxonomy (`GrowRole`)
+
+The bridge does not interpret roles — role assignments are app-owned state used
+for operator-facing labels and automation authoring. The taxonomy is shared so
+both sides agree on the strings.
 
 | Role | Compatible `deviceType` | Cardinality |
 |------|-------------------------|-------------|
@@ -803,292 +641,113 @@ implement an equivalent):
 | `IGNORED` | (any) | MULTIPLE |
 | `UNASSIGNED` | (any) | MULTIPLE |
 
-**Cardinality rules (the API enforces, not the bridge):**
+- **SINGLETON:** at most one device per space may carry this role.
+- **MULTIPLE:** any number; a `slot` disambiguates them.
+- `UNASSIGNED` is the default for a freshly-discovered device; `IGNORED` is an
+  explicit "exists but don't automate it" decision. Both accept any `deviceType`;
+  the app still accepts telemetry from `IGNORED` devices.
 
-- **SINGLETON**: at most one `BridgeDevice` per space may carry this
-  role at a time. Assigning a SINGLETON role to a second device must
-  either reject (preferred) or auto-unassign the previous holder.
-- **MULTIPLE**: any number of devices may carry this role; `slot`
-  disambiguates them (`CIRCULATION_FAN` slot=1 vs slot=2).
-
-**`IGNORED` vs `UNASSIGNED`:**
-
-- `UNASSIGNED` is the default state for a freshly-discovered device. It
-  is not actionable; the operator hasn't decided what it is yet.
-- `IGNORED` is an explicit operator decision: "this device exists but I
-  don't want it to participate in any automation." The API should never
-  surface IGNORED devices in role-driven UI flows but MUST keep them in
-  the inventory and continue accepting telemetry from them.
-
-Both accept any `deviceType`.
-
-### 6.1 Compatibility validation
-
-The API SHOULD reject an assignment whose role's
-`compatibleDeviceTypes` does not contain the device's `deviceType` —
-unless the role is `IGNORED` or `UNASSIGNED`. (Reject = 400 Bad
-Request, body explaining the conflict.)
-
-### 6.2 Cardinality reconciliation across manifests
-
-If a new manifest arrives that introduces a second device with a
-SINGLETON role's required `deviceType`, the API must **not** silently
-duplicate the role. Recommended behaviour:
-
-- Leave existing assignments untouched.
-- New devices come in with `role=UNASSIGNED`.
-- The operator resolves the conflict via the consumer app.
-
-The "most-recent manifest wins" rule applies only to the **inventory**
-(which devices physically exist). Role assignments are operator-managed
-state owned by the API and survive across manifests.
+Role↔deviceType compatibility and cardinality are enforced app-side.
 
 ---
 
-## 7. Stable identity rules
+## 13. Stable identity rules
 
-### 7.1 `entity_id = <domain>.<name>`
+### 13.1 `entityId = <domain>.<name>`
 
-Every registered device has an `entity_id` that is the dotted
-concatenation of its `domain` and `name`. Source:
-`DeviceInfo.entity_id` property (`registry.py:39-42`) and
-`register_device` (`registry.py:106`).
+Every device's `entityId` is the dotted concatenation of its `domain` and `name`.
+The **same** value appears in the manifest and in telemetry — it is the join key,
+and it must never drift between the two. Source of truth: `app/entity_id.py`
+`derive_entity_id`, used by both the manifest side (`app/registry.py`) and the
+telemetry side (`app/mqtt_transport.py`).
 
 - `domain` is lowercase.
-- `name` is whatever the integration passed in. By convention it does
-  not contain dots, but the bridge does not enforce this — only the
-  *first* dot matters for parsing.
-- The pair `(bridge_id, entity_id)` is the **stable primary key** the
-  API should use for any `BridgeDevice` row.
+- `name` is whatever the integration registered; by convention it has no dots,
+  but only the *first* dot matters for parsing.
+- The pair `(bridgeId, entityId)` is the stable primary key for an app-side
+  device row.
 
-### 7.2 Domain derivation
+### 13.2 Domain derivation
 
-When an integration uses the convenience methods
-`registry.register_sensor` / `register_actuator` without specifying a
-`domain` argument, the bridge derives it from the integration class
-name (`registry.py:249-254`):
+When an integration registers without an explicit `domain`, it is derived from
+the integration class name (`app/entity_id.py` `derive_domain`): strip a trailing
+`Integration` suffix (case-sensitive, exactly that literal), lowercase the rest.
 
-- Strip a trailing `Integration` suffix (case-sensitive, exactly that
-  literal).
-- Lowercase the remainder.
-
-Examples:
-
-| Integration class | Default domain |
-|-------------------|----------------|
-| `GPIOIntegration` | `gpio` |
-| `MQTTIntegration` | `mqtt` |
-| `HTTPIntegration` | `http` |
+| Integration class   | Domain |
+|---------------------|--------|
+| `GPIOIntegration`   | `gpio` |
+| `MQTTIntegration`   | `mqtt` |
+| `HTTPIntegration`   | `http` |
 | `SerialIntegration` | `serial` |
-| `MyCustomIntegration` | `mycustom` |
+| `ESPHomeIntegration`| `esphome` |
 | `DHTSensor` (no suffix) | `dhtsensor` |
 
-Custom integrations should pass `domain=...` explicitly when the derived
-default would collide or when human-friendly naming is preferred.
+### 13.3 Stability across restarts
 
-### 7.3 Stability across restarts
-
-Because the registry is rebuilt from `config.yaml` on every bridge
-start, an `entity_id` is stable iff:
-
-- The integration's class name is unchanged (or the explicit `domain`
-  override is unchanged), **and**
-- The device's `name` in `config.yaml` is unchanged.
-
-The bridge does not persist registered devices across restarts in
-SQLite — the `config_store` only persists API-pushed config, manifest
-version/hash, and outbound queue. The registry is ephemeral. The API,
-however, MUST persist `BridgeDevice` rows; an `entity_id` that
-disappears for a few minutes (during a bridge restart) and re-appears
-in the next manifest is the **same** logical device.
-
-### 7.4 Re-appearance and re-use
-
-When a previously-removed `entity_id` reappears in a manifest, the API
-should reactivate the existing `BridgeDevice` row (`removed=false`)
-rather than create a new row. Existing role assignments, lastSeen, and
-historical telemetry remain attached.
+The registry is rebuilt from `config.yaml` on every start; it is not persisted.
+An `entityId` is stable iff the integration class name (or explicit `domain`
+override) and the device's `name` are unchanged. The app persists device rows; an
+`entityId` that disappears during a restart and reappears in the next manifest is
+the **same** logical device (§6.4).
 
 ---
 
-## 8. Liveness model
+## 14. Liveness model
 
-The bridge does not push a dedicated "I'm alive" signal per device.
-Instead, **`lastSeen` on a `BridgeDevice` is updated as a side effect
-of telemetry**:
+Liveness is derived from the retained `…/state` message and telemetry, not from a
+per-device heartbeat:
 
-- On every `POST /bridge/{id}/data`, for every `DataLogReq` whose
-  `deviceId` matches an existing `(bridge_id, entity_id)` row, the API
-  MUST set `lastSeen = now()`.
-- A `DataLogReq` without a `deviceId` MUST NOT touch any device's
-  `lastSeen`.
-- A manifest push **does not** count as liveness. A device that
-  appears in the manifest but never produces telemetry is "registered
-  but never seen".
+- **Bridge online/offline:** the retained `…/state` `online` flag. The LWT flips
+  it to `false` on a hard death; a clean stop publishes `{"online": false}`.
+  Because it is retained, the app sees the current liveness immediately on
+  subscribe.
+- **Per-device freshness:** the app updates a device's `lastSeen` as a side
+  effect of telemetry whose `entityId` matches a known device. A device present
+  in the manifest but never producing telemetry is "registered but never seen".
+- **Manifest freshness:** the `…/state` `manifestHash`/`manifestVersion` let the
+  app detect whether it holds the current manifest without diffing every device.
 
-### 8.1 Stale flip threshold
-
-Recommended threshold: **3 minutes**. If `now() - lastSeen > 3 min`,
-the device is `stale=true` for UI purposes. The bridge does not consume
-this flag — it's purely an API-side derived field.
-
-The threshold should be configurable per-deployment but a single global
-default is sufficient for v1.
-
-### 8.2 Recovery
-
-A previously-stale device transitions back to fresh on the next
-telemetry that touches it. There is no separate recovery signal; the
-liveness state is purely a function of `lastSeen`.
+A recommended per-device staleness threshold is ~3 minutes since `lastSeen`,
+derived app-side; the bridge does not consume it.
 
 ---
 
-## 9. Multi-pod / failure-mode notes
+## 15. Glossary
 
-### 9.1 Reconnect resync
-
-On every SSE reconnect, the bridge sends `?configVersion={local}`. The
-API uses this to decide whether to push a fresh `config` event. A
-correctly implemented API guarantees that after the SSE handshake, the
-bridge's local config is at least as new as the API's, so post-restart
-the bridge boots with the last-known-good config from `config_store`
-and re-syncs as soon as the SSE comes up.
-
-If the bridge lost connectivity for an extended period and missed
-multiple `config` versions, the resync is still a single push — the API
-sends the *current* full config, not a delta replay.
-
-### 9.2 Manifest hash drift
-
-If multiple API pods serve heartbeats, they must agree on the
-`manifestHash` they advertise. The recommended implementation:
-
-- The "primary" record of accepted `manifestVersion` and content hash
-  lives in the API's persistence layer.
-- Heartbeats fetch the hash from there (or from a cache populated on
-  manifest acceptance).
-- Two pods returning different hashes for the same `bridge_id` will
-  cause the bridge to thrash (re-push on every heartbeat from the
-  laggy pod). This is observable as repeated manifest pushes in the
-  bridge log; the API team should alert on it.
-
-### 9.3 Bridge restart
-
-On restart the bridge:
-
-1. Loads `credentials.json` → has `bridge_id`.
-2. Loads the latest cached `config` from `config_store` and applies it
-   to integrations before SSE is up (`main.py:182-196`). This means
-   pump schedules etc. continue running through the gap.
-3. Reads `manifest_version` and `manifest_hash` from `config_store`
-   (it does not push a manifest yet; that happens after integrations
-   load).
-4. Loads integrations, populates registry, pushes manifest with
-   `manifest_version + 1`.
-5. Opens SSE; first event tells it whether the API's view matches.
-
-The API can rely on **monotonic `manifestVersion`** as the only ordering
-signal. A push with `manifestVersion <= latestAccepted` is stale and
-should be rejected (with `acceptedVersion` echoed; see §3.3).
-
-### 9.4 Cardinality conflict reconciliation
-
-If an operator assigns `WATER_PUMP` to device A, and a new manifest
-introduces device B with `deviceType=pump`, the new device comes in as
-`UNASSIGNED`. The existing `WATER_PUMP=A` assignment is untouched. The
-"most-recent manifest wins" rule applies only to the **inventory list**
-(which devices exist), not to role assignments — those are operator-
-managed state.
+- **`bridgeId`** — stable id issued by the app at pairing; the bridge's MQTT
+  username and the `sub` claim of its token.
+- **`tenantId`** — the tenant a bridge belongs to; part of every topic and the
+  token's `tid` claim.
+- **`entityId`** — `<domain>.<name>`; the stable device identifier and telemetry
+  join key (§13).
+- **`bridgeSecret`** — long-lived rotation credential returned once at pairing;
+  used to mint MQTT tokens and fetch ICE servers.
+- **MQTT token** — short-lived (24h) HS256 JWT; the bridge's MQTT password.
+- **`credentialVersion`** — per-bridge revocation counter embedded in the token
+  (`ver`); a bump invalidates every prior token.
+- **`manifestVersion`** — monotonic per-bridge manifest counter.
+- **`manifestHash`** — SHA-256 of the device set (§6.2); drift signal in `…/state`.
+- **automations `version`** — monotonic per-bridge rule-set counter; the bridge
+  applies only strictly-newer sets.
+- **`validatedHash`** — SHA-256 of the exact automations bytes the bridge
+  received; matched against the app's published hash to derive sync state.
+- **LWT** — MQTT Last-Will-and-Testament; the retained `{"online": false}` the
+  broker publishes to `…/state` if the bridge dies uncleanly.
+- **`GrowRole`** — operator-meaningful role names (§12); app-owned, bridge-opaque.
 
 ---
 
-## 10. Glossary
+## 16. Open questions / pending contract notes
 
-- **`bridge_id`** — UUID issued by the API at pairing time (§2.1),
-  persisted by the bridge in `data/credentials.json`. Used in URL paths
-  and the `X-Client-ID` header.
-- **`entity_id`** — `<domain>.<name>` string. The stable identifier
-  for a device managed by the bridge. See §7.
-- **`manifestVersion`** — Monotonic per-bridge integer. Bumped by 1
-  on each manifest push. The API echoes the accepted version (§3.3).
-- **`manifestHash`** — SHA-256 hex of a deterministic serialization
-  of the device set. Used for drift detection on heartbeats. See §5.2.
-- **`configVersion`** — Monotonic per-bridge integer issued by the
-  API. Stored alongside the cached `BridgeSpaceResp`. Drift-checked
-  on heartbeats; resync request sent on SSE reconnect.
-- **`GrowRole`** — Enum of operator-meaningful role names (e.g.
-  `WATER_PUMP`, `EXHAUST_FAN`). Bridge stores assignments display-only;
-  API enforces cardinality. See §6.
-- **`BridgeDevice`** — API-side persistent row keyed by
-  `(bridge_id, entity_id)`. Holds `lastSeen`, `removed`, role assignment.
-  Bridge does not see this concept directly.
-- **`deviceAssignment`** — `{entityId, role, slot}` triplet. Lives in
-  the `config` event payload. Bridge stores in `config_store` for the
-  web UI. See §4.2.2.
-
----
-
-## 11. Open questions / future contract notes
-
-The following are deliberately *not* nailed down in this spec; the API
-team should confirm before the new API ships.
-
-1. **HMAC authentication.** Today the bridge presents `X-Client-ID`
-   only. Anyone who learns a `bridge_id` can impersonate the bridge.
-   The recommended hardening is HMAC-signed requests (key issued at
-   pairing; signature over method + path + body + nonce). The bridge
-   already has `Authorization: Bearer` plumbing via `build_auth_headers`;
-   adding an HMAC signer is a one-file change. The new API SHOULD
-   enforce this from day one and reject pre-HMAC bridges with a
-   loud-failure status. Plan: ship the new API with both modes
-   tolerated, then flip after a deprecation window.
-
-2. **Manifest re-push on soft-reject.** Today, a 4xx response to
-   `/manifest` causes the bridge to leave its local
-   `manifest_version` unchanged, so the next change re-tries with the
-   *same* `next_version = current + 1` (i.e. it doesn't bump on
-   failure). If the API wants to communicate "I have a higher
-   accepted version, please use mine," the recommended response is
-   `409 Conflict {"acceptedVersion": N}`, and the bridge should write
-   that back. The current bridge code does **not** do this on 4xx —
-   it treats the push as failed and the version is not advanced. This
-   needs a small bridge change to be fully bidirectional.
-
-3. **Multi-bridge per space.** The current contract carries no
-   notion of "which bridge sent this telemetry" beyond the URL path's
-   `bridge_id`. If a single space ever accepts multiple bridges (e.g.
-   one main + one secondary in another room), the API will need to
-   namespace `entity_id` by `bridge_id` in any cross-space view.
-   Confirm: is this in-scope for v1 of the new API or explicitly out?
-
-4. **Problem reporting wire format.** The post-Phase-5 `/data` body
-   only carries `dataLogs`. The bridge still detects out-of-range
-   values and sensor failures internally
-   (`_detect_problems_from_data`) but does not currently send them.
-   Decide: (a) drop entirely, (b) re-introduce `problems: [...]` in
-   `/data`, or (c) add a separate `/problems` endpoint. This doc
-   currently assumes (a).
-
-5. **Action expiration / retry.** The bridge POSTs the action result
-   exactly once with no retry (`api_client.py:595-619`). What's the
-   API's expiration policy for actions whose result never arrives?
-   Should the bridge re-deliver if it sees the same `action_id`
-   redelivered on SSE? Today it would re-execute — there's no
-   dedup cache.
-
-6. **`type` field in the `action` event.** The bridge currently
-   ignores it for routing (uses `targetType`/`targetId` only). The new
-   API should either remove it or specify what it means; today it's
-   essentially documentation.
-
-7. **`generatedAt` use.** The bridge fills it in but the bridge does
-   not use it. Should the API treat it as authoritative (e.g. as a
-   tiebreaker for two manifests received with the same
-   `manifestVersion` due to a clock skew)? Recommended: no — rely on
-   `manifestVersion` only.
-
-8. **`metadata` semantics.** It's free-form, not in the manifest hash,
-   and integration-dependent (e.g. `{"pin": 17}` for GPIO,
-   `{"topic": "..."}` for MQTT). Should the API persist it? Today
-   nothing on the API depends on it; it's primarily for the bridge UI
-   and operator debugging.
+1. **Command `targetId` (bare name vs entityId).** Commands carry the bare device
+   name (§9.1), relying on the bridge's name index. Moving to the full `entityId`
+   on the wire is safer but changes both repos. To be decided in the automations
+   slice.
+2. **Broker-secret User-Agent gate.** `lib/bridge/mqtt-auth.ts` supports an
+   optional shared-secret `User-Agent` (`MQTT_HTTP_BROKER_SECRET`) as
+   defence-in-depth on the `/api/mqtt/*` routes; the primary control is keeping
+   those routes off the public ingress.
+3. **Soft-removal & role reconciliation.** The app owns soft-removal of devices
+   absent from the latest manifest (§6.4) and cardinality reconciliation of roles
+   across manifests (new devices arrive `UNASSIGNED`; existing assignments are
+   untouched).

@@ -1,5 +1,20 @@
 # Integration Development Guide
 
+> **⚠️ Largely superseded (MQTT migration).** This guide predates the REST/SSE →
+> MQTT transport migration and describes a transport layer that no longer exists:
+> the `api_client` module, the SSE consumer pipeline (`event: config/heartbeat/
+> action`), and the `GET/POST /bridge/{id}/…` endpoints have all been **removed**,
+> and so have the integration API-callback helpers `log_data()`,
+> `report_problem()`, `register_action_handler()`, `acknowledge_action()` and the
+> `app.api_types` enums. The current transport is MQTT — see
+> [`bridge-protocol.md`](./bridge-protocol.md) for the authoritative contract
+> (pairing, broker auth, topics, manifest/telemetry/command payloads). The
+> `Integration` base class, self-registration, `register_capabilities()`, and
+> `receive_data()`/`send_data()`/`execute_command()` remain valid; telemetry now
+> flows solely by yielding data points from `receive_data()`. Treat the
+> transport/architecture and API-helper sections below as historical until this
+> guide is rewritten.
+
 This guide provides details on how to create custom integrations for the GrowAssistant Bridge. The modular architecture allows for easy extension with new device types and communication protocols.
 
 ## Integration Architecture
