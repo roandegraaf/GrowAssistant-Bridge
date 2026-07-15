@@ -2,10 +2,10 @@
 Climate Control Integration Example.
 
 This integration demonstrates the full climate control flow:
-- Receives target settings from API via apply_settings()
+- Receives target settings via apply_settings()
 - Runs control logic comparing actual vs target values
 - Uses hysteresis to prevent rapid cycling
-- Reports device states back to API
+- Surfaces actuator states via get_device_data()
 """
 
 import asyncio
@@ -13,7 +13,6 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
-from app.api_types import LogType
 from app.integrations import Integration, register_integration
 
 if TYPE_CHECKING:
@@ -27,9 +26,9 @@ class ClimateControlIntegration(Integration):
     """Example integration for automatic climate control.
 
     This integration shows how to:
-    1. Receive settings from the API
+    1. Receive settings via apply_settings()
     2. Implement control logic with hysteresis
-    3. Report actuator states back to the API
+    3. Surface actuator states via get_device_data()
     """
 
     def __init__(self, config: dict[str, Any]):
@@ -179,9 +178,7 @@ class ClimateControlIntegration(Integration):
                             f"Dehumidifier OFF: current={self.current_humidity}%, target={self.target_humidity}%"
                         )
 
-                # Report device states to API
-                await self._report_device_states()
-
+                # Current device states surface to the app via get_device_data().
                 await asyncio.sleep(self.update_interval)
 
             except asyncio.CancelledError:
@@ -235,30 +232,6 @@ class ClimateControlIntegration(Integration):
             if device.get("type") == "fan":
                 device["value"] = "on" if on else "off"
                 device["last_updated"] = time.time()
-
-    async def _report_device_states(self):
-        """Report current device states to the API."""
-        # Report heater state
-        self.log_data(
-            LogType.HEATER_STATE, "on" if self.heater_on else "off", device_id="main_heater"
-        )
-
-        # Report fan state
-        self.log_data(LogType.FAN_STATE, "on" if self.fan_on else "off", device_id="exhaust_fan")
-
-        # Report humidifier state
-        self.log_data(
-            LogType.HUMIDIFIER_STATE,
-            "on" if self.humidifier_on else "off",
-            device_id="main_humidifier",
-        )
-
-        # Report dehumidifier state
-        self.log_data(
-            LogType.DEHUMIDIFIER_STATE,
-            "on" if self.dehumidifier_on else "off",
-            device_id="main_dehumidifier",
-        )
 
     def set_sensor_readings(
         self, temperature: Optional[float] = None, humidity: Optional[int] = None
