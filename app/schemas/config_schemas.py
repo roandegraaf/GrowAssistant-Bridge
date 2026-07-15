@@ -180,10 +180,6 @@ class ESPHomeEntityConfig(BaseModel):
     name: str | None = Field(
         default=None, description="Override device name in the registry (defaults to entity key)"
     )
-    log_type: str | None = Field(
-        default=None,
-        description="API LogType (TEMPERATURE, HUMIDITY, ...). If unset, derived from `type`.",
-    )
     category: Literal["sensor", "actuator"] | None = Field(
         default=None, description="Force sensor/actuator category. Auto-detected if omitted."
     )

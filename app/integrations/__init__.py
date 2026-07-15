@@ -13,20 +13,9 @@ import os
 import pkgutil
 import sys
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from pydantic import BaseModel, ValidationError
-
-from app.api_client import api_client
-from app.api_types import (
-    ActionType,
-    LogType,
-    ProblemStatus,
-    ProblemType,
-    create_action_response,
-    create_data_log,
-    create_problem,
-)
 
 if TYPE_CHECKING:
     from app.registry import DeviceRegistry
@@ -173,68 +162,6 @@ class Integration(abc.ABC):
             Dict[str, Any]: A dictionary mapping device names to their current values/states.
         """
         pass
-
-    # New methods for API data format
-    def log_data(
-        self,
-        log_type: Union[LogType, str],
-        value: Union[str, float, int],
-        log_date=None,
-        device_id=None,
-    ):
-        """Log data to the API.
-
-        Args:
-            log_type: Type of data being logged
-            value: Value to log
-            log_date: Optional timestamp (defaults to now)
-            device_id: Optional device identifier for multiple devices of same type
-        """
-        api_client.add_data_log(log_type, value, log_date, device_id)
-
-    def report_problem(
-        self,
-        problem_type: Union[ProblemType, str],
-        status: Union[ProblemStatus, str],
-        description: str,
-        priority: int = 0,
-        user_can_resolve: bool = True,
-        resolved: bool = False,
-        problem_id: Optional[str] = None,
-    ):
-        """Report a problem to the API.
-
-        Args:
-            problem_type: Type of problem
-            status: Problem status category
-            description: Description of the problem
-            priority: Priority (0-100)
-            user_can_resolve: Whether user can resolve
-            resolved: Whether already resolved
-            problem_id: Optional ID
-        """
-        api_client.add_problem(
-            problem_type, status, description, priority, user_can_resolve, resolved, problem_id
-        )
-
-    def register_action_handler(self, action_type: Union[ActionType, str], handler: Callable):
-        """Register a handler for API actions.
-
-        Args:
-            action_type: Type of action to handle
-            handler: Callback function(action_data) -> bool
-        """
-        api_client.register_action_handler(action_type, handler)
-
-    def acknowledge_action(self, action_id: str, received: bool = True, resolved: bool = False):
-        """Acknowledge an action from the API.
-
-        Args:
-            action_id: ID of the action
-            received: Whether received
-            resolved: Whether completed
-        """
-        api_client.acknowledge_action(action_id, received, resolved)
 
     async def handle_action(self, action_data: dict[str, Any]) -> bool:
         """Handle an action requested by the API.

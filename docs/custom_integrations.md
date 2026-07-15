@@ -1,5 +1,19 @@
 # Developing Custom Integrations for GrowAssistant Bridge
 
+> **⚠️ Partially superseded (MQTT migration).** The self-registration model, the
+> `Integration` lifecycle, and `register_capabilities()` (registry-based device
+> registration) are current. But this guide predates the REST/SSE → MQTT
+> transport migration: the API-callback helpers it documents —
+> `log_data()`, `report_problem()`, `register_action_handler()`,
+> `acknowledge_action()` and the `app.api_types` enums (`LogType`,
+> `ProblemType`, `ProblemStatus`, `ActionType`) — **have been removed.**
+> Telemetry now flows purely by **yielding data points from `receive_data()`**
+> (the collection loop tags them and publishes over MQTT); there is no
+> per-integration data-log/problem/action-handler API anymore. For the real
+> over-the-wire contract see [`bridge-protocol.md`](./bridge-protocol.md). The
+> code examples in the "Data Logging", "Problem Reporting", and "Action
+> Handlers" sections below are stale and kept only until this guide is rewritten.
+
 This guide covers everything you need to know to develop custom integrations for the GrowAssistant Bridge using the **new self-registration architecture** (Home Assistant-style modularity).
 
 ## Table of Contents

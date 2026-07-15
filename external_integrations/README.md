@@ -7,7 +7,7 @@ This directory is where you can add custom integrations for the GrowAssistant Br
 ### 1. Copy the Template
 
 ```bash
-cp sample_integration.py my_integration.py
+cp dht_sensor.py my_integration.py
 ```
 
 ### 2. Implement Your Integration
@@ -111,24 +111,21 @@ The integration system now uses **self-registration**:
 
 ---
 
-## API Communication
+## Emitting telemetry
+
+Telemetry flows by **yielding data points from `receive_data()`**. The bridge's
+collection loop tags each point with your integration name, derives its
+`<domain>.<name>` entity id, and publishes it to the app over MQTT — you do not
+call any API/logging method yourself.
 
 ```python
-from app.api_types import LogType, ActionType, ProblemType, ProblemStatus
-
-# Log sensor data
-self.log_data(LogType.TEMPERATURE, 25.5)
-self.log_data(LogType.TANK_ML, 500, pump_num=1)
-
-# Report problems
-self.report_problem(ProblemType.TEMPERATURE, ProblemStatus.RANGE, "Temperature high", priority=70)
-
-# Handle actions (register in connect())
-self.register_action_handler(ActionType.TEMPERATURE, self._handle_temp)
-
-# Acknowledge actions
-self.acknowledge_action(action_id, received=True, resolved=True)
+async def receive_data(self):
+    # Yield one dict per reading; the key the bridge uses for the entity name
+    # depends on the integration (e.g. `sensor`, `endpoint_name`, `pin_name`).
+    yield {"sensor": "temp1", "value": 25.5}
 ```
+
+Commands from the app arrive via `execute_command(target_id, action, payload)`.
 
 ---
 
@@ -176,9 +173,9 @@ def register_capabilities(self, registry):
 
 | File | Description |
 |------|-------------|
-| `sample_integration.py` | Complete documented template |
-| `sample_config.yaml` | Example configuration |
-| `dht_sensor.py` | DHT sensor example (if present) |
+| `dht_sensor.py` | DHT sensor example (a good starting template) |
+| `dht_config.yaml` | Example configuration for the DHT sensor |
+| `climate_control.py` | Actuator/control-loop example (hysteresis + apply_settings) |
 
 ---
 

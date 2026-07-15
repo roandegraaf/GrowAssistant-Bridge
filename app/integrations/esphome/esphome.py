@@ -14,7 +14,6 @@ import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
-from app.api_types import LogType, ProblemStatus, ProblemType
 from app.integrations import Integration, register_integration
 from app.schemas.config_schemas import ESPHomeIntegrationConfig
 
@@ -35,19 +34,6 @@ DEVICE_CLASS_TO_TYPE: dict[str, str] = {
     # Note: ESPHome `device_class: moisture` is ambiguous (soil sensor vs.
     # leak detector vs. tank level). Soil moisture must be mapped explicitly
     # via the `entities:` block in config.
-}
-
-# Map GrowAssistant device types to API LogType values. Types not present
-# here are tracked locally but not pushed to the API as readings.
-TYPE_TO_LOG_TYPE: dict[str, LogType] = {
-    "temperature": LogType.TEMPERATURE,
-    "humidity": LogType.HUMIDITY,
-    "light": LogType.LIGHT,
-    "light_sensor": LogType.LIGHT,
-    "fan": LogType.FAN,
-    "water_level": LogType.TANK_LEVEL,
-    "ph": LogType.PH_VALUE,
-    "soil_moisture": LogType.SOIL_MOISTURE,
 }
 
 # Categorise a GrowAssistant type as sensor vs actuator.
@@ -80,7 +66,7 @@ class ESPHomeIntegration(Integration):
         # device_id -> {
         #   "client": APIClient, "task": asyncio.Task,
         #   "entities": {key: EntityState},  # latest state by entity key
-        #   "by_key": {key: {"object_id", "type", "log_type", "name", "category", ...}},
+        #   "by_key": {key: {"object_id", "type", "name", "category", ...}},
         #   "connected": bool,
         # }
         self._runtime: dict[str, dict[str, Any]] = {}
@@ -197,13 +183,6 @@ class ESPHomeIntegration(Integration):
                 raise
             except APIConnectionError as e:
                 logger.warning("ESPHome '%s' connection error: %s", friendly, e)
-                self.report_problem(
-                    ProblemType.CLIENT,
-                    ProblemStatus.CONNECTION,
-                    f"ESPHome device '{friendly}' connection error: {e}",
-                    priority=40,
-                    user_can_resolve=True,
-                )
             except Exception as e:
                 logger.exception("Unexpected error in ESPHome loop for '%s': %s", friendly, e)
             finally:
@@ -284,21 +263,10 @@ class ESPHomeIntegration(Integration):
             ga_type = override.get("type")
             if not ga_type:
                 return None
-            log_type_str = override.get("log_type")
-            log_type: LogType | None = None
-            if log_type_str:
-                try:
-                    log_type = LogType(log_type_str.upper())
-                except ValueError:
-                    logger.warning("Unknown ESPHome log_type override: %r", log_type_str)
-            else:
-                log_type = TYPE_TO_LOG_TYPE.get(ga_type)
-
             category = override.get("category") or default_category
             name = override.get("name") or object_id
             return {
                 "type": ga_type,
-                "log_type": log_type,
                 "category": category,
                 "name": name,
             }
@@ -310,7 +278,6 @@ class ESPHomeIntegration(Integration):
                 return None
             return {
                 "type": ga_type,
-                "log_type": TYPE_TO_LOG_TYPE.get(ga_type),
                 "category": "sensor",
                 "name": object_id,
             }
@@ -349,7 +316,6 @@ class ESPHomeIntegration(Integration):
                         "entity": mapping["object_id"],
                         "type": mapping["type"],
                         "value": value,
-                        "log_type": mapping["log_type"],
                         "device_id": f"{device_id}:{mapping['object_id']}",
                     },
                 )
@@ -383,13 +349,6 @@ class ESPHomeIntegration(Integration):
                 item = self._inbox.get_nowait()
             except asyncio.QueueEmpty:
                 break
-
-            log_type = item.pop("log_type", None)
-            if log_type is not None:
-                try:
-                    self.log_data(log_type, item["value"], device_id=item.get("device_id"))
-                except Exception as e:
-                    logger.error("Error logging ESPHome value: %s", e)
 
             yield item
 

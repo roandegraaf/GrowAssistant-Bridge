@@ -6,6 +6,8 @@ rotation via refresh_token, and broker-URL parsing. httpx is mocked — no live
 app is required.
 """
 
+import asyncio
+import contextlib
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -268,6 +270,84 @@ class TestAuthManagerTokenRefresh:
         auth_manager._client = MagicMock()
         auth_manager._credentials = None
         assert await auth_manager.refresh_token() is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_refresh_is_coalesced(self, auth_manager):
+        """Proactive + reactive callers share a single in-flight refresh."""
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "old"}
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_post(*args, **kwargs):
+            started.set()
+            await release.wait()
+            return _response(200, {"token": "new", "tokenExpiresIn": 86400})
+
+        auth_manager._client.post = AsyncMock(side_effect=slow_post)
+
+        first = asyncio.create_task(auth_manager.refresh_token())
+        await started.wait()
+        second = asyncio.create_task(auth_manager.refresh_token())
+        release.set()
+
+        assert await first is True
+        assert await second is True
+        # Only one network round-trip despite two callers.
+        assert auth_manager._client.post.call_count == 1
+
+
+class TestAuthManagerProactiveRefresh:
+    """Tests for the proactive token-refresh scheduling."""
+
+    def test_pair_captures_token_expires_in(self, auth_manager):
+        assert auth_manager._parse_expires_in({"tokenExpiresIn": 86400}) == 86400
+
+    def test_expires_in_defaults_when_missing(self, auth_manager):
+        from app.auth import DEFAULT_TOKEN_TTL_SECONDS
+
+        assert auth_manager._parse_expires_in({}) == DEFAULT_TOKEN_TTL_SECONDS
+        assert auth_manager._parse_expires_in({"tokenExpiresIn": 0}) == DEFAULT_TOKEN_TTL_SECONDS
+
+    def test_scheduled_delay_is_ninety_percent_of_ttl(self, auth_manager):
+        auth_manager._token_expires_in = 1000
+        assert auth_manager._scheduled_refresh_delay() == 900.0
+
+    def test_initial_delay_unpaired_rechecks(self, auth_manager):
+        from app.auth import UNPAIRED_RECHECK_INTERVAL
+
+        auth_manager._credentials = None
+        assert auth_manager._initial_refresh_delay() == UNPAIRED_RECHECK_INTERVAL
+
+    def test_initial_delay_refreshes_now_when_ttl_unknown(self, auth_manager):
+        # Paired (creds loaded from disk) but TTL not yet known → refresh now.
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._token_expires_in = None
+        assert auth_manager._initial_refresh_delay() == 0.0
+
+    @pytest.mark.asyncio
+    async def test_loop_refreshes_before_expiry_with_short_ttl(self, auth_manager):
+        """With a short TTL the loop rotates the token repeatedly, ahead of expiry."""
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._token_expires_in = None  # first iteration refreshes immediately
+
+        async def fake_refresh():
+            # Learn a tiny TTL so the next scheduled refresh fires quickly.
+            auth_manager._token_expires_in = 0.02
+            return True
+
+        with patch.object(auth_manager, "_do_refresh_token", side_effect=fake_refresh) as mock:
+            auth_manager._running = True
+            task = asyncio.create_task(auth_manager._proactive_refresh_loop())
+            await asyncio.sleep(0.1)
+            auth_manager._running = False
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        # Refreshed immediately, then again at ~90% of the short TTL.
+        assert mock.call_count >= 2
 
 
 class TestAuthManagerFetchIceServers:

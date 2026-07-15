@@ -324,13 +324,12 @@ These logs are useful for debugging API communication issues and tracking the hi
 │   ├── __init__.py           # Package initialization
 │   ├── main.py               # Main application entry point
 │   ├── config.py             # Configuration handling
-│   ├── api_client.py         # API client for GrowAssistant API
-│   ├── api_types.py          # API type definitions
-│   ├── auth.py               # Authentication manager
+│   ├── mqtt_transport.py     # MQTT transport to the GrowAssistant app
+│   ├── entity_id.py          # Shared <domain>.<name> entity-id derivation
+│   ├── auth.py               # Pairing, JWT rotation, credential manager
 │   ├── constants.py          # Application constants
 │   ├── queue_manager.py      # Data queue management
 │   ├── registry.py           # Device type registry
-│   ├── types.py              # Type definitions
 │   ├── watchdog.py           # Process watchdog for reliability
 │   ├── schemas/              # Configuration schemas
 │   │   └── config_schemas.py # Pydantic config validation
