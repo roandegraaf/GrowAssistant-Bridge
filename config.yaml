@@ -29,7 +29,7 @@ integrations:
         pin: 4
         pull_up_down: UP
   http:
-    enabled: true
+    enabled: false
     endpoints:
       '0':
         headers: null
@@ -46,7 +46,7 @@ integrations:
   mqtt:
     broker: localhost
     client_id: growassistant
-    enabled: true
+    enabled: false
     password: ''
     port: 1883
     topics:
@@ -77,8 +77,12 @@ integrations:
       '2':
         name: sample_light
         type: light
-    enabled: true
+    enabled: false
     update_interval: 10
+  simulator:
+    enabled: true
+    lights_on_hour: 6
+    lights_off_hour: 24
   climatecontrol:
     enabled: true
     hysteresis: 0.5
