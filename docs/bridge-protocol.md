@@ -188,6 +188,7 @@ Canonical helpers: `lib/bridge/topics.ts` (app) and `app/mqtt_transport.py`
 | `cmd/<cmdId>/ack`         | bridge → app  | no       | §9      | live |
 | `automations`             | app → bridge  | yes      | §10     | live |
 | `automations/status`      | bridge → app  | yes      | §10     | live |
+| `notify`                  | bridge → app  | no       | §10     | live |
 | `webrtc/offer`            | app → bridge  | no       | §11     | live |
 | `webrtc/answer`           | bridge → app  | no       | §11     | live |
 
@@ -535,8 +536,10 @@ never a delta. Republished in full on every mutation. Source:
 The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
 (triggers `state`/`numeric_state`/`time`/`time_pattern`/`event`; recursive
 `and`/`or`/`not` + `state`/`numeric_state`/`time` conditions; actions `call`/
-`delay`/`wait_for_state`/`set_variable`/`fire_event`; `{{ }}` templating). The
-bridge evaluator (`app/automations/`) implements that full vocabulary.
+`delay`/`wait_for_state`/`set_variable`/`fire_event`/`notification`; `{{ }}`
+templating). The bridge evaluator (`app/automations/`) implements that full
+vocabulary. The `notification` action publishes back to the app on `…/notify`
+(§10.3).
 
 ### 10.2 Status echo (`…/automations/status`, bridge → app, retained)
 
@@ -568,6 +571,44 @@ only when `validatedHash == publishedHash` **and** `ok` is true; matching hash
 with `ok:false` → **error**; mismatched hash → **pending** (`deriveSyncState`).
 Count/timestamp alone are insufficient — a same-count edit must read as pending
 until the bridge confirms the new bytes.
+
+### 10.3 Notification intent (`…/notify`, bridge → app)
+
+A `notification` action publishes a notification intent to `…/notify` (qos 1,
+**not retained**) each time a rule carrying it fires. The app fans it out as Web
+Push to the tenant's subscriptions — the bridge never talks to push endpoints
+itself. Source: `app/automations/engine.py` `_action_notification` +
+`app/mqtt_transport.py` `publish_notification`.
+
+The action carries a `title` and a `message` (both required, non-empty strings),
+each of which may contain `{{ … }}` templates the bridge renders at fire time
+against the same context as every other templated string (`variables` /
+`trigger` / `states`):
+
+```json
+{"type": "notification", "title": "Tent is {{ states['sensor.temp'] }}°C", "message": "High temperature — check ventilation"}
+```
+
+The published payload:
+
+```json
+{
+  "automationId": "auto_1",
+  "title": "Tent is 31°C",
+  "message": "High temperature — check ventilation",
+  "firedAt": "2026-07-16T12:00:00.123456+00:00"
+}
+```
+
+| Field          | Type   | Notes |
+|----------------|--------|-------|
+| `automationId` | string | The `id` of the rule that fired. |
+| `title`        | string | Rendered notification title. |
+| `message`      | string | Rendered notification body. |
+| `firedAt`      | string | ISO-8601 UTC time the action fired (same format as the status echo's `validatedAt`). |
+
+The bridge does not retry or await delivery — it publishes the intent and moves
+on to the next action; the app owns fan-out and any per-subscription retry.
 
 ---
 

@@ -103,6 +103,39 @@ class TestValidate:
         assert "at least one trigger" in msgs
         assert "at least one action" in msgs
 
+    def test_notification_action_validates(self):
+        mgr = AutomationManager()
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "time", "at": "06:00"}],
+            "actions": [{"type": "notification", "title": "Tent hot", "message": "Temp is high"}],
+        }
+        assert mgr.validate([rule]) == []
+
+    def test_notification_missing_title_and_message_rejected(self):
+        mgr = AutomationManager()
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "time", "at": "06:00"}],
+            "actions": [{"type": "notification"}],
+        }
+        msgs = [e["message"] for e in mgr.validate([rule])]
+        assert "action 'notification' requires a title" in msgs
+        assert "action 'notification' requires a message" in msgs
+
+    def test_notification_empty_or_non_string_fields_rejected(self):
+        mgr = AutomationManager()
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "time", "at": "06:00"}],
+            "actions": [{"type": "notification", "title": "", "message": 42}],
+        }
+        errors = mgr.validate([rule])
+        msgs = [e["message"] for e in errors]
+        assert "action 'notification' requires a title" in msgs  # empty string
+        assert "action 'notification' requires a message" in msgs  # non-string
+        assert all(e["automationId"] == "a1" for e in errors)
+
     def test_nested_condition_entity_is_validated(self):
         _register("sensor.temp")
         _register("switch.fan", DeviceCategory.ACTUATOR)

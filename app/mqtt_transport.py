@@ -537,6 +537,26 @@ class MqttTransport(metaclass=SingletonMeta):
             logger.exception(f"Error publishing automations status: {e}")
             return False
 
+    async def publish_notification(self, notification: dict[str, Any]) -> bool:
+        """Publish a notification intent to the ``…/notify`` topic (qos 1, not
+        retained). A ``notification`` automation action fires this; the app fans
+        it out to its Web Push subscriptions. ``notification`` carries
+        ``{automationId, title, message, firedAt}``."""
+        if not self._connected or not self._client:
+            return False
+
+        notify_topic = self._topic("notify")
+        if not notify_topic:
+            return False
+
+        try:
+            self._client.publish(notify_topic, json.dumps(notification), qos=1, retain=False)
+            logger.info(f"Notification published: automationId={notification.get('automationId')}")
+            return True
+        except Exception as e:
+            logger.exception(f"Error publishing notification: {e}")
+            return False
+
     # ─── Command queue (consumed by main.py) ────────────────────────
 
     async def get_command(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:

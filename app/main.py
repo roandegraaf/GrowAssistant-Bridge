@@ -139,6 +139,10 @@ class Application:
         )
         self._engine = AutomationEngine(self._state_store, self._event_bus, executor)
         self._automations.set_engine(self._engine)
+        # A `notification` action publishes back to the app on …/notify, which
+        # fans it out as Web Push. The engine runs the action, so it owns the
+        # publisher — wired like the manager's status publisher above.
+        self._engine.set_notify_publisher(mqtt_transport.publish_notification)
 
         # Re-validate + re-report whenever the device set changes — the rule set
         # arrives retained (possibly before integrations register their devices),

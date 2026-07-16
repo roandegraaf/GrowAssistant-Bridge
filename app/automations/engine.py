@@ -31,7 +31,8 @@ property for a grow tent.
 import asyncio
 import json
 import logging
-from datetime import datetime
+from collections.abc import Awaitable
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from . import templates
@@ -40,6 +41,10 @@ from .executor import ActionExecutor
 from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
+
+# A notify publisher delivers a rendered notification intent to the app (over
+# MQTT); the ``notification`` action invokes it. Transport-provided at wiring.
+NotifyPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
 
 # Cap an event chain (fire_event → event trigger → fire_event …) so a bad rule
 # cannot spin the bridge. Past this depth events are dropped and logged.
@@ -216,6 +221,7 @@ class AutomationEngine:
         self._store = state_store
         self._bus = event_bus
         self._executor = executor
+        self._notify_publisher: Optional[NotifyPublisher] = None
         self._now = now
         self._sleep = sleep
         self._scheduler_interval = scheduler_interval
@@ -236,6 +242,13 @@ class AutomationEngine:
 
         self._started = False
         self._scheduler_task: Optional[asyncio.Task] = None
+
+    def set_notify_publisher(self, fn: NotifyPublisher) -> None:
+        """Register the coroutine that delivers a notification intent to the app
+        (transport-provided). Invoked by the ``notification`` action; if unset,
+        the action logs a warning and continues (same spirit as other optional
+        callbacks)."""
+        self._notify_publisher = fn
 
     # ─── Lifecycle ──────────────────────────────────────────────────
 
@@ -519,7 +532,7 @@ class AutomationEngine:
             for action in rule.get("actions") or []:
                 if not isinstance(action, dict):
                     continue
-                await self._run_action(action, trigger_ctx, variables, chain)
+                await self._run_action(action, trigger_ctx, variables, chain, rule_id)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -533,6 +546,7 @@ class AutomationEngine:
         trigger_ctx: dict[str, Any],
         variables: dict[str, Any],
         chain: EventChain,
+        rule_id: Any,
     ) -> None:
         atype = action.get("type")
         if atype == "call":
@@ -546,6 +560,8 @@ class AutomationEngine:
         elif atype == "fire_event":
             data = self._render_data(action.get("event_data"), trigger_ctx, variables)
             self._fire_event(action.get("event_type"), data, chain)
+        elif atype == "notification":
+            await self._action_notification(action, trigger_ctx, variables, rule_id)
         else:
             logger.warning("Unknown action type '%s' — skipping", atype)
 
@@ -606,6 +622,31 @@ class AutomationEngine:
             logger.warning("set_variable '%s' template failed: %s", name, e)
             variables[name] = None
 
+    async def _action_notification(
+        self,
+        action: dict[str, Any],
+        trigger_ctx: dict[str, Any],
+        variables: dict[str, Any],
+        rule_id: Any,
+    ) -> None:
+        """Render the title/message templates and hand the notification intent to
+        the app over MQTT (the app fans it out as Web Push). No-op with a warning
+        if no publisher is wired — like the other optional callbacks."""
+        title = self._render_str(action.get("title"), trigger_ctx, variables)
+        message = self._render_str(action.get("message"), trigger_ctx, variables)
+        if self._notify_publisher is None:
+            logger.warning(
+                "notification fired for rule '%s' but no notify publisher wired", rule_id
+            )
+            return
+        payload = {
+            "automationId": rule_id,
+            "title": title,
+            "message": message,
+            "firedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._notify_publisher(payload)
+
     def _render_data(
         self, data: Optional[dict[str, Any]], trigger_ctx: dict[str, Any], variables: dict[str, Any]
     ) -> dict[str, Any]:
@@ -619,6 +660,23 @@ class AutomationEngine:
         except templates.TemplateError as e:
             logger.warning("payload template failed: %s — using raw values", e)
             return dict(data or {})
+
+    def _render_str(
+        self, value: Any, trigger_ctx: dict[str, Any], variables: dict[str, Any]
+    ) -> Any:
+        """Render ``{{ … }}`` templates in a single string field (title/message),
+        falling back to the raw value if a template fails — mirrors
+        ``_render_data``'s handling for payload dicts."""
+        try:
+            return templates.render(
+                value,
+                variables=variables,
+                trigger=trigger_ctx,
+                states=self._store.snapshot(),
+            )
+        except templates.TemplateError as e:
+            logger.warning("notification template failed: %s — using raw value", e)
+            return value
 
     # ─── Conditions ─────────────────────────────────────────────────
 

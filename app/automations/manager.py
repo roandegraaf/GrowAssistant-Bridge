@@ -57,7 +57,7 @@ CONFIG_KEY = "automations"
 # only; the evaluator slice gives these runtime behaviour.
 TRIGGER_TYPES = {"state", "numeric_state", "time", "time_pattern", "event"}
 CONDITION_TYPES = {"state", "numeric_state", "time", "and", "or", "not"}
-ACTION_TYPES = {"call", "delay", "wait_for_state", "set_variable", "fire_event"}
+ACTION_TYPES = {"call", "delay", "wait_for_state", "set_variable", "fire_event", "notification"}
 
 # Node types that reference an entity (validated against the registry).
 _ENTITY_TRIGGERS = {"state", "numeric_state"}
@@ -271,6 +271,9 @@ class AutomationManager:
             return
         if ntype in entity_types:
             self._check_entity(node.get("entity"), label, ntype, rid, errors)
+        elif ntype == "notification":
+            # Only ever reached for an action node ("notification" ∈ ACTION_TYPES only).
+            self._check_notification(node, rid, errors)
 
     def _check_condition(self, node: Any, rid: Any, errors: list[dict[str, Any]]) -> None:
         if not isinstance(node, dict):
@@ -295,6 +298,17 @@ class AutomationManager:
             errors.append({"automationId": rid, "message": f"{label} '{ntype}' requires an entity"})
         elif registry.get_device(entity) is None:
             errors.append({"automationId": rid, "message": f"unknown entity '{entity}'"})
+
+    @staticmethod
+    def _check_notification(node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]) -> None:
+        """A ``notification`` action needs a non-empty string ``title`` and
+        ``message`` (the engine renders them as ``{{ … }}`` templates at run time)."""
+        for field in ("title", "message"):
+            value = node.get(field)
+            if not value or not isinstance(value, str):
+                errors.append(
+                    {"automationId": rid, "message": f"action 'notification' requires a {field}"}
+                )
 
     # ─── Status output ──────────────────────────────────────────────
 
