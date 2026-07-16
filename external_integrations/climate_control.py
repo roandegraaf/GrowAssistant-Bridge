@@ -265,10 +265,30 @@ class ClimateControlIntegration(Integration):
         return False
 
     async def receive_data(self):
-        """Receive data from devices (generator)."""
-        # This integration doesn't receive data directly
-        return
-        yield  # Make this a generator
+        """Yield each actuator's current on/off state.
+
+        The data-collection loop is the only path from an integration to app
+        telemetry AND the automation engine's state store, so actuator states
+        must surface here (``get_device_data()`` is never called by the
+        collection loop). Each item carries an explicit dotted ``entity_id``
+        matching the ``domain="climate"`` registry override — the fallback
+        class-name derivation would produce ``climatecontrol.<name>`` and the
+        samples would never join their manifest entity.
+        """
+        states = {
+            "heater": self.heater_on,
+            "fan": self.fan_on,
+            "humidifier": self.humidifier_on,
+            "dehumidifier": self.dehumidifier_on,
+        }
+        for name, device in self.devices.items():
+            on = states.get(device.get("type"))
+            if on is None:
+                continue
+            yield {
+                "entity_id": f"climate.{name}",
+                "value": "on" if on else "off",
+            }
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get current state of all devices."""
