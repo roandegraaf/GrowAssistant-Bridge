@@ -8,6 +8,7 @@ the fire_event loop guard, and end-to-end event/set_variable/fire_event flows.
 """
 
 import asyncio
+import logging
 from datetime import datetime
 
 import pytest
@@ -664,3 +665,132 @@ class TestActions:
             assert fake.calls == [("fan", "on", {})]
         finally:
             await engine.stop()
+
+    async def test_unknown_action_type_is_skipped_and_sequence_continues(self):
+        # An unrecognised action is skipped (logged), and later actions still run
+        # — the existing "unknown action" behaviour, unchanged by notification.
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [
+                        {"type": "explode"},  # unknown → skipped, no crash
+                        {"type": "call", "entity": "switch.fan", "service": "turn_on"},
+                    ],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+
+# ─── notification action ─────────────────────────────────────────────────────
+
+
+class TestNotificationAction:
+    async def test_renders_templates_and_calls_publisher_with_full_payload(self):
+        engine, store, _bus, _fake = _build()
+        await store.set("sensor.temp", 29)
+        published = []
+
+        async def publisher(payload):
+            published.append(payload)
+
+        engine.set_notify_publisher(publisher)
+        engine.apply_rules(
+            [
+                {
+                    "id": "notify-1",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [
+                        {
+                            "type": "notification",
+                            "title": "Tent is {{ states['sensor.temp'] }}°C",
+                            "message": "High temperature in the tent",
+                        }
+                    ],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+
+        assert len(published) == 1
+        payload = published[0]
+        assert payload["automationId"] == "notify-1"
+        assert payload["title"] == "Tent is 29°C"  # embedded template rendered
+        assert payload["message"] == "High temperature in the tent"
+        # firedAt is an ISO-8601 UTC timestamp (same format as the status echo).
+        fired = datetime.fromisoformat(payload["firedAt"])
+        assert fired.tzinfo is not None
+
+    async def test_no_publisher_wired_logs_warning_and_does_not_crash(self, caplog):
+        engine, _store, _bus, _fake = _build()  # notify publisher left unset
+        engine.apply_rules(
+            [
+                {
+                    "id": "notify-2",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [{"type": "notification", "title": "hi", "message": "there"}],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            with caplog.at_level(logging.WARNING):
+                engine.emit_event("go")
+                await engine.join()  # must not raise
+        finally:
+            await engine.stop()
+        assert "no notify publisher wired" in caplog.text
+
+    async def test_failed_template_falls_back_to_raw_value(self):
+        engine, _store, _bus, _fake = _build()
+        published = []
+
+        async def publisher(payload):
+            published.append(payload)
+
+        engine.set_notify_publisher(publisher)
+        engine.apply_rules(
+            [
+                {
+                    "id": "notify-3",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [
+                        {
+                            "type": "notification",
+                            "title": "Alert {{ bogus_name }}",  # unknown name → render fails
+                            "message": "ok",
+                        }
+                    ],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()  # a failed render must not crash the run
+        finally:
+            await engine.stop()
+
+        assert len(published) == 1
+        # On a failed template the field falls back to its raw value (mirrors _render_data).
+        assert published[0]["title"] == "Alert {{ bogus_name }}"
+        assert published[0]["message"] == "ok"

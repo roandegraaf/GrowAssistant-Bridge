@@ -47,6 +47,7 @@ def test_topic_prefix_and_topics(transport):
     assert transport._topic("telemetry") == "ga/tenantX/bridge/bridgeY/telemetry"
     assert transport._topic("cmd/+") == "ga/tenantX/bridge/bridgeY/cmd/+"
     assert transport._topic("automations") == "ga/tenantX/bridge/bridgeY/automations"
+    assert transport._topic("notify") == "ga/tenantX/bridge/bridgeY/notify"
 
 
 @pytest.mark.asyncio
@@ -178,6 +179,35 @@ async def test_publish_automations_status_retained_topic(transport):
     assert json.loads(args[1]) == status
     assert kwargs["qos"] == 1
     assert kwargs["retain"] is True
+
+
+@pytest.mark.asyncio
+async def test_publish_notification_topic_and_payload(transport):
+    """publish_notification publishes to …/notify at qos1, not retained, with the
+    JSON notification payload verbatim."""
+    notification = {
+        "automationId": "auto_1",
+        "title": "Tent hot",
+        "message": "Temp is high",
+        "firedAt": "2026-07-16T12:00:00+00:00",
+    }
+    ok = await transport.publish_notification(notification)
+    assert ok is True
+
+    transport._client.publish.assert_called_once()
+    args, kwargs = transport._client.publish.call_args
+    assert args[0] == "ga/tenantX/bridge/bridgeY/notify"
+    assert json.loads(args[1]) == notification
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is False
+
+
+@pytest.mark.asyncio
+async def test_publish_notification_not_connected(transport):
+    """publish_notification returns False when not connected."""
+    transport._connected = False
+    ok = await transport.publish_notification({"automationId": "auto_1"})
+    assert ok is False
 
 
 def test_on_message_routes_webrtc_offer_to_callback(transport):
