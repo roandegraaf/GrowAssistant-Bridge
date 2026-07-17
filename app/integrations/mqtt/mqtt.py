@@ -41,6 +41,7 @@ class MQTTIntegration(Integration):
         self.message_queue: asyncio.Queue = asyncio.Queue()
         self.topics: dict[str, dict[str, str]] = {}
         self._latest_device_data: dict[str, dict[str, Any]] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         if not self.config.get("enabled", False):
             logger.info("MQTT Integration is disabled in configuration.")
@@ -63,7 +64,11 @@ class MQTTIntegration(Integration):
                 logger.error(f"Invalid topic configuration: {topic_config}")
                 continue
 
-            self.topics[name] = {"name": name, "type": topic_type}
+            self.topics[name] = {
+                "name": name,
+                "type": topic_type,
+                "value_key": topic_config.get("value_key"),
+            }
 
         self.broker = self.config.get("broker", "localhost")
         self.port = self.config.get("port", 1883)
@@ -95,8 +100,52 @@ class MQTTIntegration(Integration):
         logger.info("Disconnected from MQTT broker")
         self.connected = False
 
+    def _match_topic(self, topic: str) -> dict[str, str] | None:
+        """Resolve an incoming message topic to its configured topic entry.
+
+        Exact match first, then MQTT wildcard matching (``+``/``#``) so a
+        configured subscription like ``sensors/+/temperature`` still resolves.
+        """
+        exact = self.topics.get(topic)
+        if exact:
+            return exact
+        for sub, topic_info in self.topics.items():
+            if mqtt.topic_matches_sub(sub, topic):
+                return topic_info
+        return None
+
+    @staticmethod
+    def _extract_value(payload_data: Any, value_key: str | None) -> Any:
+        """Pull the telemetry value out of a decoded MQTT payload.
+
+        An explicit per-topic ``value_key`` wins; otherwise scalars are taken
+        as-is and dicts are probed for the conventional ``value``/``state``
+        keys, falling back to a single-entry dict's lone value. Returns None
+        when nothing usable is found.
+        """
+        if value_key:
+            if isinstance(payload_data, dict):
+                return payload_data.get(value_key)
+            return None
+        if isinstance(payload_data, (str, int, float, bool)):
+            return payload_data
+        if isinstance(payload_data, dict):
+            for key in ("value", "state"):
+                if payload_data.get(key) is not None:
+                    return payload_data[key]
+            if len(payload_data) == 1:
+                (lone_value,) = payload_data.values()
+                if isinstance(lone_value, (str, int, float, bool)):
+                    return lone_value
+        return None
+
     def _on_message(self, client, userdata, msg):
-        """Callback when message is received from MQTT broker."""
+        """Callback when message is received from MQTT broker.
+
+        Runs on paho's network thread — the parsed message is handed to the
+        asyncio queue via ``call_soon_threadsafe`` on the loop captured in
+        ``connect()`` (``asyncio.get_event_loop()`` raises off-loop).
+        """
         try:
             topic = msg.topic
             payload = msg.payload.decode("utf-8")
@@ -105,21 +154,45 @@ class MQTTIntegration(Integration):
             try:
                 payload_data = json.loads(payload)
             except json.JSONDecodeError:
-                payload_data = {"value": payload}
+                payload_data = payload
 
-            message_data = {"topic": topic, "timestamp": timestamp, "data": payload_data}
+            topic_info = self._match_topic(topic)
+            if topic_info is None:
+                logger.debug(f"Ignoring message on unconfigured topic {topic}")
+                return
 
-            topic_info = self.topics.get(topic)
-            if topic_info:
-                message_data["type"] = topic_info.get("type")
-                self._latest_device_data[topic] = {
-                    "data": payload_data,
-                    "timestamp": timestamp,
-                }
+            topic_type = topic_info["type"]
+            value = self._extract_value(payload_data, topic_info.get("value_key"))
+            if value is None:
+                logger.warning(
+                    f"MQTT message on {topic} has no usable value "
+                    f"(configure value_key for this topic?): {payload[:200]}"
+                )
 
-            asyncio.run_coroutine_threadsafe(
-                self.message_queue.put(message_data), asyncio.get_event_loop()
+            # Telemetry contract: explicit entity_id matching registration
+            # (register_capabilities registers `mqtt.<type>`), value top-level.
+            message_data = self.telemetry_sample(
+                topic_type,
+                value,
+                domain="mqtt",
+                topic=topic,
+                timestamp=timestamp,
+                data=payload_data,
             )
+
+            self._latest_device_data[topic_type] = {
+                "value": value,
+                "type": topic_type,
+                "topic": topic,
+                "data": payload_data,
+                "timestamp": timestamp,
+            }
+
+            loop = self._loop
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(self.message_queue.put_nowait, message_data)
+            else:
+                logger.warning("MQTT integration loop unavailable; dropping message")
 
             logger.debug(f"Received message on topic {topic}: {payload}")
         except Exception as e:
@@ -135,6 +208,7 @@ class MQTTIntegration(Integration):
             return False
 
         try:
+            self._loop = asyncio.get_running_loop()
             self.client = mqtt.Client(client_id=self.client_id)
             self.client.on_connect = self._on_connect
             self.client.on_disconnect = self._on_disconnect

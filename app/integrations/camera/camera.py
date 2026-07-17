@@ -291,8 +291,45 @@ class CameraIntegration(Integration):
         yield {}  # pragma: no cover - makes this an async generator
 
     async def get_device_data(self) -> dict[str, Any]:
-        """Cameras carry no state."""
-        return {}
+        """Report each camera's stream status from go2rtc.
+
+        Queries go2rtc's ``/api/streams`` and maps each configured camera to
+        its live state: ``streaming`` when go2rtc has at least one active
+        producer for the stream, ``idle`` when the stream is configured but
+        nothing is consuming/producing, ``offline`` when go2rtc is not
+        running or unreachable.
+        """
+        if self._process is None or self._process.returncode is not None:
+            return {
+                name.split(".", 1)[1]: {"type": "camera", "status": "offline", "value": "offline"}
+                for name in self._streams
+            }
+
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(f"{self._api_base}/api/streams")
+            streams_info = resp.json() if resp.status_code == 200 else {}
+        except (httpx.HTTPError, ValueError) as e:
+            logger.debug(f"Could not query go2rtc streams: {e}")
+            streams_info = None
+
+        result: dict[str, Any] = {}
+        for stream_id, source in self._streams.items():
+            name = stream_id.split(".", 1)[1]
+            if streams_info is None:
+                result[name] = {"type": "camera", "status": "offline", "value": "offline"}
+                continue
+            info = streams_info.get(stream_id) or {}
+            producers = info.get("producers") or []
+            active = any(p.get("state") for p in producers if isinstance(p, dict))
+            result[name] = {
+                "type": "camera",
+                "status": "streaming" if active else "idle",
+                "value": "streaming" if active else "idle",
+                "source": source,
+                "consumers": len(info.get("consumers") or []),
+            }
+        return result
 
     async def send_data(self, data: dict[str, Any]) -> bool:
         """Cameras are not commanded via the data path — no-op success."""

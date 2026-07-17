@@ -31,7 +31,7 @@ stream) has been removed.
 - [9. Commands (`…/cmd/<id>` + `…/cmd/<id>/ack`)](#9-commands-cmdid--cmdidack)
 - [10. Automations (`…/automations` + `…/automations/status`)](#10-automations-automations--automationsstatus)
 - [11. WebRTC camera signalling (`…/webrtc/offer` + `…/webrtc/answer`)](#11-webrtc-camera-signalling-webrtcoffer--webrtcanswer)
-- [12. Role taxonomy (`GrowRole`)](#12-role-taxonomy-growrole)
+- [12. Device classification (tags)](#12-device-classification-tags)
 - [13. Stable identity rules](#13-stable-identity-rules)
 - [14. Liveness model](#14-liveness-model)
 - [15. Glossary](#15-glossary)
@@ -65,8 +65,8 @@ that both the bridge and the app connect to as clients:
 
 The bridge is the **source of truth for which devices physically exist** (the
 manifest). The app is the **source of truth for desired state** (automations,
-role assignments, commands). Retained messages carry the last-known desired and
-reported state across reconnects.
+device classification, commands). Retained messages carry the last-known
+desired and reported state across reconnects.
 
 ### Identity primitives
 
@@ -436,10 +436,19 @@ A batch of timestamped samples, bridge → app, qos 1, **not retained**. Source:
 | `ts`       | string                  | ISO-8601 bridge event time. |
 
 Ingest is idempotent and order-tolerant (§5.3): the bridge replays its offline
-queue on reconnect and may resend points. The bridge derives `entityId` for each
-sample from the integration name + device key via the shared
-`app/entity_id.py` `derive_domain` — the **same** derivation the manifest uses,
-so telemetry and manifest never disagree on the domain half of the key.
+queue on reconnect and may resend points.
+
+**Telemetry contract (bridge-internal).** Every integration's `receive_data`
+yields samples built by `Integration.telemetry_sample` — an explicit dotted
+`entity_id` equal to what `register_capabilities` registered, plus a top-level
+`value`. The transport publishes those verbatim, so a sample always joins its
+manifest entity app-side. For third-party external integrations that predate
+the contract, the transport falls back to deriving the id from the integration
+name + a device-name key via the shared `app/entity_id.py` `derive_domain` —
+the **same** derivation the manifest uses — and to extracting a value nested
+under `data`. Samples with no derivable entity id or no usable value are
+dropped at the bridge and counted (visible on the bridge dashboard's
+telemetry panel), never published as junk ids.
 
 ---
 
@@ -456,7 +465,7 @@ The app→bridge write path (dashboard widgets). The app publishes a command to
 {
   "id": "cmd_8f2c…",
   "targetType": "actuator",
-  "targetId": "water_pump",
+  "targetId": "gpio.water_pump",
   "action": "on",
   "payload": {"value": 250}
 }
@@ -466,16 +475,21 @@ The app→bridge write path (dashboard widgets). The app publishes a command to
 |--------------|--------|-------|
 | `id`         | string | App-generated; echoed in the ack. |
 | `targetType` | string | Always `"actuator"` — only writable entities are commandable. |
-| `targetId`   | string | **The device *name* the bridge registered the actuator under — a bare name, not the full `entityId`.** See the note below. |
+| `targetId`   | string | The full `<domain>.<name>` **entityId** of the target (the manifest join key, §13). |
 | `action`     | string | Bridge vocabulary: `"on"` / `"off"` / `"set"`. The app has already translated any HA service to this (there is no service translation on the command path — that seam only exists in the bridge's automations executor). |
 | `payload`    | object | Free-form; a `set` carries `{"value": …}`. Passed verbatim to `integration.execute_command`. |
 
-> **Known wart — bare `targetId`.** The command carries the device **name**, not
-> the `<domain>.<name>` entityId, and relies on the bridge's legacy name-indexed
-> lookup (`registry.get_actuator_integration`). This works today because names
-> are unique across the actuator index, but it is ambiguous if two domains ever
-> register the same actuator name. Whether to move commands to the full
-> `entityId` on the wire (both repos change) is an open question (§16).
+The bridge resolves a dotted `targetId` through the registry
+(`registry.get_device(entityId)` → owning integration + local device name),
+exactly like the automations executor resolves rule targets — unambiguous
+across integrations. An unknown entityId is acked `success:false` with
+`"Unknown entity: …"`.
+
+> **Backward compatibility.** A bare device name (no dot) is still accepted and
+> resolved through the legacy name-indexed lookup
+> (`registry.get_actuator_integration`), so bridges behind on updates keep
+> working with older app versions. Bare names are ambiguous if two domains
+> register the same actuator name — new senders must use the full entityId.
 
 ### 9.2 Ack (`cmd/<id>/ack`, bridge → app)
 
@@ -647,48 +661,28 @@ via §2.3.
 
 ---
 
-## 12. Role taxonomy (`GrowRole`)
+## 12. Device classification (tags)
 
-The bridge does not interpret roles — role assignments are app-owned state used
-for operator-facing labels and automation authoring. The taxonomy is shared so
-both sides agree on the strings.
+Devices are classified **app-side with tags** — free-form, tenant-scoped
+labels attached to entities/devices in the app's database (`Tag`,
+`entity_tags`, `device_tags`). The bridge plays no part in classification:
+nothing about tags crosses the wire, the bridge stores no assignments, and
+command routing never consults them. The bridge's job ends at announcing what
+exists (manifest: `deviceType`, `entityDomain`, `writable`, `unit`) and
+carrying telemetry/commands for it.
 
-| Role | Compatible `deviceType` | Cardinality |
-|------|-------------------------|-------------|
-| `WATER_PUMP` | `pump` | SINGLETON |
-| `PH_UP_PUMP` | `pump` | SINGLETON |
-| `PH_DOWN_PUMP` | `pump` | SINGLETON |
-| `NUTRIENT_A_PUMP` | `pump` | SINGLETON |
-| `NUTRIENT_B_PUMP` | `pump` | SINGLETON |
-| `NUTRIENT_C_PUMP` | `pump` | SINGLETON |
-| `INTAKE_FAN` | `fan` | SINGLETON |
-| `EXHAUST_FAN` | `fan` | SINGLETON |
-| `CIRCULATION_FAN` | `fan` | MULTIPLE |
-| `MAIN_LIGHT` | `light` | SINGLETON |
-| `HEATER` | `heater` | SINGLETON |
-| `HUMIDIFIER` | `humidity` | SINGLETON |
-| `DEHUMIDIFIER` | `humidity` | SINGLETON |
-| `TEMPERATURE_SENSOR` | `temperature` | SINGLETON |
-| `HUMIDITY_SENSOR` | `humidity` | SINGLETON |
-| `PH_SENSOR` | `ph` | SINGLETON |
-| `EC_SENSOR` | `ec` | SINGLETON |
-| `WATER_LEVEL_SENSOR` | `water_level` | SINGLETON |
-| `WATER_TEMPERATURE_SENSOR` | `temperature` | SINGLETON |
-| `SOIL_MOISTURE_SENSOR` | `soil_moisture` | MULTIPLE |
-| `CO2_SENSOR` | `co2` | SINGLETON |
-| `AMBIENT_LIGHT_SENSOR` | `illuminance`, `par` | SINGLETON |
-| `PRESSURE_SENSOR` | `pressure` | MULTIPLE |
-| `FLOW_SENSOR` | `flow` | MULTIPLE |
-| `IGNORED` | (any) | MULTIPLE |
-| `UNASSIGNED` | (any) | MULTIPLE |
+On the app side, onboarding offers a curated tag set
+(`lib/onboarding/templates.ts` `CURATED_TAGS`: `temperature`, `humidity`,
+`light`, `fan`, `soil-moisture`, `ec`, `ph`, `water-temp`) and starter
+dashboard templates bind widgets by those tags. Beyond the curated set, tags
+are unconstrained — no cardinality rules, no compatibility matrix.
 
-- **SINGLETON:** at most one device per space may carry this role.
-- **MULTIPLE:** any number; a `slot` disambiguates them.
-- `UNASSIGNED` is the default for a freshly-discovered device; `IGNORED` is an
-  explicit "exists but don't automate it" decision. Both accept any `deviceType`;
-  the app still accepts telemetry from `IGNORED` devices.
-
-Role↔deviceType compatibility and cardinality are enforced app-side.
+> **History.** An earlier revision of this section specified a shared
+> `GrowRole` taxonomy (WATER_PUMP, EXHAUST_FAN, …) with per-space cardinality
+> rules, and the bridge briefly stored role assignments for dashboard labels.
+> That design was dropped (2026-07-17, "drop roles, keep tags") before the app
+> ever implemented it: the app's shipped classification is tags, and the
+> bridge's role-assignment storage was removed as dead code.
 
 ---
 
@@ -774,21 +768,19 @@ derived app-side; the bridge does not consume it.
   received; matched against the app's published hash to derive sync state.
 - **LWT** — MQTT Last-Will-and-Testament; the retained `{"online": false}` the
   broker publishes to `…/state` if the bridge dies uncleanly.
-- **`GrowRole`** — operator-meaningful role names (§12); app-owned, bridge-opaque.
+- **Tags** — app-side device classification labels (§12); app-owned, never on the wire.
 
 ---
 
 ## 16. Open questions / pending contract notes
 
-1. **Command `targetId` (bare name vs entityId).** Commands carry the bare device
-   name (§9.1), relying on the bridge's name index. Moving to the full `entityId`
-   on the wire is safer but changes both repos. To be decided in the automations
-   slice.
+1. **Command `targetId` (bare name vs entityId) — RESOLVED.** Commands now
+   carry the full `entityId` (§9.1); the bridge resolves it through the
+   registry. Bare names remain accepted for backward compatibility.
 2. **Broker-secret User-Agent gate.** `lib/bridge/mqtt-auth.ts` supports an
    optional shared-secret `User-Agent` (`MQTT_HTTP_BROKER_SECRET`) as
    defence-in-depth on the `/api/mqtt/*` routes; the primary control is keeping
    those routes off the public ingress.
-3. **Soft-removal & role reconciliation.** The app owns soft-removal of devices
-   absent from the latest manifest (§6.4) and cardinality reconciliation of roles
-   across manifests (new devices arrive `UNASSIGNED`; existing assignments are
-   untouched).
+3. **Soft-removal.** The app owns soft-removal of devices absent from the
+   latest manifest (§6.4); tags survive soft-removal, so a device that
+   reappears keeps its classification.

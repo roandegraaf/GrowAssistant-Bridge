@@ -78,6 +78,14 @@ class MQTTTopicConfig(BaseModel):
 
     name: str = Field(..., min_length=1, description="MQTT topic name/path")
     type: str = Field(..., min_length=1, description="Device type (e.g., temperature, humidity)")
+    value_key: str | None = Field(
+        default=None,
+        description=(
+            "Key holding the reading inside a JSON payload dict. Optional: "
+            "scalar payloads and dicts with a 'value'/'state' key are "
+            "extracted automatically."
+        ),
+    )
 
 
 class MQTTIntegrationConfig(BaseIntegrationConfig):
@@ -119,6 +127,14 @@ class HTTPEndpointConfig(BaseModel):
     )
     interval: int = Field(
         default=300, ge=0, description="Polling interval in seconds (0 to disable polling)"
+    )
+    value_key: str | None = Field(
+        default=None,
+        description=(
+            "Dot-path to the reading inside the response JSON (e.g. "
+            "'data.temperature'). Optional: scalar responses and dicts with a "
+            "'value'/'state' key are extracted automatically."
+        ),
     )
 
 

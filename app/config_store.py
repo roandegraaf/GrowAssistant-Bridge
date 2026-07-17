@@ -212,51 +212,6 @@ class ConfigStore(metaclass=SingletonMeta):
         self._db_conn.commit()
         logger.debug(f"Saved manifest_hash={manifest_hash[:12]}…")
 
-    # ─── Device assignments (display-only, from SSE config event) ──
-
-    def save_device_assignments(self, assignments: list[dict], version: int) -> None:
-        """Persist the latest device assignments list from the API.
-
-        Stored under the ``device_assignments`` key via the existing
-        ``save_config`` mechanism. The payload is the raw list of
-        ``{entityId, role, slot}`` dicts as received over SSE; this is
-        used solely by the bridge web UI for labeling. Command routing
-        never consults this list.
-        """
-        # save_config uses json.dumps which round-trips lists fine, but
-        # the type hint says ``dict``. Wrapping happens at the SQL layer
-        # via json serialization, so a top-level list works in practice.
-        self.save_config("device_assignments", assignments, version)
-        logger.info(f"Saved device_assignments version={version} count={len(assignments)}")
-
-    def get_device_assignments(self) -> list[dict]:
-        """Return the stored device assignments, or [] if none stored.
-
-        Mirrors the read pattern of ``get_full_config`` but returns just
-        the list (no version pair), since callers only need the data.
-        """
-        if not self._db_conn:
-            return []
-
-        cursor = self._db_conn.execute(
-            "SELECT value FROM local_config WHERE key = ?", ("device_assignments",)
-        )
-        row = cursor.fetchone()
-        if not row:
-            return []
-        try:
-            data = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError):
-            logger.error("Error decoding device_assignments from store")
-            return []
-        if not isinstance(data, list):
-            logger.warning(
-                "Stored device_assignments is not a list (got %s); returning []",
-                type(data).__name__,
-            )
-            return []
-        return data
-
     def queue_outbound(self, endpoint: str, payload: dict):
         """Queue an outbound request for later delivery.
 

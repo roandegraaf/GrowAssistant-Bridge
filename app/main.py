@@ -382,11 +382,15 @@ class Application:
                                 # Feed the automation StateStore using the SAME
                                 # entity-id derivation as telemetry, so trigger /
                                 # condition entity refs line up with the manifest.
-                                if self._state_store is not None:
-                                    value = item.get("value")
-                                    entity_id = mqtt_transport._derive_entity_id(item)
-                                    if entity_id and value is not None:
+                                value = item.get("value")
+                                entity_id = mqtt_transport._derive_entity_id(item)
+                                if entity_id and value is not None:
+                                    if self._state_store is not None:
                                         await self._state_store.set(entity_id, value)
+                                    # Fan the sample out to every integration so
+                                    # control-style ones (climate) can follow
+                                    # sensors they don't own.
+                                    await self._fan_out_telemetry(entity_id, value)
                     except Exception as e:
                         logger.error(f"Error collecting data from {name}: {e}")
 
@@ -400,6 +404,18 @@ class Application:
             logger.error(f"Error in data collection task: {e}")
 
         logger.info("Data collection task stopped")
+
+    async def _fan_out_telemetry(self, entity_id: str, value: Any) -> None:
+        """Offer a collected sample to every integration's on_telemetry hook.
+
+        One misbehaving hook must never break collection — errors are logged
+        and swallowed.
+        """
+        for name, integration in self._integrations.items():
+            try:
+                await integration.on_telemetry(entity_id, value)
+            except Exception:
+                logger.exception(f"on_telemetry hook of {name} raised for {entity_id}")
 
     async def _data_transmission_task(self):
         """Task for transmitting data to the API."""
@@ -480,7 +496,23 @@ class Application:
             return
 
         try:
-            if target_type == "sensor":
+            # Primary path (§16.1): targetId is the full `<domain>.<name>`
+            # entity id — unambiguous across integrations, resolved exactly
+            # like the automations executor resolves rule targets. The bare
+            # device name remains accepted for backward compatibility with
+            # older app versions (legacy name-indexed lookup).
+            local_name = target_id
+            if "." in target_id:
+                device = registry.get_device(target_id)
+                if device is None:
+                    logger.error(f"Unknown entity id in command: {target_id}")
+                    await mqtt_transport.send_command_result(
+                        command_id, False, f"Unknown entity: {target_id}"
+                    )
+                    return
+                integration_name = device.integration_name
+                local_name = device.name
+            elif target_type == "sensor":
                 integration_name = registry.get_sensor_integration(target_id)
             elif target_type == "actuator":
                 integration_name = registry.get_actuator_integration(target_id)
@@ -499,7 +531,7 @@ class Application:
                 return
 
             integration = self._integrations[integration_name]
-            success = await integration.execute_command(target_id, action, payload)
+            success = await integration.execute_command(local_name, action, payload)
 
             # Seed a real lifecycle event so rules can react to app-issued
             # commands (fresh chain — a rule reacting to this is depth-guarded).

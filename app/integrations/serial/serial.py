@@ -192,8 +192,17 @@ class SerialIntegration(Integration):
     async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the serial device.
 
-        Yields:
-            Dict[str, Any]: Data received from the serial device.
+        Telemetry contract: a parsed JSON line must identify its device so the
+        sample can join a registered ``serial.<name>`` entity (declare the
+        devices under this integration's ``devices:`` config). Accepted line
+        shapes, most explicit first:
+
+        - ``{"entity_id": "serial.pump1", "value": …}`` — passed through.
+        - ``{"device": "pump1", "value": …}`` (or ``"name"``) — mapped to
+          ``serial.<device>``.
+
+        Lines with neither (including non-JSON lines, buffered as raw
+        ``data``) cannot join any entity and are skipped with a log.
         """
         if not self.serial_connected or not self.serial or not self.serial.is_open:
             logger.error("Serial not connected. Cannot receive data.")
@@ -203,7 +212,23 @@ class SerialIntegration(Integration):
         self.read_buffer.clear()
 
         for data in buffer_copy:
-            yield data
+            explicit = data.get("entity_id")
+            if isinstance(explicit, str) and "." in explicit:
+                yield data
+                continue
+
+            device = data.get("device") or data.get("name")
+            if device:
+                extras = {k: v for k, v in data.items() if k not in ("device", "name", "value")}
+                yield self.telemetry_sample(
+                    str(device), data.get("value"), domain="serial", **extras
+                )
+                continue
+
+            logger.warning(
+                f"Skipping serial line with no device identity "
+                f"(expected 'entity_id' or 'device' key): {str(data)[:200]}"
+            )
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for the serial device.

@@ -185,6 +185,99 @@ class TestWebAppAPIEndpoints:
             data = json.loads(response.data)
             assert "size" in data
 
+    def test_get_actuators(self, authenticated_client):
+        """`/api/actuators` lists actuator devices with entity ids + actions."""
+        with patch("web.app.registry") as mock_registry:
+            actuator = MagicMock()
+            actuator.is_actuator.return_value = True
+            actuator.entity_id = "gpio.pump_relay"
+            actuator.name = "pump_relay"
+            actuator.device_type = "gpio_output"
+            actuator.capabilities = []
+            actuator.integration_name = "GPIOIntegration"
+
+            sensor = MagicMock()
+            sensor.is_actuator.return_value = False
+
+            mock_registry.get_all_devices.return_value = [actuator, sensor]
+
+            response = authenticated_client.get("/api/actuators")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data == [
+            {
+                "entityId": "gpio.pump_relay",
+                "name": "pump_relay",
+                "deviceType": "gpio_output",
+                # Empty capabilities fall back to on/off (display-only).
+                "actions": ["on", "off"],
+                "integration": "GPIOIntegration",
+            }
+        ]
+
+    def test_get_telemetry(self, authenticated_client):
+        """`/api/telemetry` combines transport stats with queue + connection."""
+        with (
+            patch("app.mqtt_transport.mqtt_transport") as mock_transport,
+            patch("app.queue_manager.queue_manager") as mock_queue,
+        ):
+            mock_transport.get_telemetry_status.return_value = {
+                "entities": {"simulator.tent_temperature": {"value": 22.5, "ts": "T"}},
+                "stats": {"published": 5, "dropped_no_entity": 0, "dropped_no_value": 1},
+            }
+            mock_transport.is_connected.return_value = True
+            mock_queue.size.return_value = 3
+
+            response = authenticated_client.get("/api/telemetry")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["entities"]["simulator.tent_temperature"]["value"] == 22.5
+        assert data["stats"]["published"] == 5
+        assert data["queueSize"] == 3
+        assert data["connected"] is True
+
+    def test_send_command_enqueues_wire_shape(self, authenticated_client):
+        """Manual Control commands are enqueued in the §16.1 wire shape
+        (targetType/targetId with the full entity id) — the exact dict
+        `_process_command` consumes."""
+        with (
+            patch("web.app.registry") as mock_registry,
+            patch("app.mqtt_transport.mqtt_transport") as mock_transport,
+        ):
+            device = MagicMock()
+            device.is_actuator.return_value = True
+            device.entity_id = "gpio.pump_relay"
+            mock_registry.get_device.return_value = device
+
+            response = authenticated_client.post(
+                "/api/send-command",
+                json={"target": "gpio.pump_relay", "action": "on", "payload": {"value": 1}},
+            )
+
+        assert response.status_code == 200
+        mock_registry.get_device.assert_called_once_with("gpio.pump_relay")
+        mock_transport._enqueue_command.assert_called_once()
+        command = mock_transport._enqueue_command.call_args[0][0]
+        assert command["targetType"] == "actuator"
+        assert command["targetId"] == "gpio.pump_relay"
+        assert command["action"] == "on"
+        assert command["payload"] == {"value": 1}
+        assert command["id"].startswith("web-")
+
+    def test_send_command_unknown_actuator(self, authenticated_client):
+        """An unknown or non-actuator target is rejected with 404."""
+        with patch("web.app.registry") as mock_registry:
+            mock_registry.get_device.return_value = None
+
+            response = authenticated_client.post(
+                "/api/send-command",
+                json={"target": "gpio.nope", "action": "on"},
+            )
+
+        assert response.status_code == 404
+
     def test_get_integrations_no_instance(self):
         """Test getting integrations when app instance not available."""
         with patch("web.app.config") as mock_config:
@@ -226,8 +319,8 @@ class TestWebAppAPIEndpoints:
 
             assert response.status_code == 503
 
-    def test_get_devices_includes_assigned_role(self, mock_config):
-        """`/api/devices` annotates each device with its assigned_role/role_slot."""
+    def test_get_devices_keys_by_domain(self, mock_config):
+        """`/api/devices` keys entries `<domain>.<device>` (entity-id form)."""
         with (
             patch("web.app.config", mock_config),
             patch("web.app.auth_manager") as mock_auth,
@@ -239,44 +332,14 @@ class TestWebAppAPIEndpoints:
             }.get(key, default)
             mock_auth.is_authenticated.return_value = True
 
-            # Stub out the integration collection so the test stays fast and
-            # doesn't need a running event loop. The route still exercises
-            # the _attach_assigned_roles annotation path because we patch
-            # _collect_device_data_from_integrations to return an already-
-            # annotated dict — but for a more accurate test we patch
-            # config_store.get_device_assignments and call _attach directly.
-            from web.app import _attach_assigned_roles, app
-
             device_data = {
                 "gpio.relay1": {"state": "off"},
-                "esphome.scd30_temperature": {"value": 22.5},
-                "gpio.relay99": {"state": "off"},  # no assignment stored
-                "broken.integration": {"error": "Timeout getting data"},
+                "simulator.tent_temperature": {"value": 22.5},
             }
-
-            with patch("web.app.config_store") as mock_store:
-                mock_store.get_device_assignments.return_value = [
-                    {"entityId": "gpio.relay1", "role": "WATER_PUMP", "slot": None},
-                    {
-                        "entityId": "esphome.scd30_temperature",
-                        "role": "TEMPERATURE_SENSOR",
-                        "slot": 2,
-                    },
-                ]
-                _attach_assigned_roles(device_data)
-
-            assert device_data["gpio.relay1"]["assigned_role"] == "WATER_PUMP"
-            assert device_data["gpio.relay1"]["role_slot"] is None
-            assert device_data["esphome.scd30_temperature"]["assigned_role"] == "TEMPERATURE_SENSOR"
-            assert device_data["esphome.scd30_temperature"]["role_slot"] == 2
-            # Unmatched device gets the UNASSIGNED default
-            assert device_data["gpio.relay99"]["assigned_role"] == "UNASSIGNED"
-            assert device_data["gpio.relay99"]["role_slot"] is None
-            # Error entries are not annotated
-            assert "assigned_role" not in device_data["broken.integration"]
-
-            # Sanity: the route itself still wires up
             mock_collect.return_value = device_data
+
+            from web.app import app
+
             app.config["TESTING"] = True
             app.config["SECRET_KEY"] = "test-secret"
             mock_app_instance = MagicMock()
@@ -291,6 +354,7 @@ class TestWebAppAPIEndpoints:
                 assert response.status_code == 200
                 data = json.loads(response.data)
                 assert "gpio.relay1" in data
+                assert "simulator.tent_temperature" in data
 
 
 class TestWebAppConfigEndpoints:

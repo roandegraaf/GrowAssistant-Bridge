@@ -306,18 +306,22 @@ class ESPHomeIntegration(Integration):
         mapping = runtime["by_key"][key]
         runtime["entities"][key] = {"value": value, "ts": time.time(), **mapping}
 
-        # Push to the inbox so the next receive_data() call drains it.
+        # Push to the inbox so the next receive_data() call drains it. The
+        # sample carries the explicit entity_id matching register_capabilities
+        # (`esphome.<device_name>_<mapping_name>`) so it joins its manifest
+        # entity — the old `<device_id>:<object_id>` device_id never did.
         if self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(
                     self._inbox.put_nowait,
-                    {
-                        "device": runtime["name"],
-                        "entity": mapping["object_id"],
-                        "type": mapping["type"],
-                        "value": value,
-                        "device_id": f"{device_id}:{mapping['object_id']}",
-                    },
+                    self.telemetry_sample(
+                        f"{runtime['name']}_{mapping['name']}",
+                        value,
+                        domain="esphome",
+                        device=runtime["name"],
+                        entity=mapping["object_id"],
+                        type=mapping["type"],
+                    ),
                 )
             except RuntimeError:
                 pass

@@ -355,7 +355,7 @@ class TestNegotiateWebRTC:
 
 
 class TestDataPath:
-    """Cameras have no telemetry/state/command path."""
+    """Cameras emit no telemetry; get_device_data reports go2rtc stream status."""
 
     @pytest.mark.asyncio
     async def test_receive_data_yields_nothing(self):
@@ -364,9 +364,79 @@ class TestDataPath:
         assert items == []
 
     @pytest.mark.asyncio
-    async def test_get_device_data_empty(self):
+    async def test_get_device_data_offline_without_go2rtc(self):
+        """No supervised go2rtc process → every camera reports offline."""
         integration = CameraIntegration(_config())
-        assert await integration.get_device_data() == {}
+        assert await integration.get_device_data() == {
+            "tent1": {"type": "camera", "status": "offline", "value": "offline"}
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_device_data_streaming_from_go2rtc(self):
+        """An active producer in go2rtc's /api/streams → status streaming."""
+        integration = CameraIntegration(_config())
+        proc = MagicMock()
+        proc.returncode = None
+        integration._process = proc
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "camera.tent1": {
+                "producers": [{"state": "active"}],
+                "consumers": [{}],
+            }
+        }
+        mock_client = _mock_async_client(response=response)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            data = await integration.get_device_data()
+
+        assert data == {
+            "tent1": {
+                "type": "camera",
+                "status": "streaming",
+                "value": "streaming",
+                "source": "ffmpeg:test",
+                "consumers": 1,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_device_data_idle_when_no_producers(self):
+        """Configured but nothing producing → status idle."""
+        integration = CameraIntegration(_config())
+        proc = MagicMock()
+        proc.returncode = None
+        integration._process = proc
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"camera.tent1": {"producers": [], "consumers": []}}
+        mock_client = _mock_async_client(response=response)
+
+        with patch.object(httpx, "AsyncClient", return_value=mock_client):
+            data = await integration.get_device_data()
+
+        assert data["tent1"]["status"] == "idle"
+
+    @pytest.mark.asyncio
+    async def test_get_device_data_offline_when_api_unreachable(self):
+        """go2rtc process alive but API errors → offline (not a crash)."""
+        integration = CameraIntegration(_config())
+        proc = MagicMock()
+        proc.returncode = None
+        integration._process = proc
+
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+
+        with patch.object(httpx, "AsyncClient", return_value=client):
+            data = await integration.get_device_data()
+
+        assert data["tent1"]["status"] == "offline"
 
     @pytest.mark.asyncio
     async def test_send_data_noop_true(self):

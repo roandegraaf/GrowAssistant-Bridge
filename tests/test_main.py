@@ -932,6 +932,90 @@ class TestProcessCommand:
             )
 
     @pytest.mark.asyncio
+    async def test_entity_id_target_resolves_via_registry(
+        self, reset_application_singleton, mock_dependencies, mock_integration
+    ):
+        """A dotted targetId (`<domain>.<name>`, §16.1) resolves through
+        registry.get_device to the owning integration, and the integration
+        receives the LOCAL device name — not the dotted id."""
+        device = MagicMock()
+        device.integration_name = "test_integration"
+        device.name = "pump-1"
+        mock_dependencies["registry"].get_device.return_value = device
+        mock_integration.execute_command.return_value = True
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"test_integration": mock_integration}
+
+            await app._process_command(
+                {
+                    "id": "cmd-1",
+                    "targetType": "actuator",
+                    "targetId": "gpio.pump-1",
+                    "action": "on",
+                }
+            )
+
+            mock_dependencies["registry"].get_device.assert_called_once_with("gpio.pump-1")
+            # The legacy name-indexed lookups are bypassed entirely.
+            mock_dependencies["registry"].get_actuator_integration.assert_not_called()
+            mock_integration.execute_command.assert_called_once_with("pump-1", "on", {})
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
+                "cmd-1", True, "Command executed successfully"
+            )
+
+    @pytest.mark.asyncio
+    async def test_entity_id_target_unknown_entity(
+        self, reset_application_singleton, mock_dependencies, mock_integration
+    ):
+        """An unknown dotted targetId is acked success=false."""
+        mock_dependencies["registry"].get_device.return_value = None
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"test_integration": mock_integration}
+
+            await app._process_command(
+                {
+                    "id": "cmd-1",
+                    "targetType": "actuator",
+                    "targetId": "gpio.nope",
+                    "action": "on",
+                }
+            )
+
+            mock_integration.execute_command.assert_not_called()
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
+                "cmd-1", False, "Unknown entity: gpio.nope"
+            )
+
+    @pytest.mark.asyncio
+    async def test_bare_name_target_still_routes(
+        self, reset_application_singleton, mock_dependencies, mock_integration
+    ):
+        """Backward compatibility: a bare (dotless) targetId still resolves
+        via the legacy name-indexed actuator lookup."""
+        mock_dependencies["registry"].get_actuator_integration.return_value = "test_integration"
+        mock_integration.execute_command.return_value = True
+
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._integrations = {"test_integration": mock_integration}
+
+            await app._process_command(
+                {
+                    "id": "cmd-1",
+                    "targetType": "actuator",
+                    "targetId": "pump-1",
+                    "action": "on",
+                }
+            )
+
+            mock_dependencies["registry"].get_device.assert_not_called()
+            mock_integration.execute_command.assert_called_once_with("pump-1", "on", {})
+
+    @pytest.mark.asyncio
     async def test_command_execution_exception(
         self, reset_application_singleton, mock_dependencies, mock_integration
     ):
