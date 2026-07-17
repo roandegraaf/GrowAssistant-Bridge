@@ -30,7 +30,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.auth import auth_manager
 from app.config import config
-from app.config_store import config_store
+from app.entity_id import derive_domain
 from app.registry import registry
 
 # Constant for masked sensitive values
@@ -393,7 +393,10 @@ def get_queue_info():
 def _collect_device_data_from_integrations(app_instance) -> dict:
     """Collect device data from all integrations asynchronously.
 
-    Schedules coroutines on the main event loop and waits for results with timeout.
+    Schedules coroutines on the main event loop and waits for results with
+    timeout. Entries are keyed ``<domain>.<device>`` (the same
+    ``<integration domain>.<name>`` form used for entity ids) so dashboard
+    keys line up with the ids shown everywhere else.
     """
     if not app_instance.loop:
         raise RuntimeError("Event loop missing")
@@ -408,66 +411,33 @@ def _collect_device_data_from_integrations(app_instance) -> dict:
     all_device_data = {}
 
     for name, future in futures_by_name.items():
+        domain = derive_domain(name)
+        # Registered devices carry the authoritative entity id (integrations
+        # may register under a custom domain, e.g. climate.*); fall back to
+        # the class-derived domain for unregistered extras.
+        entity_ids = {d.name: d.entity_id for d in registry.get_devices_by_integration(name)}
         if future in not_done:
-            all_device_data[name] = {"error": "Timeout getting data"}
+            all_device_data[domain] = {"error": "Timeout getting data"}
             continue
 
         try:
             result = future.result()
             if isinstance(result, dict):
                 for device_name, device_info in result.items():
-                    all_device_data[f"{name}.{device_name}"] = device_info
+                    key = entity_ids.get(device_name, f"{domain}.{device_name}")
+                    all_device_data[key] = device_info
             else:
                 logger.warning(
                     "Unexpected data type from %s.get_device_data: %s", name, type(result)
                 )
         except Exception as e:
             logger.error("Error getting result from integration %s: %s", name, e)
-            all_device_data[name] = {"error": str(e)}
+            all_device_data[domain] = {"error": str(e)}
 
     if not_done:
         logger.warning("Timeout waiting for device data from %d integrations", len(not_done))
 
-    _attach_assigned_roles(all_device_data)
-
     return all_device_data
-
-
-def _attach_assigned_roles(device_data: dict) -> None:
-    """Annotate each device dict with its assigned_role / role_slot.
-
-    Builds a lookup from ``config_store.get_device_assignments()`` keyed
-    by entity_id, then attaches ``assigned_role`` (str) and ``role_slot``
-    (int|None) to each device entry whose key matches. Devices with no
-    stored assignment get ``assigned_role="UNASSIGNED"`` and
-    ``role_slot=None`` for consistency. Error-shaped entries
-    (``{"error": ...}``) are left untouched.
-    """
-    try:
-        assignments = config_store.get_device_assignments()
-    except Exception as e:  # defensive — never let UI break on store issues
-        logger.warning("Could not load device assignments: %s", e)
-        assignments = []
-
-    lookup = {
-        a.get("entityId"): {
-            "role": a.get("role", "UNASSIGNED"),
-            "slot": a.get("slot"),
-        }
-        for a in assignments
-        if isinstance(a, dict) and a.get("entityId")
-    }
-
-    for entity_id, info in device_data.items():
-        if not isinstance(info, dict) or "error" in info:
-            continue
-        match = lookup.get(entity_id)
-        if match is not None:
-            info["assigned_role"] = match["role"]
-            info["role_slot"] = match["slot"]
-        else:
-            info["assigned_role"] = "UNASSIGNED"
-            info["role_slot"] = None
 
 
 @app.route("/api/devices", methods=["GET"])
@@ -596,10 +566,74 @@ def update_config():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/actuators", methods=["GET"])
+@login_required
+def get_actuators():
+    """List commandable devices (actuators) with their supported actions.
+
+    Feeds the dashboard's Manual Control form: each entry carries the full
+    entity id (the command targetId), the local name, its device type and the
+    actions its type supports.
+    """
+    try:
+        actuators = []
+        for device in registry.get_all_devices():
+            if not device.is_actuator():
+                continue
+            # Actuator types outside the registry's action map (gpio_output,
+            # http_endpoint, …) register with no capabilities; every actuator
+            # understands on/off, so offer that as the display-only default.
+            # This does NOT touch the registry/manifest.
+            actions = list(device.capabilities) or ["on", "off"]
+            actuators.append(
+                {
+                    "entityId": device.entity_id,
+                    "name": device.name,
+                    "deviceType": device.device_type,
+                    "actions": actions,
+                    "integration": device.integration_name,
+                }
+            )
+        actuators.sort(key=lambda a: a["entityId"])
+        return jsonify(actuators)
+    except Exception as e:
+        logger.exception("Error listing actuators: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/telemetry", methods=["GET"])
+@login_required
+def get_telemetry():
+    """Telemetry health: last published sample per entity + pipeline counters.
+
+    Combines the transport's per-entity last-published map and drop counters
+    with the outbound queue depth and broker connection state — the "is data
+    actually flowing" view the dashboard shows.
+    """
+    try:
+        from app.mqtt_transport import mqtt_transport
+        from app.queue_manager import queue_manager
+
+        status = mqtt_transport.get_telemetry_status()
+        status["queueSize"] = queue_manager.size()
+        status["connected"] = mqtt_transport.is_connected()
+        return jsonify(status)
+    except Exception as e:
+        logger.exception("Error getting telemetry status: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/send-command", methods=["POST"])
 @login_required
 def send_command():
-    """Send a command to a device."""
+    """Send a command to a device.
+
+    Expects ``{target: <entityId>, action, payload}`` where ``target`` is the
+    full ``<domain>.<name>`` entity id (as listed by ``/api/actuators``). The
+    command is enqueued in the exact shape ``_process_command`` consumes —
+    ``{id, targetType, targetId, action, payload}`` — the same wire contract
+    the app uses (§16.1), so the manual path and the app path stay identical.
+    """
     try:
         data = request.json
         if not data:
@@ -611,16 +645,17 @@ def send_command():
         if not action or not target:
             return jsonify({"error": "Missing action or target"}), 400
 
-        action_key = f"{action}_{target}"
-        if not registry.has_integration_for_action(action_key):
-            return jsonify({"error": f"No integration found for action: {action_key}"}), 404
+        device = registry.get_device(target)
+        if device is None or not device.is_actuator():
+            return jsonify({"error": f"Unknown actuator: {target}"}), 404
 
         from app.mqtt_transport import mqtt_transport
 
         command = {
-            "id": f"web-{int(time.time())}",
+            "id": f"web-{int(time.time() * 1000)}",
+            "targetType": "actuator",
+            "targetId": device.entity_id,
             "action": action,
-            "target": target,
             "payload": data.get("payload", {}),
         }
 

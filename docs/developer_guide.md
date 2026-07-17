@@ -194,7 +194,11 @@ class MyIntegration(Integration):
             if device.get("type") == "temperature":
                 self.log_data(LogType.TEMPERATURE, value)
 
-            yield {"device": name, "type": device.get("type"), "value": value}
+            # Telemetry contract: build samples with telemetry_sample() so
+            # they carry an explicit entity_id matching what you registered
+            # (plus a top-level value) — that's what makes the sample join
+            # its manifest entity in the app. Extra keys ride along.
+            yield self.telemetry_sample(name, value, type=device.get("type"))
 
     async def get_device_data(self) -> Dict[str, Any]:
         """Return current state of all devices."""
@@ -355,7 +359,7 @@ async def test_execute_command(config):
 |--------|-----------|-------------|
 | `connect()` | `async () -> bool` | Establish connection, return True on success |
 | `send_data(data)` | `async (Dict) -> bool` | Send data/command to device |
-| `receive_data()` | `async () -> Generator` | Yield data from devices |
+| `receive_data()` | `async () -> Generator` | Yield data from devices. Yield samples built with `telemetry_sample()` — explicit `entity_id` matching registration + top-level `value` — or they will not join a manifest entity |
 | `get_device_data()` | `async () -> Dict` | Return current state of all devices |
 
 ### Optional Methods
@@ -363,6 +367,8 @@ async def test_execute_command(config):
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `get_config_key()` | `classmethod () -> str` | Return config key (default: class name without 'Integration', lowercase) |
+| `telemetry_sample(name, value, *, domain=None, **extra)` | `(str, Any) -> Dict` | Build a contract-conformant telemetry sample: explicit `entity_id` (derived from the class name, or `domain` override for custom-domain registrations) + top-level `value` |
+| `on_telemetry(entity_id, value)` | `async (str, Any) -> None` | Observe every joined sample collected from ANY integration (fan-out from the data-collection loop). Lets control-style integrations follow sensors they don't own |
 | `register_capabilities(registry)` | `(DeviceRegistry) -> None` | Self-register sensors/actuators |
 | `execute_command(target_id, action, payload)` | `async () -> bool` | Unified command interface |
 | `disconnect()` | `async () -> None` | Clean up resources |
@@ -664,26 +670,17 @@ relevant to plugin authors:
 | Endpoint               | Returns                                                                                  |
 |------------------------|------------------------------------------------------------------------------------------|
 | `GET /api/integrations`| `[{name, type, status}, ...]` for each loaded integration. 202 if integrations are still loading; `[]` if none enabled. (`web/app.py:299-334`) |
-| `GET /api/devices`     | `{entity_id: {<integration's get_device_data fields>, assigned_role, role_slot}, ...}` — collected by calling `integration.get_device_data()` on every integration with a 10 s timeout per call. (`web/app.py:355-456`) |
-| `GET /api/device-types`| `{deviceType: [actions, ...]}` from the registry. (`web/app.py:258-271`) |
-| `GET /api/config`      | The bridge's `config.yaml` (sensitive fields masked). (`web/app.py:475-491`) |
+| `GET /api/devices`     | `{entity_id: {<integration's get_device_data fields>}, ...}` — collected by calling `integration.get_device_data()` on every integration with a 10 s timeout per call. Keys are the registry entity ids (custom-domain registrations like `climate.*` included). |
+| `GET /api/device-types`| `{deviceType: [actions, ...]}` from the registry. |
+| `GET /api/actuators`   | `[{entityId, name, deviceType, actions, integration}, ...]` for every registered actuator — feeds the dashboard's Manual Control form. Empty capabilities fall back to `on`/`off` (display-only). |
+| `GET /api/telemetry`   | `{entities: {entityId: {value, ts}}, stats: {published, dropped_no_entity, dropped_no_value, last_publish_ts}, queueSize, connected}` — the transport's last-published sample per entity plus pipeline health. |
+| `POST /api/send-command` | Body `{target: <entityId>, action, payload}`; enqueues `{id, targetType, targetId, action, payload}` — the same §16.1 wire shape the app uses, resolved by `_process_command` via the registry. |
+| `GET /api/config`      | The bridge's `config.yaml` (sensitive fields masked). |
 
-### `assigned_role` flow into `/api/devices`
-
-`_attach_assigned_roles` (`web/app.py:398-432`) reads
-`config_store.get_device_assignments()` and joins on `entityId`. The
-result decorates each device entry with:
-
-- `assigned_role`: a `GrowRole` string (e.g. `"WATER_PUMP"`,
-  `"UNASSIGNED"`, `"IGNORED"`).
-- `role_slot`: an int for `MULTIPLE`-cardinality roles, else `null`.
-
-If `get_device_data()` returned an error-shaped dict (`{"error": ...}`)
-for some integration, the role attachment is skipped for that entry.
-
-This is the only place the bridge surfaces role assignments — they are
-pure UI labels. **Command routing never consults this list**; the
-bridge always routes by `entity_id` via the registry.
+Command routing is by `entity_id` via the registry. (Role assignments —
+the old `assigned_role`/`role_slot` decorations — were removed when the
+GrowRole design was dropped in favour of app-side tags; see
+`docs/bridge-protocol.md` §12.)
 
 ---
 

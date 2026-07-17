@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from pydantic import BaseModel, ValidationError
 
+from app.entity_id import derive_entity_id
+
 if TYPE_CHECKING:
     from app.registry import DeviceRegistry
 
@@ -145,14 +147,50 @@ class Integration(abc.ABC):
         """
         pass
 
+    def telemetry_sample(
+        self,
+        name: str,
+        value: Any,
+        *,
+        domain: Optional[str] = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Build a canonical telemetry sample for ``receive_data`` to yield.
+
+        This is the shared telemetry contract: every sample carries an explicit
+        dotted ``entity_id`` that matches what ``register_capabilities``
+        registered, plus a top-level ``value``. The transport publishes these
+        verbatim, so samples built here always join their manifest entity on
+        the app side.
+
+        ``name`` is the device's local name exactly as registered; ``domain``
+        overrides the class-name-derived domain for integrations that register
+        under a custom domain (e.g. climate control registers ``climate.*``
+        while its class would derive ``climatecontrol``).
+        """
+        entity_id = f"{domain}.{name}" if domain else derive_entity_id(self.name, name)
+        return {"entity_id": entity_id, "value": value, **extra}
+
     @abc.abstractmethod
     async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the device/service.
 
         Yields:
-            Dict[str, Any]: Data received from the device/service.
+            Dict[str, Any]: Data received from the device/service. Telemetry
+            samples must follow the shared contract — build them with
+            :meth:`telemetry_sample` so they carry an explicit ``entity_id``
+            (matching registration) and a top-level ``value``.
         """
         pass
+
+    async def on_telemetry(self, entity_id: str, value: Any) -> None:
+        """Observe a telemetry sample collected from ANY integration.
+
+        The data-collection loop fans every joined sample out to all loaded
+        integrations, so control-style integrations (e.g. climate control) can
+        react to sensor readings without a direct dependency on the producing
+        integration. Default: ignore.
+        """
 
     @abc.abstractmethod
     async def get_device_data(self) -> dict[str, Any]:

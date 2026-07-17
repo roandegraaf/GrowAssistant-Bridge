@@ -42,8 +42,12 @@ integrations:
         headers: null
         interval: 300
         method: GET
-        name: example_endpoint
+        name: example_endpoint  # registers as entity http.example_endpoint
         url: https://api.example.com/data
+        # Where the reading lives in the response JSON. Scalar responses and
+        # dicts with a 'value'/'state' key are extracted automatically; use a
+        # dot-path for anything else (e.g. data.temperature).
+        # value_key: data.temperature
 
   mqtt:
     broker: localhost
@@ -53,8 +57,12 @@ integrations:
     port: 1883
     topics:
       '0':
-        name: sensors/temperature
-        type: temperature
+        name: sensors/temperature  # topic to subscribe to (wildcards + / # ok)
+        type: temperature          # registers as entity mqtt.temperature
+        # Where the reading lives in a JSON payload dict. Scalar payloads and
+        # dicts with a 'value'/'state' key are extracted automatically; set
+        # this for any other key (e.g. temp_c).
+        # value_key: temp_c
       '1':
         name: sensors/humidity
         type: humidity
@@ -100,6 +108,14 @@ integrations:
     port: /dev/ttyUSB0
     stopbits: 1
     timeout: 1
+    # Declare the devices your serial firmware reports so they register (and
+    # their telemetry joins). Firmware lines must be JSON identifying the
+    # device: {"device": "water_temp", "value": 19.4} — or an explicit
+    # {"entity_id": "serial.water_temp", "value": 19.4}.
+    devices:
+      '0':
+        name: water_temp     # registers as entity serial.water_temp
+        type: temperature
 
   camera:
     # WebRTC camera streaming brokered through a locally-supervised go2rtc
@@ -126,6 +142,25 @@ integrations:
         # Any go2rtc stream source string (ffmpeg:/rtsp:/exec:/...). Example
         # below is a self-contained test pattern (no real camera needed):
         source: "exec:ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=15 -f lavfi -i sine=frequency=1000 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 30 -c:a aac -f rtsp {output}"
+
+  # Autonomous climate control (external_integrations/climate_control.py).
+  # Follows the configured sensor entities from collected telemetry and drives
+  # its actuators (heater/humidifier/dehumidifier) toward the targets received
+  # from the app's settings, with hysteresis.
+  climatecontrol:
+    enabled: false
+    hysteresis: 0.5
+    update_interval: 30
+    # Entity ids of the sensors to follow (any integration's entities work):
+    temperature_entity: simulator.tent_temperature
+    humidity_entity: simulator.tent_humidity
+    devices:
+      '0':
+        name: tent_heater      # registers as entity climate.tent_heater
+        type: heater
+      '1':
+        name: tent_humidifier  # registers as entity climate.tent_humidifier
+        type: humidifier
 
 queue:
   flush_interval: 300

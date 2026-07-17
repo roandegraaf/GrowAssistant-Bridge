@@ -51,10 +51,16 @@ class GPIOIntegration(Integration):
             logger.warning("GPIO Integration enabled in config but RPi.GPIO not available.")
             return
 
-        pin_configs = self.config.get("pins", [])
+        pin_configs = self.config.get("pins", {})
         if not pin_configs:
             logger.warning("No GPIO pins configured.")
             return
+
+        # The schema (and config.example.yaml) define pins as a dict keyed by
+        # id; a bare list is tolerated for older configs. Iterating the dict
+        # itself would yield the string keys and crash on .get().
+        if isinstance(pin_configs, dict):
+            pin_configs = list(pin_configs.values())
 
         for pin_config in pin_configs:
             name = pin_config.get("name")
@@ -171,12 +177,15 @@ class GPIOIntegration(Integration):
                 pin = pin_config["pin"]
                 state = GPIO.input(pin)
                 is_high = state == GPIO.HIGH
-                yield {
-                    "pin_name": name,
-                    "pin": pin,
-                    "state": "HIGH" if is_high else "LOW",
-                    "value": 1 if is_high else 0,
-                }
+                # Telemetry contract: explicit entity_id matching the
+                # registered `gpio.<pin_name>` entity.
+                yield self.telemetry_sample(
+                    name,
+                    1 if is_high else 0,
+                    domain="gpio",
+                    pin=pin,
+                    state="HIGH" if is_high else "LOW",
+                )
             except Exception as e:
                 logger.error(f"Failed to read GPIO pin {name}: {e}")
 

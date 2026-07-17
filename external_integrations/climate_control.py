@@ -43,9 +43,16 @@ class ClimateControlIntegration(Integration):
         self.target_temperature: Optional[float] = None
         self.target_humidity: Optional[int] = None
 
-        # Current sensor readings (would come from sensor integration)
+        # Current sensor readings, pushed by the data-collection loop via
+        # on_telemetry() from whichever integration owns the configured
+        # sensor entities.
         self.current_temperature: Optional[float] = None
-        self.current_humidity: Optional[int] = None
+        self.current_humidity: Optional[float] = None
+
+        # Entity ids (`<domain>.<name>`) of the sensors this controller
+        # follows, e.g. `simulator.tent_temperature` or `esphome.tent_dht`.
+        self.temperature_entity: Optional[str] = config.get("temperature_entity")
+        self.humidity_entity: Optional[str] = config.get("humidity_entity")
 
         # Actuator states
         self.heater_on: bool = False
@@ -132,10 +139,16 @@ class ClimateControlIntegration(Integration):
         """Main control logic - runs continuously."""
         logger.info("Climate control loop started")
 
+        if not self.temperature_entity and not self.humidity_entity:
+            logger.warning(
+                "Climate control has no temperature_entity/humidity_entity configured — "
+                "the autonomous loop will idle until sensor entities are set"
+            )
+
         while True:
             try:
-                # Update sensor readings (in real implementation, get from sensor integration)
-                await self._update_sensor_readings()
+                # Current readings arrive via on_telemetry(); the loop just
+                # compares them against the targets.
 
                 # Temperature control with hysteresis
                 if self.target_temperature is not None and self.current_temperature is not None:
@@ -188,17 +201,24 @@ class ClimateControlIntegration(Integration):
                 logger.error(f"Error in climate control loop: {e}")
                 await asyncio.sleep(self.update_interval)
 
-    async def _update_sensor_readings(self):
-        """Update current sensor readings.
+    async def on_telemetry(self, entity_id: str, value: Any) -> None:
+        """Track the configured sensor entities from collected telemetry.
 
-        In a real implementation, this would:
-        - Get readings from a sensor integration
-        - Or read from shared state/registry
-
-        For this example, values would be set externally.
+        The data-collection loop fans every joined sample out here; samples
+        whose entity_id matches ``temperature_entity`` / ``humidity_entity``
+        update the current readings the control loop acts on. Non-numeric
+        values are ignored.
         """
-        # Placeholder - in real implementation, get from sensor integration
-        pass
+        if entity_id == self.temperature_entity:
+            try:
+                self.current_temperature = float(value)
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-numeric temperature reading: {value!r}")
+        if entity_id == self.humidity_entity:
+            try:
+                self.current_humidity = float(value)
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-numeric humidity reading: {value!r}")
 
     async def _set_heater(self, on: bool):
         """Control heater hardware."""
@@ -285,10 +305,7 @@ class ClimateControlIntegration(Integration):
             on = states.get(device.get("type"))
             if on is None:
                 continue
-            yield {
-                "entity_id": f"climate.{name}",
-                "value": "on" if on else "off",
-            }
+            yield self.telemetry_sample(name, "on" if on else "off", domain="climate")
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get current state of all devices."""

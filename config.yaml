@@ -87,6 +87,8 @@ integrations:
     enabled: true
     hysteresis: 0.5
     update_interval: 30
+    temperature_entity: simulator.tent_temperature
+    humidity_entity: simulator.tent_humidity
     devices:
       heater:
         name: main_heater

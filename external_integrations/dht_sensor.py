@@ -149,30 +149,40 @@ class DHTIntegration(Integration):
         logger.warning("DHT sensors are read-only and do not accept commands")
         return False
 
+    def register_capabilities(self, registry) -> None:
+        """Register each DHT device plus its humidity companion.
+
+        The base implementation registers only the configured device (its
+        temperature reading); ``receive_data`` also yields a
+        ``<name>_humidity`` sample, which must be registered too or that
+        telemetry never joins a manifest entity.
+        """
+        for name in self.devices:
+            registry.register_sensor(name, self.name, device_type="temperature")
+            registry.register_sensor(f"{name}_humidity", self.name, device_type="humidity")
+
     async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Receive data from the DHT sensors.
 
         Yields:
-            Dict[str, Any]: Data received from the sensors.
+            Dict[str, Any]: Telemetry-contract samples (explicit entity_id
+            matching registration) for temperature and humidity.
         """
         for name, device in self.devices.items():
             # Only yield data if we've successfully read from the sensor
             if device["last_success"] > 0:
-                # Yield temperature data
-                yield {
-                    "device": name,
-                    "type": "temperature",
-                    "value": device["temperature"],
-                    "timestamp": device["last_success"],
-                }
-
-                # Yield humidity data (with a modified device name)
-                yield {
-                    "device": f"{name}_humidity",
-                    "type": "humidity",
-                    "value": device["humidity"],
-                    "timestamp": device["last_success"],
-                }
+                yield self.telemetry_sample(
+                    name,
+                    device["temperature"],
+                    type="temperature",
+                    timestamp=device["last_success"],
+                )
+                yield self.telemetry_sample(
+                    f"{name}_humidity",
+                    device["humidity"],
+                    type="humidity",
+                    timestamp=device["last_success"],
+                )
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get the current data for all DHT sensors.

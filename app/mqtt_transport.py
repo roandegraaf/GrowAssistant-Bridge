@@ -62,6 +62,17 @@ class MqttTransport(metaclass=SingletonMeta):
         self._webrtc_callback: Optional[Callable] = None
         self._keepalive = config.get("api.mqtt_keepalive", DEFAULT_MQTT_KEEPALIVE)
 
+        # Telemetry observability (consumed by the bridge web dashboard):
+        # last published sample per entity + running counters for the samples
+        # the contract had to drop (no entity id / no usable value).
+        self._last_published: dict[str, dict[str, Any]] = {}
+        self._telemetry_stats: dict[str, Any] = {
+            "published": 0,
+            "dropped_no_entity": 0,
+            "dropped_no_value": 0,
+            "last_publish_ts": None,
+        }
+
         logger.info("MQTT transport initialized")
 
     # ─── Topic helpers ──────────────────────────────────────────────
@@ -444,11 +455,24 @@ class MqttTransport(metaclass=SingletonMeta):
         for point in data_points or []:
             entity_id = self._derive_entity_id(point)
             if not entity_id:
+                self._telemetry_stats["dropped_no_entity"] += 1
+                logger.warning(
+                    f"Dropping telemetry point with no derivable entity_id "
+                    f"(integration={point.get('integration')}, keys={sorted(point.keys())})"
+                )
+                continue
+            value = self._extract_value(point)
+            if value is None:
+                self._telemetry_stats["dropped_no_value"] += 1
+                logger.warning(
+                    f"Dropping telemetry point for '{entity_id}' with no usable value "
+                    f"(keys={sorted(point.keys())})"
+                )
                 continue
             samples.append(
                 {
                     "entityId": entity_id,
-                    "value": point.get("value"),
+                    "value": value,
                     "ts": self._iso_ts(point.get("timestamp")),
                 }
             )
@@ -460,11 +484,30 @@ class MqttTransport(metaclass=SingletonMeta):
             self._client.publish(
                 telemetry_topic, json.dumps({"samples": samples}), qos=1, retain=False
             )
+            self._telemetry_stats["published"] += len(samples)
+            self._telemetry_stats["last_publish_ts"] = self._now_ms()
+            for sample in samples:
+                self._last_published[sample["entityId"]] = {
+                    "value": sample["value"],
+                    "ts": sample["ts"],
+                }
             logger.info(f"Telemetry published: {len(samples)} samples")
             return True, f"Sent {len(samples)} samples"
         except Exception as e:
             logger.exception(f"Error publishing telemetry: {e}")
             return False, f"Publish error: {e}"
+
+    def get_telemetry_status(self) -> dict[str, Any]:
+        """Snapshot of telemetry health for the bridge web dashboard.
+
+        Returns the per-entity last-published samples plus the running
+        published/dropped counters. Cheap copies — safe to call from the
+        Flask thread.
+        """
+        return {
+            "entities": {k: dict(v) for k, v in self._last_published.items()},
+            "stats": dict(self._telemetry_stats),
+        }
 
     async def send_command_result(self, command_id: str, success: bool, message: str) -> bool:
         """Publish a command result to ``cmd/{id}/ack``."""
@@ -574,14 +617,18 @@ class MqttTransport(metaclass=SingletonMeta):
 
     @staticmethod
     def _derive_entity_id(point: dict[str, Any]) -> Optional[str]:
-        """Derive a stable ``<domain>.<name>`` entity_id from a telemetry point.
+        """Resolve the ``<domain>.<name>`` entity_id for a telemetry point.
 
-        The domain half is derived by the shared
-        :func:`app.entity_id.derive_domain` — the same helper the manifest side
-        (``registry.py``) uses, so telemetry and manifest never disagree on the
-        domain. Each integration yields a different key for the device name, so
-        we probe a series of keys in order of specificity. Returns None when no
-        name can be found.
+        The contract (``Integration.telemetry_sample``) is an explicit dotted
+        ``entity_id`` on every sample — all built-in and bundled external
+        integrations comply, so the explicit branch is the normal path. The
+        key-probing fallback remains for third-party external integrations
+        that yield a bare device name; its domain half uses the shared
+        :func:`app.entity_id.derive_domain` (the same helper the manifest side
+        uses) so a fallback-derived id can still join. Returns None when no
+        name can be found. The raw MQTT ``topic`` is deliberately NOT probed —
+        a topic path is never a registered device name, so an id derived from
+        it could never join its manifest entity.
         """
         explicit = point.get("entity_id")
         if isinstance(explicit, str) and "." in explicit:
@@ -598,12 +645,35 @@ class MqttTransport(metaclass=SingletonMeta):
             or point.get("entity_id")
             or point.get("sensor")
             or point.get("endpoint_name")  # HTTP integration
-            or point.get("topic")  # MQTT integration
             or point.get("pin_name")  # GPIO integration
             or point.get("name")
             or point.get("target")
         )
         return f"{domain}.{name}" if name else None
+
+    @staticmethod
+    def _extract_value(point: dict[str, Any]) -> Any:
+        """Pull the canonical value out of a telemetry point.
+
+        Contract: the value lives top-level under ``value``. For third-party
+        integrations that nest the reading under ``data`` (a scalar, or a dict
+        with a ``value``/``state`` key), fall back to that. Returns None when
+        no usable value exists — the caller drops (and counts) the sample,
+        since the app-side ingest would discard a null value anyway.
+        """
+        value = point.get("value")
+        if value is not None:
+            return value
+
+        data = point.get("data")
+        if isinstance(data, dict):
+            for key in ("value", "state"):
+                if data.get(key) is not None:
+                    return data[key]
+            return None
+        if isinstance(data, (str, int, float, bool)):
+            return data
+        return None
 
     @staticmethod
     def _iso_ts(timestamp_ms: Optional[int]) -> str:

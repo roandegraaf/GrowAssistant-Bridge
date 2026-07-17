@@ -55,10 +55,15 @@ async def test_send_data_telemetry_payload(transport):
     """send_data builds {"samples":[...]} with entityId/value/ts and publishes
     to the telemetry topic at qos1, not retained."""
     points = [
+        # Contract sample: explicit dotted entity_id, top-level value.
+        {"entity_id": "mqtt.temperature", "value": "22.5", "timestamp": 1000},
+        # Fallback derivation for legacy external integrations (name key).
         {"integration": "GPIOIntegration", "pin_name": "pump1", "value": 1, "timestamp": 0},
-        {"integration": "MQTTIntegration", "topic": "temp1", "value": "22.5", "timestamp": 1000},
-        # No derivable entity_id → dropped.
+        # No derivable entity_id → dropped (raw topic is never probed).
+        {"integration": "MQTTIntegration", "topic": "sensors/temp1", "value": 9, "timestamp": 0},
         {"value": 99, "timestamp": 2000},
+        # No usable value → dropped.
+        {"entity_id": "mqtt.humidity", "timestamp": 3000},
     ]
     ok, _ = await transport.send_data(points)
     assert ok is True
@@ -73,15 +78,48 @@ async def test_send_data_telemetry_payload(transport):
     assert kwargs["retain"] is False
 
     samples = payload["samples"]
-    assert len(samples) == 2  # third point dropped
+    assert len(samples) == 2  # last three points dropped
     assert samples[0] == {
+        "entityId": "mqtt.temperature",
+        "value": "22.5",  # value passed through uncoerced
+        "ts": "1970-01-01T00:00:01Z",
+    }
+    assert samples[1] == {
         "entityId": "gpio.pump1",
         "value": 1,
         "ts": "1970-01-01T00:00:00Z",
     }
-    assert samples[1]["entityId"] == "mqtt.temp1"
-    assert samples[1]["value"] == "22.5"  # value passed through uncoerced
-    assert samples[1]["ts"] == "1970-01-01T00:00:01Z"
+
+    # Drops are counted and last-published samples are tracked per entity.
+    status = transport.get_telemetry_status()
+    assert status["stats"]["published"] == 2
+    assert status["stats"]["dropped_no_entity"] == 2
+    assert status["stats"]["dropped_no_value"] == 1
+    assert status["entities"]["mqtt.temperature"]["value"] == "22.5"
+    assert status["entities"]["gpio.pump1"]["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_send_data_extracts_nested_value(transport):
+    """Legacy points nesting the reading under `data` still publish: a scalar
+    data, or a dict with a value/state key, is extracted as the value."""
+    points = [
+        {"entity_id": "http.api1", "data": {"value": 42}, "timestamp": 0},
+        {"entity_id": "http.api2", "data": {"state": "on"}, "timestamp": 0},
+        {"entity_id": "http.api3", "data": 3.14, "timestamp": 0},
+        # Un-extractable dict → dropped.
+        {"entity_id": "http.api4", "data": {"foo": 1, "bar": 2}, "timestamp": 0},
+    ]
+    ok, _ = await transport.send_data(points)
+    assert ok is True
+
+    args, _kwargs = transport._client.publish.call_args
+    samples = json.loads(args[1])["samples"]
+    assert [(s["entityId"], s["value"]) for s in samples] == [
+        ("http.api1", 42),
+        ("http.api2", "on"),
+        ("http.api3", 3.14),
+    ]
 
 
 @pytest.mark.asyncio

@@ -95,7 +95,9 @@ class SimulatorIntegration(Integration):
 
     def _drift(self, name: str, scale: float) -> float:
         """Bounded random walk so readings wander without jumping."""
-        self._walk[name] = max(-2 * scale, min(2 * scale, self._walk[name] + random.uniform(-scale, scale)))
+        self._walk[name] = max(
+            -2 * scale, min(2 * scale, self._walk[name] + random.uniform(-scale, scale))
+        )
         return self._walk[name]
 
     def _readings(self) -> dict[str, float]:
@@ -133,7 +135,10 @@ class SimulatorIntegration(Integration):
 
     async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         for name, value in self._readings().items():
-            yield {"device": name, "value": value, "type": SENSORS[name][0]}
+            # Telemetry contract: explicit entity_id matching registration
+            # (`simulator.<name>` — the domain derives from the class name,
+            # exactly as register_capabilities derives it).
+            yield self.telemetry_sample(name, value, type=SENSORS[name][0])
 
     async def get_device_data(self) -> dict[str, Any]:
         readings = self._readings()

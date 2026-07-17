@@ -66,6 +66,7 @@ class HTTPIntegration(Integration):
                 "method": endpoint_config.get("method", "GET"),
                 "headers": endpoint_config.get("headers", {}),
                 "interval": endpoint_config.get("interval", 300),
+                "value_key": endpoint_config.get("value_key"),
             }
 
         logger.info(f"HTTP Integration initialized with {len(self.endpoints)} endpoints")
@@ -212,11 +213,37 @@ class HTTPIntegration(Integration):
             logger.error(f"Failed to send HTTP request: {e}")
             return False
 
+    @staticmethod
+    def _extract_value(data: Any, value_key: str | None) -> Any:
+        """Pull the telemetry value out of a polled response body.
+
+        An explicit ``value_key`` (dot-path, e.g. ``data.temperature``) wins;
+        otherwise scalars are taken as-is and dicts are probed for the
+        conventional ``value``/``state`` keys. Returns None when nothing
+        usable is found.
+        """
+        if value_key:
+            current = data
+            for part in value_key.split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+            return current if isinstance(current, (str, int, float, bool)) else None
+        if isinstance(data, (str, int, float, bool)):
+            return data
+        if isinstance(data, dict):
+            for key in ("value", "state"):
+                if data.get(key) is not None:
+                    return data[key]
+        return None
+
     async def receive_data(self) -> Generator[dict[str, Any], None, None]:
         """Get data from HTTP endpoints that have been polled.
 
-        Yields:
-            Dict[str, Any]: Data received from polled HTTP endpoints.
+        Yields telemetry-contract samples: explicit ``entity_id`` matching the
+        registered ``http.<endpoint_name>`` entity, with the reading extracted
+        to a top-level ``value``. Failed polls are not yielded (an error has
+        no value to join).
         """
         for name, endpoint in self.endpoints.items():
             result = endpoint.get("last_poll_result")
@@ -226,16 +253,28 @@ class HTTPIntegration(Integration):
             last_yielded = endpoint.get("last_result_yielded", 0)
             if last_yielded >= result["timestamp"]:
                 continue
-
-            yield {
-                "endpoint_name": name,
-                "url": endpoint["url"],
-                "timestamp": result["timestamp"],
-                "data": result.get("data"),
-                "status_code": result.get("status_code"),
-                "error": result.get("error"),
-            }
             endpoint["last_result_yielded"] = result["timestamp"]
+
+            if result.get("error"):
+                logger.debug(f"Skipping errored poll result for endpoint {name}")
+                continue
+
+            value = self._extract_value(result.get("data"), endpoint.get("value_key"))
+            if value is None:
+                logger.warning(
+                    f"HTTP endpoint {name} response has no usable value "
+                    f"(configure value_key for this endpoint?)"
+                )
+
+            yield self.telemetry_sample(
+                name,
+                value,
+                domain="http",
+                url=endpoint["url"],
+                timestamp=result["timestamp"],
+                data=result.get("data"),
+                status_code=result.get("status_code"),
+            )
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get the current data/state for all HTTP endpoints (devices).
@@ -257,6 +296,7 @@ class HTTPIntegration(Integration):
                 }
             else:
                 device_data[name] = {
+                    "value": self._extract_value(result.get("data"), endpoint.get("value_key")),
                     "data": result.get("data"),
                     "timestamp": result.get("timestamp"),
                 }
