@@ -16,6 +16,7 @@ import pytest
 from app.automations.engine import (
     AutomationEngine,
     numeric_range_match,
+    state_equals,
     time_condition_matches,
     time_pattern_matches,
     time_trigger_matches,
@@ -100,6 +101,30 @@ class TestPureMatchers:
     def test_time_pattern_hours_step(self):
         assert time_pattern_matches({"hours": "/2"}, datetime(2026, 1, 1, 4, 0, 0)) is True
         assert time_pattern_matches({"hours": "/2"}, datetime(2026, 1, 1, 4, 5, 0)) is False
+
+    def test_state_equals_binary_synonyms(self):
+        # The app's flow builder writes canonical "on"/"off"; integrations
+        # report whatever their hardware yields (GPIO 1/0, MQTT "on",
+        # ESPHome True). All spellings of a binary state must compare equal.
+        assert state_equals(1, "on") is True
+        assert state_equals(0, "off") is True
+        assert state_equals(True, "on") is True
+        assert state_equals(False, "off") is True
+        assert state_equals("On", "on") is True
+        assert state_equals("open", "on") is True
+        assert state_equals("closed", "off") is True
+        assert state_equals("yes", "1") is True
+        assert state_equals(1.0, "on") is True
+        assert state_equals("on", "off") is False
+        assert state_equals(1, "off") is False
+
+    def test_state_equals_numeric_and_plain_strings(self):
+        # Numeric strings compare by value; other strings case-insensitively.
+        assert state_equals(21.5, "21.5") is True
+        assert state_equals("21.50", 21.5) is True
+        assert state_equals("Eco", "eco") is True
+        assert state_equals("eco", "boost") is False
+        assert state_equals(2, "on") is False
 
     def test_time_condition_window_and_weekday(self):
         c = {"after": "06:00", "before": "22:00"}
@@ -197,6 +222,56 @@ class TestStateTrigger:
             await store.set("sensor.door", "closed")  # baseline
             await store.set("sensor.door", "open")  # → fire
             await store.set("sensor.door", "open")  # no change → no re-fire
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    async def test_binary_synonyms_fire_canonical_to_on(self):
+        # A GPIO-style switch reports 1/0; the builder's trigger says `to: "on"`.
+        engine, store, _bus, fake = _build()
+        _register("switch.pump", DeviceCategory.SENSOR)
+        _register("switch.fan")
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "enabled": True,
+                    "triggers": [{"type": "state", "entity": "switch.pump", "to": "on"}],
+                    "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            await store.set("switch.pump", 0)  # baseline
+            await store.set("switch.pump", 1)  # 1 ≡ "on" → fire
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    async def test_respelling_same_state_is_not_a_change(self):
+        # An integration report of "on" followed by a write-back of 1 is the
+        # same canonical state — it must not re-fire the trigger.
+        engine, store, _bus, fake = _build()
+        _register("switch.pump", DeviceCategory.SENSOR)
+        _register("switch.fan")
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "enabled": True,
+                    "triggers": [{"type": "state", "entity": "switch.pump", "to": "on"}],
+                    "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            await store.set("switch.pump", "off")  # baseline
+            await store.set("switch.pump", "on")  # → fire
+            await store.set("switch.pump", 1)  # re-spelling, not a change
             await engine.join()
             assert fake.calls == [("fan", "on", {})]
         finally:

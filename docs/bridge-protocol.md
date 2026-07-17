@@ -556,6 +556,19 @@ templating). The bridge evaluator (`app/automations/`) implements that full
 vocabulary. The `notification` action publishes back to the app on `…/notify`
 (§10.3).
 
+**State matching semantics.** Everywhere a rule compares a state string (a
+`state` trigger's `to`/`from`, a `state` condition, `wait_for_state`), the
+comparison is synonym-tolerant and case-insensitive: `on`/`true`/`1`/`open`/
+`yes` (and numeric `1`) all read as **on**, `off`/`false`/`0`/`closed`/`no`
+(and numeric `0`) as **off**, and numeric strings compare by value
+(`"21.50"` ≡ `21.5`). Integrations report on/off states in whatever scalar
+their hardware yields (GPIO `1`/`0`, MQTT `"on"`, ESPHome `True`); the app's
+flow builder always writes the canonical `"on"`/`"off"`, and this
+normalization (engine `state_equals`, mirroring the app's `isOn` display
+convention in `lib/widgets/format.ts`) makes those meet. A change that only
+re-spells the same canonical state (`"on"` → `1`) is **not** a state change
+and never fires an edge-triggered rule.
+
 ### 10.2 Status echo (`…/automations/status`, bridge → app, retained)
 
 After receiving a rule set the bridge validates + applies it and publishes the
