@@ -188,6 +188,7 @@ Canonical helpers: `lib/bridge/topics.ts` (app) and `app/mqtt_transport.py`
 | `cmd/<cmdId>/ack`         | bridge → app  | no       | §9      | live |
 | `automations`             | app → bridge  | yes      | §10     | live |
 | `automations/status`      | bridge → app  | yes      | §10     | live |
+| `automations/fired`       | bridge → app  | no       | §10     | live |
 | `notify`                  | bridge → app  | no       | §10     | live |
 | `webrtc/offer`            | app → bridge  | no       | §11     | live |
 | `webrtc/answer`           | bridge → app  | no       | §11     | live |
@@ -623,6 +624,37 @@ The published payload:
 
 The bridge does not retry or await delivery — it publishes the intent and moves
 on to the next action; the app owns fan-out and any per-subscription retry.
+
+### 10.4 Fired echo (`…/automations/fired`, bridge → app)
+
+After **every completed fire** — a trigger matched, the conditions passed, and
+the action sequence ran to its end — the engine publishes a result echo (qos 1,
+**not retained**). A trigger that is gated by its conditions is *not* a fire and
+publishes nothing. Source: `app/automations/engine.py` `_publish_fired` +
+`app/mqtt_transport.py` `publish_automation_fired`; app-side parser/ingest:
+`lib/automations/fired.ts`.
+
+```json
+{
+  "automationId": "auto_1",
+  "ok": false,
+  "error": "call 'turn_on' on 'switch.tent1_fan' failed",
+  "firedAt": "2026-07-17T12:00:00.123456+00:00"
+}
+```
+
+| Field          | Type    | Notes |
+|----------------|---------|-------|
+| `automationId` | string  | The `id` of the rule that fired (the app's Automation row id). |
+| `ok`           | bool    | True when every action succeeded. A failed/skipped `call` (entity not registered, integration missing, command failed) or an exception mid-sequence makes it false. |
+| `error`        | string? | First failure description when `ok` is false; null when ok. |
+| `firedAt`      | string  | ISO-8601 UTC time the fire completed. |
+
+The app stores the latest echo on the Automation row (`lastFiredAt` /
+`lastFireOk` / `lastFireError`) — latest-only, no history — and nudges connected
+browsers over SSE so flow cards update without a reload. Like `…/notify`, the
+bridge publishes best-effort and moves on; a failed echo never affects rule
+execution.
 
 ---
 

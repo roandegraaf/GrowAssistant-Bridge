@@ -248,6 +248,35 @@ async def test_publish_notification_not_connected(transport):
     assert ok is False
 
 
+@pytest.mark.asyncio
+async def test_publish_automation_fired_topic_and_payload(transport):
+    """publish_automation_fired publishes to …/automations/fired at qos1, not
+    retained, with the JSON fired payload verbatim."""
+    fired = {
+        "automationId": "auto_1",
+        "ok": False,
+        "error": "call 'turn_on' on 'switch.fan' failed",
+        "firedAt": "2026-07-17T12:00:00+00:00",
+    }
+    ok = await transport.publish_automation_fired(fired)
+    assert ok is True
+
+    transport._client.publish.assert_called_once()
+    args, kwargs = transport._client.publish.call_args
+    assert args[0] == "ga/tenantX/bridge/bridgeY/automations/fired"
+    assert json.loads(args[1]) == fired
+    assert kwargs["qos"] == 1
+    assert kwargs["retain"] is False
+
+
+@pytest.mark.asyncio
+async def test_publish_automation_fired_not_connected(transport):
+    """publish_automation_fired returns False when not connected."""
+    transport._connected = False
+    ok = await transport.publish_automation_fired({"automationId": "auto_1", "ok": True})
+    assert ok is False
+
+
 def test_on_message_routes_webrtc_offer_to_callback(transport):
     """A webrtc/offer message is handed (JSON-decoded payload) to the webrtc
     callback via _schedule, and is NOT enqueued as a command."""

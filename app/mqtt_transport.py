@@ -600,6 +600,30 @@ class MqttTransport(metaclass=SingletonMeta):
             logger.exception(f"Error publishing notification: {e}")
             return False
 
+    async def publish_automation_fired(self, fired: dict[str, Any]) -> bool:
+        """Publish a rule-fired echo to the ``…/automations/fired`` topic (qos 1,
+        not retained). The engine fires this after every completed rule run;
+        the app stores it on the Automation row so flow cards can show
+        "last fired + result". ``fired`` carries
+        ``{automationId, ok, error, firedAt}``."""
+        if not self._connected or not self._client:
+            return False
+
+        fired_topic = self._topic("automations/fired")
+        if not fired_topic:
+            return False
+
+        try:
+            self._client.publish(fired_topic, json.dumps(fired), qos=1, retain=False)
+            logger.info(
+                f"Automation fired echo published: automationId={fired.get('automationId')}, "
+                f"ok={fired.get('ok')}"
+            )
+            return True
+        except Exception as e:
+            logger.exception(f"Error publishing automation fired echo: {e}")
+            return False
+
     # ─── Command queue (consumed by main.py) ────────────────────────
 
     async def get_command(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:
