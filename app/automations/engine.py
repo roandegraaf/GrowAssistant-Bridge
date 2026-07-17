@@ -86,9 +86,45 @@ def numeric_range_match(value: Any, above: Optional[float], below: Optional[floa
     return True
 
 
+# Binary-state synonyms, mirroring the app's ``isOn`` display convention
+# (``lib/widgets/format.ts``): integrations report on/off states in whatever
+# scalar their hardware yields (GPIO ``1``/``0``, MQTT ``"on"``, ESPHome
+# ``True``), while the app's flow builder writes the canonical ``"on"``/``"off"``.
+_ON_STATES = {"on", "true", "1", "open", "yes"}
+_OFF_STATES = {"off", "false", "0", "closed", "no"}
+
+
+def _canonical_state(value: Any) -> str:
+    """Collapse a state scalar to a comparable form.
+
+    Binary synonyms collapse to ``"on"``/``"off"``; numeric strings collapse to
+    a canonical float rendering (so ``1.0`` equals ``"1"``); everything else
+    compares as its lowercased string.
+    """
+    s = str(value).strip().lower()
+    if s in _ON_STATES:
+        return "on"
+    if s in _OFF_STATES:
+        return "off"
+    try:
+        f = float(s)
+    except ValueError:
+        return s
+    if f == 1:
+        return "on"
+    if f == 0:
+        return "off"
+    return repr(f)
+
+
 def state_equals(value: Any, target: Any) -> bool:
-    """HA-style state comparison: stringified value equals stringified target."""
-    return str(value) == str(target)
+    """HA-style state comparison, tolerant of binary-state synonyms.
+
+    ``state_equals(1, "on")`` and ``state_equals("Off", False)`` are True; the
+    flow builder can therefore always write ``"on"``/``"off"`` regardless of
+    which scalar the entity's integration reports.
+    """
+    return _canonical_state(value) == _canonical_state(target)
 
 
 def time_trigger_matches(trigger: dict[str, Any], now: datetime) -> bool:
@@ -392,10 +428,12 @@ class AutomationEngine:
             return numeric_range_match(new, trig.get("above"), trig.get("below")) and not (
                 numeric_range_match(old, trig.get("above"), trig.get("below"))
             )
-        # state trigger: a change whose new/old states satisfy to/from
+        # state trigger: a change whose new/old states satisfy to/from. The
+        # no-change guard is canonical (``1`` → ``"on"`` is not a change), so a
+        # post-command write-back that only re-spells the same state never fires.
         to = trig.get("to")
         frm = trig.get("from")
-        if new == old:
+        if state_equals(new, old):
             return False
         if to is not None and not state_equals(new, to):
             return False
