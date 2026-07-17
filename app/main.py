@@ -143,6 +143,9 @@ class Application:
         # fans it out as Web Push. The engine runs the action, so it owns the
         # publisher — wired like the manager's status publisher above.
         self._engine.set_notify_publisher(mqtt_transport.publish_notification)
+        # Every completed fire is echoed back on …/automations/fired so the app
+        # can show "last fired + result" per flow without polling the bridge.
+        self._engine.set_fired_publisher(mqtt_transport.publish_automation_fired)
 
         # Re-validate + re-report whenever the device set changes — the rule set
         # arrives retained (possibly before integrations register their devices),

@@ -794,3 +794,146 @@ class TestNotificationAction:
         # On a failed template the field falls back to its raw value (mirrors _render_data).
         assert published[0]["title"] == "Alert {{ bogus_name }}"
         assert published[0]["message"] == "ok"
+
+
+# ─── fired echo (…/automations/fired) ────────────────────────────────────────
+
+
+class TestFiredEcho:
+    """Every completed fire — conditions passed, actions ran — is echoed to the
+    fired publisher with its result; a conditions-gated trigger is not a fire."""
+
+    def _fired_rule(self, actions):
+        return {
+            "id": "rule-1",
+            "enabled": True,
+            "triggers": [{"type": "event", "event_type": "go"}],
+            "actions": actions,
+        }
+
+    async def _run(self, engine):
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+
+    async def test_successful_fire_publishes_ok_true(self):
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+        published = []
+
+        async def fired_publisher(payload):
+            published.append(payload)
+
+        engine.set_fired_publisher(fired_publisher)
+        engine.apply_rules(
+            [self._fired_rule([{"type": "call", "entity": "switch.fan", "service": "turn_on"}])]
+        )
+        await self._run(engine)
+
+        assert fake.calls == [("fan", "on", {})]
+        assert len(published) == 1
+        payload = published[0]
+        assert payload["automationId"] == "rule-1"
+        assert payload["ok"] is True
+        assert payload["error"] is None
+        fired = datetime.fromisoformat(payload["firedAt"])
+        assert fired.tzinfo is not None
+
+    async def test_conditions_gated_trigger_publishes_nothing(self):
+        engine, store, _bus, _fake = _build()
+        await store.set("sensor.mode", "day")
+        published = []
+
+        async def fired_publisher(payload):
+            published.append(payload)
+
+        engine.set_fired_publisher(fired_publisher)
+        rule = self._fired_rule([{"type": "notification", "title": "t", "message": "m"}])
+        rule["conditions"] = [{"type": "state", "entity": "sensor.mode", "state": "night"}]
+        engine.apply_rules([rule])
+        await self._run(engine)
+
+        assert published == []  # gated, not a fire
+
+    async def test_failed_call_publishes_ok_false_with_first_error(self):
+        # switch.ghost is never registered → the executor returns False; the
+        # sequence continues (switch.fan still runs) and the echo carries the
+        # FIRST failure.
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+        published = []
+
+        async def fired_publisher(payload):
+            published.append(payload)
+
+        engine.set_fired_publisher(fired_publisher)
+        engine.apply_rules(
+            [
+                self._fired_rule(
+                    [
+                        {"type": "call", "entity": "switch.ghost", "service": "turn_on"},
+                        {"type": "call", "entity": "switch.fan", "service": "turn_on"},
+                    ]
+                )
+            ]
+        )
+        await self._run(engine)
+
+        assert fake.calls == [("fan", "on", {})]  # later actions still ran
+        assert len(published) == 1
+        payload = published[0]
+        assert payload["ok"] is False
+        assert "switch.ghost" in payload["error"]
+
+    async def test_exception_mid_sequence_publishes_ok_false(self):
+        # A notify publisher that raises propagates out of the notification
+        # action — the run aborts, and the fired echo reports the exception.
+        engine, _store, _bus, _fake = _build()
+        published = []
+
+        async def bad_notify(_payload):
+            raise RuntimeError("push exploded")
+
+        async def fired_publisher(payload):
+            published.append(payload)
+
+        engine.set_notify_publisher(bad_notify)
+        engine.set_fired_publisher(fired_publisher)
+        engine.apply_rules(
+            [self._fired_rule([{"type": "notification", "title": "t", "message": "m"}])]
+        )
+        await self._run(engine)
+
+        assert len(published) == 1
+        payload = published[0]
+        assert payload["ok"] is False
+        assert "push exploded" in payload["error"]
+
+    async def test_fired_publisher_error_is_isolated(self, caplog):
+        # A broken fired publisher must never break rule execution (or leave the
+        # rule stuck "active" — a second trigger must still fire).
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+
+        async def bad_fired(_payload):
+            raise RuntimeError("echo down")
+
+        engine.set_fired_publisher(bad_fired)
+        engine.apply_rules(
+            [self._fired_rule([{"type": "call", "entity": "switch.fan", "service": "turn_on"}])]
+        )
+        engine.start()
+        try:
+            with caplog.at_level(logging.ERROR):
+                engine.emit_event("go")
+                await engine.join()
+                engine.emit_event("go")
+                await engine.join()
+        finally:
+            await engine.stop()
+
+        assert fake.calls == [("fan", "on", {}), ("fan", "on", {})]
+        assert "Fired echo publish failed" in caplog.text

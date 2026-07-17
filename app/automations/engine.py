@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 # MQTT); the ``notification`` action invokes it. Transport-provided at wiring.
 NotifyPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
 
+# A fired publisher echoes a completed rule fire to the app (over MQTT, on
+# ``…/automations/fired``) so the app can surface "last fired + result" per
+# flow. Transport-provided at wiring, like the notify publisher.
+FiredPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
+
 # Cap an event chain (fire_event → event trigger → fire_event …) so a bad rule
 # cannot spin the bridge. Past this depth events are dropped and logged.
 MAX_EVENT_DEPTH = 10
@@ -222,6 +227,7 @@ class AutomationEngine:
         self._bus = event_bus
         self._executor = executor
         self._notify_publisher: Optional[NotifyPublisher] = None
+        self._fired_publisher: Optional[FiredPublisher] = None
         self._now = now
         self._sleep = sleep
         self._scheduler_interval = scheduler_interval
@@ -249,6 +255,14 @@ class AutomationEngine:
         the action logs a warning and continues (same spirit as other optional
         callbacks)."""
         self._notify_publisher = fn
+
+    def set_fired_publisher(self, fn: FiredPublisher) -> None:
+        """Register the coroutine that echoes a completed rule fire to the app
+        (transport-provided). Called after every fire — i.e. after the action
+        sequence ran because a trigger matched and the conditions passed; a
+        trigger gated by its conditions is NOT a fire. Optional like the notify
+        publisher: unset means no echo, rules run unaffected."""
+        self._fired_publisher = fn
 
     # ─── Lifecycle ──────────────────────────────────────────────────
 
@@ -524,21 +538,46 @@ class AutomationEngine:
         self, rule: dict[str, Any], trigger_ctx: dict[str, Any], chain: EventChain
     ) -> None:
         rule_id = rule.get("id")
+        fired = False
+        failures: list[str] = []
         try:
             if not self._evaluate_conditions(rule.get("conditions") or [], self._now()):
                 logger.debug("Rule '%s' conditions not met — not running", rule_id)
                 return
+            fired = True
             variables: dict[str, Any] = {}
             for action in rule.get("actions") or []:
                 if not isinstance(action, dict):
                     continue
-                await self._run_action(action, trigger_ctx, variables, chain, rule_id)
+                failure = await self._run_action(action, trigger_ctx, variables, chain, rule_id)
+                if failure is not None:
+                    failures.append(failure)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as e:
             logger.exception("Error running automation '%s'", rule_id)
+            if fired:
+                failures.append(f"{type(e).__name__}: {e}")
         finally:
             self._active.discard(rule_id)
+        if fired:
+            await self._publish_fired(rule_id, failures)
+
+    async def _publish_fired(self, rule_id: Any, failures: list[str]) -> None:
+        """Echo a completed fire (`{automationId, ok, error, firedAt}`) to the
+        app. Best-effort: a publish failure must never affect rule execution."""
+        if self._fired_publisher is None:
+            return
+        payload = {
+            "automationId": rule_id,
+            "ok": not failures,
+            "error": failures[0] if failures else None,
+            "firedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await self._fired_publisher(payload)
+        except Exception:
+            logger.exception("Fired echo publish failed for rule '%s'", rule_id)
 
     async def _run_action(
         self,
@@ -547,10 +586,14 @@ class AutomationEngine:
         variables: dict[str, Any],
         chain: EventChain,
         rule_id: Any,
-    ) -> None:
+    ) -> Optional[str]:
+        """Run one action. Returns a short failure description when the action
+        ran but did not succeed (currently only a failed/skipped ``call``), or
+        None — the sequence continues either way; failures only feed the fired
+        echo's result."""
         atype = action.get("type")
         if atype == "call":
-            await self._action_call(action, trigger_ctx, variables, chain)
+            return await self._action_call(action, trigger_ctx, variables, chain)
         elif atype == "delay":
             await self._sleep(duration_seconds(action))
         elif atype == "wait_for_state":
@@ -564,6 +607,7 @@ class AutomationEngine:
             await self._action_notification(action, trigger_ctx, variables, rule_id)
         else:
             logger.warning("Unknown action type '%s' — skipping", atype)
+        return None
 
     async def _action_call(
         self,
@@ -571,7 +615,7 @@ class AutomationEngine:
         trigger_ctx: dict[str, Any],
         variables: dict[str, Any],
         chain: EventChain,
-    ) -> None:
+    ) -> Optional[str]:
         entity = action.get("entity")
         service = action.get("service")
         data = self._render_data(action.get("data"), trigger_ctx, variables)
@@ -583,6 +627,10 @@ class AutomationEngine:
             {"entity": entity, "service": service, "success": bool(ok)},
             chain,
         )
+        # A False call (entity not registered, integration missing, or the
+        # command itself failed) is reported in the fired echo, matching what
+        # the executor already logged.
+        return None if ok else f"call '{service}' on '{entity}' failed"
 
     async def _action_wait_for_state(self, action: dict[str, Any]) -> None:
         entity = action.get("entity")
