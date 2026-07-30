@@ -333,6 +333,25 @@ class TestClimateContract:
         }
 
     @pytest.mark.asyncio
+    async def test_execute_command_rejects_set_instead_of_switching_off(self):
+        """A `set` command (numeric slider) must fail, not coerce to off.
+
+        Regression: `on = action == "on"` made "set" turn the device OFF and
+        still return success — so a dashboard slider dragged to 30% switched the
+        heater off. An unsupported action must return False and leave state
+        untouched.
+        """
+        integration = self._integration()
+
+        assert await integration.execute_command("tent_heater", "on", {}) is True
+        assert integration.heater_on is True
+
+        result = await integration.execute_command("tent_heater", "set", {"value": 30})
+
+        assert result is False  # command reported as failed
+        assert integration.heater_on is True  # NOT switched off
+
+    @pytest.mark.asyncio
     async def test_on_telemetry_feeds_control_loop(self):
         """on_telemetry updates readings; the control logic then acts on them."""
         integration = self._integration()

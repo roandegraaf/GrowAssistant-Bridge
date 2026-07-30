@@ -799,6 +799,45 @@ class TestActions:
         finally:
             await engine.stop()
 
+    async def test_wait_for_state_without_timeout_aborts_rest_on_expiry(self, monkeypatch):
+        # With no user timeout, the injected default cap prevents a permanent
+        # wedge — but on expiry the rule must ABORT (not run downstream actions
+        # on a precondition that never held). Shrink the cap so the test is fast.
+        monkeypatch.setattr("app.automations.engine.DEFAULT_WAIT_FOR_STATE_TIMEOUT", 0.02)
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [
+                        {
+                            "type": "wait_for_state",
+                            "entity": "sensor.never",
+                            "state": "1",
+                            # no "timeout" → injected default → abort on expiry
+                        },
+                        {"type": "call", "entity": "switch.fan", "service": "turn_on"},
+                    ],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()  # injected cap elapses → rule aborts
+            assert fake.calls == []  # downstream call must NOT run
+
+            # The single-run lock must have been released — the rule can fire
+            # again (it wasn't left wedged).
+            engine.emit_event("go")
+            await engine.join()
+            assert fake.calls == []
+        finally:
+            await engine.stop()
+
     async def test_unknown_action_type_is_skipped_and_sequence_continues(self):
         # An unrecognised action is skipped (logged), and later actions still run
         # — the existing "unknown action" behaviour, unchanged by notification.

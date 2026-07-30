@@ -118,8 +118,10 @@ class QueueManager(metaclass=SingletonMeta):
             logger.info(f"Loaded {loaded} items from queue database")
 
         if consumed_ids:
-            placeholders = ",".join("?" * len(consumed_ids))
-            cursor.execute(f"DELETE FROM queue WHERE id IN ({placeholders})", consumed_ids)
+            # executemany on single-id deletes avoids SQLite's bound-parameter
+            # limit (default 999), which a large max_queue_size could exceed with
+            # a single `IN (...)`.
+            cursor.executemany("DELETE FROM queue WHERE id = ?", [(rid,) for rid in consumed_ids])
             self._db_conn.commit()
 
     async def _flush_to_db(self):

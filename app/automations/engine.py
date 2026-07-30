@@ -63,6 +63,18 @@ MAX_EVENT_DEPTH = 10
 # legitimately needed.
 DEFAULT_WAIT_FOR_STATE_TIMEOUT = 3600.0
 
+
+class _WaitForStateAborted(Exception):
+    """Raised when an *injected* (default) wait_for_state timeout elapses.
+
+    A user-specified timeout means "give up after N seconds and continue" — the
+    later actions run. But when the user gave no timeout, the default cap exists
+    only to prevent a permanent wedge; if it elapses we must NOT run the
+    remaining actions (e.g. "pump off") on a precondition that never actually
+    held. This aborts the rest of the rule instead, and releases the run lock.
+    """
+
+
 # Lifecycle event types the bridge seeds onto the bus.
 EVENT_BRIDGE_STARTED = "bridge_started"
 EVENT_MANIFEST_CHANGED = "manifest_changed"
@@ -606,6 +618,12 @@ class AutomationEngine:
                     failures.append(failure)
         except asyncio.CancelledError:
             raise
+        except _WaitForStateAborted as abort:
+            # Expected control-flow signal, not an error: stop the remaining
+            # actions and record why, without a scary traceback.
+            logger.info("Rule '%s' aborted: %s", rule_id, abort)
+            if fired:
+                failures.append(str(abort))
         except Exception as e:
             logger.exception("Error running automation '%s'", rule_id)
             if fired:
@@ -689,12 +707,13 @@ class AutomationEngine:
         state = action.get("state")
         above = action.get("above")
         below = action.get("below")
-        timeout = action.get("timeout")
+        user_timeout = action.get("timeout")
         # An omitted (or non-positive) timeout would wait forever and, in
         # single-run mode, permanently wedge the rule. Fall back to a bounded
-        # default so the run always completes and releases its lock.
-        if not timeout or timeout <= 0:
-            timeout = DEFAULT_WAIT_FOR_STATE_TIMEOUT
+        # default so the run always completes; but distinguish it from a
+        # user-specified timeout so we can abort (not continue) if it elapses.
+        injected = not user_timeout or user_timeout <= 0
+        timeout = DEFAULT_WAIT_FOR_STATE_TIMEOUT if injected else user_timeout
 
         def predicate() -> bool:
             cur = self._store.get(entity)
@@ -706,6 +725,13 @@ class AutomationEngine:
 
         ok = await self._store.wait_for(predicate, timeout)
         if not ok:
+            if injected:
+                # The user did not ask to give up — don't run downstream actions
+                # on a condition that never held. Abort the rule instead.
+                raise _WaitForStateAborted(
+                    f"wait_for_state on '{entity}' not satisfied within the "
+                    f"default {DEFAULT_WAIT_FOR_STATE_TIMEOUT:.0f}s cap"
+                )
             logger.info("wait_for_state on '%s' timed out — continuing", entity)
 
     def _action_set_variable(
