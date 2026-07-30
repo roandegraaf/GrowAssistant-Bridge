@@ -64,62 +64,102 @@ class QueueManager(metaclass=SingletonMeta):
             os.makedirs(db_dir, exist_ok=True)
 
         self._db_conn = sqlite3.connect(db_file)
-        self._db_conn.execute("""
+        self._db_conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL,
                 data TEXT
             )
-        """)
+        """
+        )
         self._db_conn.commit()
 
         logger.info(f"Queue database initialized at {db_file}")
 
     def _load_from_db(self):
-        """Load queued items from the database into memory."""
+        """Load queued items from the database into memory.
+
+        Only rows that are actually consumed here are deleted: a row loaded
+        into the queue, or an unrecoverable (unparseable) row, is removed; but
+        if the in-memory queue fills to capacity (QueueFull) partway through,
+        the remaining rows are left persisted for a later start rather than
+        being destroyed along with the loaded ones.
+        """
         if not self._db_conn:
             return
 
         cursor = self._db_conn.cursor()
         cursor.execute("SELECT id, timestamp, data FROM queue ORDER BY timestamp")
+        rows = cursor.fetchall()
 
-        count = 0
-        for _, _, data_json in cursor.fetchall():
+        consumed_ids: list[int] = []
+        loaded = 0
+        for row_id, _, data_json in rows:
             try:
-                self._queue.put_nowait(json.loads(data_json))
-                count += 1
-            except (json.JSONDecodeError, asyncio.QueueFull) as e:
-                logger.error(f"Error loading item from queue database: {e}")
+                item = json.loads(data_json)
+            except json.JSONDecodeError as e:
+                # Unrecoverable — drop it so it doesn't reload forever.
+                logger.error(f"Discarding unparseable queue row {row_id}: {e}")
+                consumed_ids.append(row_id)
+                continue
+            try:
+                self._queue.put_nowait(item)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "Queue full while loading from database; "
+                    f"{len(rows) - len(consumed_ids)} row(s) left persisted"
+                )
+                break
+            consumed_ids.append(row_id)
+            loaded += 1
 
-        if count > 0:
-            logger.info(f"Loaded {count} items from queue database")
+        if loaded > 0:
+            logger.info(f"Loaded {loaded} items from queue database")
 
-        cursor.execute("DELETE FROM queue")
-        self._db_conn.commit()
+        if consumed_ids:
+            placeholders = ",".join("?" * len(consumed_ids))
+            cursor.execute(f"DELETE FROM queue WHERE id IN ({placeholders})", consumed_ids)
+            self._db_conn.commit()
 
     async def _flush_to_db(self):
-        """Flush the in-memory queue to the database."""
+        """Flush the in-memory queue to the database.
+
+        Drains the queue into a batch and writes it in a single transaction.
+        Draining and (on failure) restoring happen without awaiting, so they
+        are atomic with respect to the event loop. If the write fails, the
+        drained items are put back on the queue rather than lost or abandoned
+        mid-drain.
+        """
         if not self._db_conn or self._queue.empty():
             return
 
-        count = 0
-        cursor = self._db_conn.cursor()
-
+        items: list[dict[str, Any]] = []
         while not self._queue.empty():
             try:
-                item = self._queue.get_nowait()
-                cursor.execute(
-                    "INSERT INTO queue (timestamp, data) VALUES (?, ?)",
-                    (item.get("timestamp", time.time()), json.dumps(item)),
-                )
-                count += 1
-            except (asyncio.QueueEmpty, Exception) as e:
-                logger.error(f"Error flushing item to queue database: {e}")
+                items.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
                 break
 
-        if count > 0:
+        if not items:
+            return
+
+        rows = [(item.get("timestamp", time.time()), json.dumps(item)) for item in items]
+        try:
+            cursor = self._db_conn.cursor()
+            cursor.executemany("INSERT INTO queue (timestamp, data) VALUES (?, ?)", rows)
             self._db_conn.commit()
-            logger.info(f"Flushed {count} items to queue database")
+            logger.info(f"Flushed {len(items)} items to queue database")
+        except Exception as e:
+            logger.error(
+                f"Error flushing queue to database, restoring {len(items)} "
+                f"item(s) to the queue: {e}"
+            )
+            for item in items:
+                try:
+                    self._queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    logger.error("Queue full while restoring after failed flush; item dropped")
 
     async def _periodic_flush(self):
         """Periodically flush the queue to the database."""
@@ -136,16 +176,24 @@ class QueueManager(metaclass=SingletonMeta):
                 logger.error(f"Error in periodic flush: {e}")
 
     async def put(self, data: dict[str, Any]) -> bool:
-        """Add a data point to the queue. Returns False if queue is full."""
+        """Add a data point to the queue. Returns False if the queue is full.
+
+        Uses a non-blocking put: asyncio.Queue.put() *blocks* the caller when
+        the queue is at capacity (it never raises QueueFull), which would stall
+        the whole data-collection loop and silently starve everything after the
+        put (StateStore updates, automation fan-out). put_nowait raises
+        QueueFull instead, so an overflow drops the sample and returns False
+        rather than hanging.
+        """
         if "timestamp" not in data:
             data["timestamp"] = time.time()
 
         try:
-            await self._queue.put(data)
+            self._queue.put_nowait(data)
             logger.debug(f"Added item to queue, size: {self._queue.qsize()}")
             return True
         except asyncio.QueueFull:
-            logger.warning("Queue is full, item not added")
+            logger.warning("Queue is full, item dropped")
             return False
 
     async def get(self, timeout: Optional[float] = None) -> Optional[dict[str, Any]]:

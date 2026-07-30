@@ -339,6 +339,30 @@ class TestApplicationStop:
             assert app._running is False
 
     @pytest.mark.asyncio
+    async def test_signal_handler_unblocks_shutdown_wait(
+        self, reset_application_singleton, monkeypatch
+    ):
+        """A shutdown signal must set the event so wait_for_shutdown returns.
+
+        Regression: the old handler fired create_task(self.stop()) and main()
+        looped forever on sleep(1), so the process never exited on SIGTERM.
+        Exercises the handler/event mechanism directly (no full start()/stop()).
+        """
+        monkeypatch.setenv("WATCHDOG_MANAGED", "1")  # skip watchdog teardown
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app.loop = asyncio.get_running_loop()
+            app._shutdown_event = asyncio.Event()
+            assert not app._shutdown_event.is_set()
+
+            app._signal_handler(signal.SIGTERM, None)
+
+            # call_soon_threadsafe schedules the set; wait_for_shutdown must
+            # return promptly rather than hang forever.
+            await asyncio.wait_for(app.wait_for_shutdown(), timeout=1.0)
+            assert app._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
     async def test_stop_when_not_running(self, reset_application_singleton, mock_dependencies):
         """Test stop when application is not running."""
         with patch("app.main.signal.signal"):

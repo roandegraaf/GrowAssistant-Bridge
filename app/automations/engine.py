@@ -55,6 +55,14 @@ FiredPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
 # cannot spin the bridge. Past this depth events are dropped and logged.
 MAX_EVENT_DEPTH = 10
 
+# Fallback cap for a `wait_for_state` action whose `timeout` is omitted. Without
+# a bound, asyncio.wait_for(..., None) waits forever; in single-run mode that
+# permanently wedges the rule (the run never completes, so its lock never
+# releases and every later trigger is rejected). One hour is generous for grow
+# automations while still guaranteeing recovery. Tune if longer waits are
+# legitimately needed.
+DEFAULT_WAIT_FOR_STATE_TIMEOUT = 3600.0
+
 # Lifecycle event types the bridge seeds onto the bus.
 EVENT_BRIDGE_STARTED = "bridge_started"
 EVENT_MANIFEST_CHANGED = "manifest_changed"
@@ -333,16 +341,22 @@ class AutomationEngine:
     def apply_rules(self, rules: list[dict[str, Any]]) -> None:
         """Replace the running rule set (enabled rules only).
 
-        Cancels in-flight runs/timers and resets edge-detection baselines and
-        time markers — so a freshly-applied rule does not fire on the first
-        sample it sees, and a deleted rule's pending ``delay`` cannot fire.
-        Idempotent: re-applying the same set is safe (the manager only calls
-        this for a strictly-newer version, so reconnect redelivery never resets
-        baselines).
+        Cancels in-flight runs/timers and reseeds edge-detection baselines from
+        the StateStore's current snapshot (rather than clearing them) — so a
+        freshly-applied rule does not fire on the first sample it sees (its
+        baseline already equals the current value, so there is no edge), while
+        entities that are *not* being changed keep their real baseline and a
+        genuine later transition is still detected. Also resets time markers so
+        a deleted rule's pending ``delay`` cannot fire. Idempotent: re-applying
+        the same set is safe (the manager only calls this for a strictly-newer
+        version, so reconnect redelivery never resets baselines).
         """
         self._cancel_tasks()
         self._rules = [r for r in rules if isinstance(r, dict)]
-        self._prev_value.clear()
+        # Seed from the store so an unrelated rule edit cannot swallow an
+        # in-progress transition on some other entity (previously this cleared
+        # every baseline, making the next sample look like first_seen).
+        self._prev_value = self._store.snapshot()
         self._time_fired.clear()
         self._rebuild_entity_index()
         logger.info("Automation engine applied %d enabled rule(s)", len(self._rules))
@@ -676,6 +690,11 @@ class AutomationEngine:
         above = action.get("above")
         below = action.get("below")
         timeout = action.get("timeout")
+        # An omitted (or non-positive) timeout would wait forever and, in
+        # single-run mode, permanently wedge the rule. Fall back to a bounded
+        # default so the run always completes and releases its lock.
+        if not timeout or timeout <= 0:
+            timeout = DEFAULT_WAIT_FOR_STATE_TIMEOUT
 
         def predicate() -> bool:
             cur = self._store.get(entity)

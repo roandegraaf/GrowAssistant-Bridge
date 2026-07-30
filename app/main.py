@@ -69,6 +69,8 @@ class Application:
         self._engine: Optional[AutomationEngine] = None
         self._initialized = True
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+        # Set by a shutdown signal to break main()'s wait so the process exits.
+        self._shutdown_event: Optional[asyncio.Event] = None
 
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, self._signal_handler)
@@ -91,7 +93,24 @@ class Application:
             except ImportError:
                 logger.warning("Watchdog manager not found")
 
-        asyncio.create_task(self.stop())
+        # Wake main()'s wait so it can run graceful shutdown and the process
+        # exits. Setting the event through the loop is thread-safe and, unlike
+        # the previous fire-and-forget create_task(self.stop()), actually
+        # unblocks the main coroutine (its task reference was also discarded and
+        # could be GC'd mid-flight). stop() itself runs once, from main()'s
+        # finally block.
+        if self.loop is not None and self._shutdown_event is not None:
+            self.loop.call_soon_threadsafe(self._shutdown_event.set)
+        else:
+            # Signalled before start() finished wiring up; fall back to the
+            # default behaviour so the process can still terminate.
+            raise KeyboardInterrupt
+
+    async def wait_for_shutdown(self) -> None:
+        """Block until a shutdown signal sets the shutdown event."""
+        if self._shutdown_event is None:
+            return
+        await self._shutdown_event.wait()
 
     async def start(self):
         """Start the application, loading integrations and starting all services."""
@@ -102,6 +121,7 @@ class Application:
         logger.info("Starting application")
         self._running = True
         self.loop = asyncio.get_running_loop()
+        self._shutdown_event = asyncio.Event()
 
         await auth_manager.start()
 
@@ -575,10 +595,10 @@ async def main():
 
     try:
         await app_instance.start()
-        await asyncio.sleep(1)
-
-        while True:
-            await asyncio.sleep(1)
+        # Block until a shutdown signal fires, then fall through to the finally
+        # block which runs graceful shutdown. (Previously this looped forever on
+        # sleep(1) and never exited even after stop() had torn everything down.)
+        await app_instance.wait_for_shutdown()
 
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")

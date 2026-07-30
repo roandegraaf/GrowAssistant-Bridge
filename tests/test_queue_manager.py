@@ -378,22 +378,17 @@ class TestQueueManagerErrorHandling:
             qm = QueueManager()
             qm._queue = asyncio.Queue(maxsize=2)
 
-            # Fill the queue
+            # Fill the queue to capacity.
             assert await qm.put({"value": 1}) is True
             assert await qm.put({"value": 2}) is True
 
-            # Queue is now full, mock put to raise QueueFull
-            original_put = qm._queue.put
-
-            async def mock_put(item):
-                raise asyncio.QueueFull()
-
-            qm._queue.put = mock_put
-
-            # This should return False since queue is full
+            # A further put must return False (not block) when the queue is
+            # genuinely full — put() uses put_nowait, so this exercises the real
+            # overflow path rather than a monkeypatched QueueFull.
             result = await qm.put({"value": 3})
 
             assert result is False
+            assert qm.size() == 2
 
     @pytest.mark.asyncio
     async def test_get_without_timeout_blocks_until_item_available(self, queue_manager):
@@ -693,19 +688,21 @@ class TestQueueManagerErrorHandling:
             # Add an item
             await qm.put({"value": 1})
 
-            # Mock get_nowait to raise a general exception
-            original_get_nowait = qm._queue.get_nowait
+            # Simulate a database write failure at the executemany layer (the
+            # real failure point — e.g. a full disk).
+            failing_conn = MagicMock()
+            failing_conn.cursor.return_value.executemany.side_effect = Exception(
+                "Database error during flush"
+            )
+            qm._db_conn = failing_conn
 
-            def mock_get_nowait():
-                item = original_get_nowait()
-                # Raise exception after getting the item, during database operation
-                raise Exception("Database error during flush")
-
-            qm._queue.get_nowait = mock_get_nowait
-
-            # Should handle exception gracefully and stop processing
+            # Should handle the error gracefully (no exception raised) and
+            # restore the drained item to the queue rather than losing it.
             await qm._flush_to_db()
+            assert qm.size() == 1
 
+            # Drop the failing connection so stop()'s final flush is a no-op.
+            qm._db_conn = None
             await qm.stop()
 
 
