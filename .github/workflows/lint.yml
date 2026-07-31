@@ -21,7 +21,9 @@ jobs:
     - name: Install linting dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ruff
+        # Pinned: an unpinned ruff lets every upstream release turn CI red on an
+        # untouched branch. Keep in sync with .pre-commit-config.yaml.
+        pip install ruff==0.14.8
 
     - name: Run ruff check
       run: |

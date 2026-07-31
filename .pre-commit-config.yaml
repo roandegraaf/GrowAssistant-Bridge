@@ -2,7 +2,8 @@
 repos:
   # Linting and formatting with ruff (replaces black, isort, flake8)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.2
+    # Keep in sync with the pinned ruff in .github/workflows/{lint,tests}.yml.
+    rev: v0.14.8
     hooks:
       - id: ruff
         args: [--fix, --unsafe-fixes]

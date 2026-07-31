@@ -372,7 +372,7 @@ class ClimateControlIntegration(Integration):
         act = action.lower()
         if act not in ("on", "off"):
             logger.warning(
-                "Unsupported action '%s' for %s; this integration only " "supports on/off",
+                "Unsupported action '%s' for %s; this integration only supports on/off",
                 action,
                 target_id,
             )
