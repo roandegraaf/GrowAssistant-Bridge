@@ -339,6 +339,40 @@ class TestApplicationStop:
             assert app._running is False
 
     @pytest.mark.asyncio
+    async def test_signal_handler_unblocks_shutdown_wait(
+        self, reset_application_singleton, monkeypatch
+    ):
+        """A shutdown signal must set the event that main()'s wait unblocks on.
+
+        Regression: the old handler fired create_task(self.stop()) while main()
+        looped forever on `while True: sleep(1)`, so SIGTERM/SIGINT never
+        terminated the process. main() is now `start(); await
+        wait_for_shutdown(); finally stop()`, so releasing that wait is the
+        exact behaviour that was broken. Exercised directly (start()/stop() are
+        covered by the other tests in this class; the full
+        start→signal→wait→stop sequence was verified manually — it is not driven
+        here because the mock-dependency fixture's sub-second task intervals make
+        loop teardown flaky).
+        """
+        monkeypatch.setenv("WATCHDOG_MANAGED", "1")  # skip watchdog teardown
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app.loop = asyncio.get_running_loop()
+            app._shutdown_event = asyncio.Event()
+            assert not app._shutdown_event.is_set()
+
+            app._signal_handler(signal.SIGTERM, None)
+
+            # call_soon_threadsafe schedules the set; wait_for_shutdown must
+            # return promptly rather than hang forever.
+            await asyncio.wait_for(app.wait_for_shutdown(), timeout=1.0)
+            assert app._shutdown_event.is_set()
+
+            # A second signal must be harmless (idempotent set).
+            app._signal_handler(signal.SIGINT, None)
+            assert app._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
     async def test_stop_when_not_running(self, reset_application_singleton, mock_dependencies):
         """Test stop when application is not running."""
         with patch("app.main.signal.signal"):

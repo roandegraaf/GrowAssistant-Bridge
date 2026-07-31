@@ -178,6 +178,64 @@ class TestNumericStateTrigger:
         finally:
             await engine.stop()
 
+    async def test_reapply_rules_preserves_baseline_across_unrelated_edit(self):
+        # Regression: apply_rules used to clear every edge-detection baseline,
+        # so a rule-set change (e.g. editing an unrelated rule) made the next
+        # sample look like first_seen and swallowed a genuine crossing. Seeding
+        # from the StateStore snapshot must keep the baseline intact.
+        engine, store, _bus, fake = _build()
+        _register("sensor.temp", DeviceCategory.SENSOR)
+        _register("switch.fan")
+        rule = {
+            "id": "r",
+            "enabled": True,
+            "triggers": [{"type": "numeric_state", "entity": "sensor.temp", "above": 30}],
+            "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+        }
+        engine.apply_rules([rule])
+        engine.start()
+        try:
+            await store.set("sensor.temp", 20)  # baseline recorded at 20
+            await engine.join()
+            assert fake.calls == []
+
+            # A rule-set is re-applied (same or unrelated edit) while temp sits
+            # below the threshold. The baseline must remain 20, not be cleared.
+            engine.apply_rules([rule])
+
+            await store.set("sensor.temp", 35)  # 20 → 35 crosses 30 → must fire
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    async def test_reapply_when_already_hot_still_does_not_fire(self):
+        # The reseed must also preserve the "don't fire on the first sample
+        # after apply" intent: if the sensor is already above the threshold at
+        # apply time, re-applying must not fire on the next equal-ish sample.
+        engine, store, _bus, fake = _build()
+        _register("sensor.temp", DeviceCategory.SENSOR)
+        _register("switch.fan")
+        rule = {
+            "id": "r",
+            "enabled": True,
+            "triggers": [{"type": "numeric_state", "entity": "sensor.temp", "above": 30}],
+            "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+        }
+        engine.apply_rules([rule])
+        engine.start()
+        try:
+            await store.set("sensor.temp", 35)  # already hot; baseline only
+            await engine.join()
+            assert fake.calls == []
+
+            engine.apply_rules([rule])  # reseed baseline from store (35)
+            await store.set("sensor.temp", 36)  # still hot → no new edge
+            await engine.join()
+            assert fake.calls == []
+        finally:
+            await engine.stop()
+
     async def test_first_sample_already_hot_does_not_fire(self):
         engine, store, _bus, fake = _build()
         _register("sensor.temp", DeviceCategory.SENSOR)
@@ -738,6 +796,45 @@ class TestActions:
             engine.emit_event("go")
             await engine.join()  # times out, then continues to the call
             assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    async def test_wait_for_state_without_timeout_aborts_rest_on_expiry(self, monkeypatch):
+        # With no user timeout, the injected default cap prevents a permanent
+        # wedge — but on expiry the rule must ABORT (not run downstream actions
+        # on a precondition that never held). Shrink the cap so the test is fast.
+        monkeypatch.setattr("app.automations.engine.DEFAULT_WAIT_FOR_STATE_TIMEOUT", 0.02)
+        engine, _store, _bus, fake = _build()
+        _register("switch.fan")
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "enabled": True,
+                    "triggers": [{"type": "event", "event_type": "go"}],
+                    "actions": [
+                        {
+                            "type": "wait_for_state",
+                            "entity": "sensor.never",
+                            "state": "1",
+                            # no "timeout" → injected default → abort on expiry
+                        },
+                        {"type": "call", "entity": "switch.fan", "service": "turn_on"},
+                    ],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()  # injected cap elapses → rule aborts
+            assert fake.calls == []  # downstream call must NOT run
+
+            # The single-run lock must have been released — the rule can fire
+            # again (it wasn't left wedged).
+            engine.emit_event("go")
+            await engine.join()
+            assert fake.calls == []
         finally:
             await engine.stop()
 

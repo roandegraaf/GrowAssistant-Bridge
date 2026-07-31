@@ -55,6 +55,26 @@ FiredPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
 # cannot spin the bridge. Past this depth events are dropped and logged.
 MAX_EVENT_DEPTH = 10
 
+# Fallback cap for a `wait_for_state` action whose `timeout` is omitted. Without
+# a bound, asyncio.wait_for(..., None) waits forever; in single-run mode that
+# permanently wedges the rule (the run never completes, so its lock never
+# releases and every later trigger is rejected). One hour is generous for grow
+# automations while still guaranteeing recovery. Tune if longer waits are
+# legitimately needed.
+DEFAULT_WAIT_FOR_STATE_TIMEOUT = 3600.0
+
+
+class _WaitForStateAborted(Exception):
+    """Raised when an *injected* (default) wait_for_state timeout elapses.
+
+    A user-specified timeout means "give up after N seconds and continue" — the
+    later actions run. But when the user gave no timeout, the default cap exists
+    only to prevent a permanent wedge; if it elapses we must NOT run the
+    remaining actions (e.g. "pump off") on a precondition that never actually
+    held. This aborts the rest of the rule instead, and releases the run lock.
+    """
+
+
 # Lifecycle event types the bridge seeds onto the bus.
 EVENT_BRIDGE_STARTED = "bridge_started"
 EVENT_MANIFEST_CHANGED = "manifest_changed"
@@ -333,16 +353,22 @@ class AutomationEngine:
     def apply_rules(self, rules: list[dict[str, Any]]) -> None:
         """Replace the running rule set (enabled rules only).
 
-        Cancels in-flight runs/timers and resets edge-detection baselines and
-        time markers — so a freshly-applied rule does not fire on the first
-        sample it sees, and a deleted rule's pending ``delay`` cannot fire.
-        Idempotent: re-applying the same set is safe (the manager only calls
-        this for a strictly-newer version, so reconnect redelivery never resets
-        baselines).
+        Cancels in-flight runs/timers and reseeds edge-detection baselines from
+        the StateStore's current snapshot (rather than clearing them) — so a
+        freshly-applied rule does not fire on the first sample it sees (its
+        baseline already equals the current value, so there is no edge), while
+        entities that are *not* being changed keep their real baseline and a
+        genuine later transition is still detected. Also resets time markers so
+        a deleted rule's pending ``delay`` cannot fire. Idempotent: re-applying
+        the same set is safe (the manager only calls this for a strictly-newer
+        version, so reconnect redelivery never resets baselines).
         """
         self._cancel_tasks()
         self._rules = [r for r in rules if isinstance(r, dict)]
-        self._prev_value.clear()
+        # Seed from the store so an unrelated rule edit cannot swallow an
+        # in-progress transition on some other entity (previously this cleared
+        # every baseline, making the next sample look like first_seen).
+        self._prev_value = self._store.snapshot()
         self._time_fired.clear()
         self._rebuild_entity_index()
         logger.info("Automation engine applied %d enabled rule(s)", len(self._rules))
@@ -592,6 +618,12 @@ class AutomationEngine:
                     failures.append(failure)
         except asyncio.CancelledError:
             raise
+        except _WaitForStateAborted as abort:
+            # Expected control-flow signal, not an error: stop the remaining
+            # actions and record why, without a scary traceback.
+            logger.info("Rule '%s' aborted: %s", rule_id, abort)
+            if fired:
+                failures.append(str(abort))
         except Exception as e:
             logger.exception("Error running automation '%s'", rule_id)
             if fired:
@@ -675,7 +707,13 @@ class AutomationEngine:
         state = action.get("state")
         above = action.get("above")
         below = action.get("below")
-        timeout = action.get("timeout")
+        user_timeout = action.get("timeout")
+        # An omitted (or non-positive) timeout would wait forever and, in
+        # single-run mode, permanently wedge the rule. Fall back to a bounded
+        # default so the run always completes; but distinguish it from a
+        # user-specified timeout so we can abort (not continue) if it elapses.
+        injected = not user_timeout or user_timeout <= 0
+        timeout = DEFAULT_WAIT_FOR_STATE_TIMEOUT if injected else user_timeout
 
         def predicate() -> bool:
             cur = self._store.get(entity)
@@ -687,6 +725,13 @@ class AutomationEngine:
 
         ok = await self._store.wait_for(predicate, timeout)
         if not ok:
+            if injected:
+                # The user did not ask to give up — don't run downstream actions
+                # on a condition that never held. Abort the rule instead.
+                raise _WaitForStateAborted(
+                    f"wait_for_state on '{entity}' not satisfied within the "
+                    f"default {DEFAULT_WAIT_FOR_STATE_TIMEOUT:.0f}s cap"
+                )
             logger.info("wait_for_state on '%s' timed out — continuing", entity)
 
     def _action_set_variable(

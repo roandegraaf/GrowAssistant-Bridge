@@ -362,7 +362,22 @@ class ClimateControlIntegration(Integration):
             return False
 
         device_type = device.get("type")
-        on = action.lower() == "on"
+
+        # This integration models on/off actuators only. Reject any other action
+        # (notably the app's `set` with a numeric value) instead of coercing it
+        # to a boolean: `action == "on"` is False for "set", which would
+        # silently switch the device OFF and still ack success — so a dashboard
+        # slider dragged to 30% would turn the heater off. Failing the command
+        # is the safe behaviour until per-level `set` is actually implemented.
+        act = action.lower()
+        if act not in ("on", "off"):
+            logger.warning(
+                "Unsupported action '%s' for %s; this integration only supports on/off",
+                action,
+                target_id,
+            )
+            return False
+        on = act == "on"
 
         if device_type == "heater":
             await self._set_heater(on)
