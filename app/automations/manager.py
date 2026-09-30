@@ -56,7 +56,8 @@ CONFIG_KEY = "automations"
 # Recognised vocabulary — mirrors the app's Zod schema. Structural validation
 # only; the evaluator slice gives these runtime behaviour.
 TRIGGER_TYPES = {"state", "numeric_state", "time", "time_pattern", "event"}
-CONDITION_TYPES = {"state", "numeric_state", "time", "and", "or", "not"}
+CONDITION_TYPES = {"state", "numeric_state", "time", "derived", "and", "or", "not"}
+DERIVED_METRICS = {"vpd", "dew_point", "dli"}
 ACTION_TYPES = {"call", "delay", "wait_for_state", "set_variable", "fire_event", "notification"}
 
 # Node types that reference an entity (validated against the registry).
@@ -289,6 +290,14 @@ class AutomationManager:
                 self._check_condition(child, rid, errors)
         elif ctype in _ENTITY_CONDITIONS:
             self._check_entity(node.get("entity"), "condition", ctype, rid, errors)
+        elif ctype == "derived":
+            if node.get("metric") not in DERIVED_METRICS:
+                msg = f"unknown derived metric '{node.get('metric')}'"
+                errors.append({"automationId": rid, "message": msg})
+                return
+            fields = ("light",) if node.get("metric") == "dli" else ("temperature", "humidity")
+            for field in fields:
+                self._check_entity(node.get(field), "condition", ctype, rid, errors)
 
     @staticmethod
     def _check_entity(

@@ -38,6 +38,7 @@ from typing import Any, Callable, Optional
 from . import templates
 from .event_bus import EventBus
 from .executor import ActionExecutor
+from .metrics import DliAccumulator, dew_point_c, to_float, vpd_kpa
 from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -301,6 +302,7 @@ class AutomationEngine:
         self._time_fired: dict[tuple, Any] = {}
         # outstanding rule-run tasks (so we can await/cancel them)
         self._run_tasks: set[asyncio.Task] = set()
+        self._dli: dict[str, DliAccumulator] = {}
 
         self._started = False
         self._scheduler_task: Optional[asyncio.Task] = None
@@ -371,6 +373,8 @@ class AutomationEngine:
         self._prev_value = self._store.snapshot()
         self._time_fired.clear()
         self._rebuild_entity_index()
+        lights = _dli_light_entities(self._rules)
+        self._dli = {e: self._dli.get(e) or DliAccumulator() for e in lights}
         logger.info("Automation engine applied %d enabled rule(s)", len(self._rules))
 
     def _cancel_tasks(self) -> None:
@@ -407,6 +411,9 @@ class AutomationEngine:
 
     def _on_state_change(self, entity_id: str, value: Any) -> None:
         """Handle a StateStore change: evaluate state/numeric_state triggers."""
+        acc = self._dli.get(entity_id)
+        if acc is not None:
+            acc.add(value, self._now())
         first_seen = entity_id not in self._prev_value
         old = self._prev_value.get(entity_id)
 
@@ -836,5 +843,40 @@ class AutomationEngine:
             )
         if ctype == "time":
             return time_condition_matches(condition, now)
+        if ctype == "derived":
+            value = self._derived_value(condition, now)
+            return value is not None and numeric_range_match(
+                value, condition.get("above"), condition.get("below")
+            )
         logger.warning("Unknown condition type '%s' — treating as false", ctype)
         return False
+
+    def _derived_value(self, condition: dict[str, Any], now: datetime) -> Optional[float]:
+        metric = condition.get("metric")
+        if metric == "dli":
+            acc = self._dli.get(condition.get("light"))
+            return acc.value(now) if acc is not None else None
+        temp = to_float(self._store.get(condition.get("temperature")))
+        rh = to_float(self._store.get(condition.get("humidity")))
+        if temp is None or rh is None:
+            return None
+        if metric == "vpd":
+            offset = to_float(condition.get("leaf_offset"))
+            return vpd_kpa(temp, rh, -2.0 if offset is None else offset)
+        if metric == "dew_point":
+            return dew_point_c(temp, rh)
+        return None
+
+
+def _dli_light_entities(rules: list[dict[str, Any]]) -> set[str]:
+    lights: set[str] = set()
+    stack = [c for r in rules for c in (r.get("conditions") or [])]
+    while stack:
+        c = stack.pop()
+        if not isinstance(c, dict):
+            continue
+        stack.extend(c.get("conditions") or [])
+        if c.get("type") == "derived" and c.get("metric") == "dli":
+            if isinstance(c.get("light"), str):
+                lights.add(c["light"])
+    return lights

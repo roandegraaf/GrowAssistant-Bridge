@@ -9,7 +9,7 @@ the fire_event loop guard, and end-to-end event/set_variable/fire_event flows.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -23,6 +23,7 @@ from app.automations.engine import (
 )
 from app.automations.event_bus import EventBus
 from app.automations.executor import ActionExecutor
+from app.automations.metrics import DliAccumulator, dew_point_c, vpd_kpa
 from app.automations.state_store import StateStore
 from app.registry import DeviceCategory, registry
 
@@ -671,6 +672,91 @@ class TestConditions:
             await store.set("sensor.temp", 35)  # trigger fires but condition (mode=auto) fails
             await engine.join()
             assert fake.calls == []
+        finally:
+            await engine.stop()
+
+
+class TestDerivedMetrics:
+    def test_vpd_and_dew_point_formulas(self):
+        assert vpd_kpa(25, 60, 0) == pytest.approx(1.267, abs=1e-3)
+        assert vpd_kpa(25, 60) < vpd_kpa(25, 60, 0)
+        assert dew_point_c(25, 60) == pytest.approx(16.7, abs=0.05)
+        assert dew_point_c(25, 100) == pytest.approx(25)
+        assert dew_point_c(25, 0) is None
+        assert dew_point_c(25, -5) is None
+
+    def test_dli_constant_light_for_twelve_hours(self):
+        acc = DliAccumulator()
+        start = datetime(2026, 1, 1, 6, 0, 0)
+        for minute in range(0, 12 * 60, 10):
+            acc.add(500, start + timedelta(minutes=minute))
+        acc.add(0, start + timedelta(hours=12))
+        assert acc.value(start + timedelta(hours=13)) == pytest.approx(21.6)
+
+    def test_dli_tail_gap_cap_and_non_numeric(self):
+        acc = DliAccumulator()
+        t0 = datetime(2026, 1, 1, 6, 0, 0)
+        assert acc.value(t0) is None
+        acc.add(1000, t0)
+        acc.add("unavailable", t0 + timedelta(minutes=5))
+        assert acc.value(t0 + timedelta(minutes=10)) == pytest.approx(0.6)
+        assert acc.value(t0 + timedelta(minutes=31)) == pytest.approx(0)
+        acc.add(1000, t0 + timedelta(hours=1))
+        assert acc.value(t0 + timedelta(hours=1)) == pytest.approx(0)
+
+    def test_dli_resets_at_midnight(self):
+        acc = DliAccumulator()
+        t0 = datetime(2026, 1, 1, 23, 50, 0)
+        acc.add(1000, t0)
+        acc.add(1000, t0 + timedelta(minutes=10))
+        acc.add(1000, t0 + timedelta(minutes=20))
+        assert acc.value(t0 + timedelta(minutes=20)) == pytest.approx(0.6)
+        assert acc.value(datetime(2026, 1, 3, 12)) == pytest.approx(0)
+
+    def _vpd(self, **extra):
+        return {
+            "type": "derived",
+            "metric": "vpd",
+            "temperature": "sensor.temp",
+            "humidity": "sensor.rh",
+            **extra,
+        }
+
+    def test_vpd_and_dew_point_conditions(self):
+        engine, store, _bus, _fake = _build()
+        store._values.update({"sensor.temp": 25, "sensor.rh": "60"})
+        now = FIXED_NOON
+        assert engine._evaluate_condition(self._vpd(leaf_offset=0, above=1.2, below=1.3), now)
+        assert not engine._evaluate_condition(self._vpd(above=1.2), now)
+        assert engine._evaluate_condition(self._vpd(below=1.0), now)
+        dew = {**self._vpd(), "metric": "dew_point", "above": 16.5, "below": 17}
+        assert engine._evaluate_condition(dew, now)
+        assert not engine._evaluate_condition(self._vpd(humidity="sensor.ghost", below=9), now)
+        store._values["sensor.rh"] = "unknown"
+        assert not engine._evaluate_condition(self._vpd(below=9), now)
+
+    async def test_dli_condition_fed_from_state_changes(self):
+        clock = [datetime(2026, 1, 1, 6, 0, 0)]
+        engine, store, _bus, _fake = _build(now=lambda: clock[0])
+        dli = {"type": "derived", "metric": "dli", "light": "sensor.ppfd", "above": 0.5}
+        engine.apply_rules(
+            [
+                {
+                    "id": "r",
+                    "triggers": [{"type": "time", "at": "20:00"}],
+                    "conditions": [{"type": "not", "conditions": [dli]}],
+                    "actions": [],
+                }
+            ]
+        )
+        engine.start()
+        try:
+            assert not engine._evaluate_condition(dli, clock[0])
+            await store.set("sensor.ppfd", 1000)
+            clock[0] += timedelta(minutes=10)
+            assert engine._evaluate_condition(dli, clock[0])
+            missing = {**dli, "light": "sensor.ghost", "above": None, "below": 99}
+            assert not engine._evaluate_condition(missing, clock[0])
         finally:
             await engine.stop()
 

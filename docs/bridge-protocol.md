@@ -553,11 +553,22 @@ never a delta. Republished in full on every mutation. Source:
 
 The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
 (triggers `state`/`numeric_state`/`time`/`time_pattern`/`event`; recursive
-`and`/`or`/`not` + `state`/`numeric_state`/`time` conditions; actions `call`/
+`and`/`or`/`not` + `state`/`numeric_state`/`time`/`derived` conditions; actions `call`/
 `delay`/`wait_for_state`/`set_variable`/`fire_event`/`notification`; `{{ }}`
 templating). The bridge evaluator (`app/automations/`) implements that full
 vocabulary. The `notification` action publishes back to the app on `…/notify`
 (§10.3).
+
+**Derived conditions.** `{"type": "derived", "metric": "vpd" | "dew_point" |
+"dli", …, "above"?, "below"?}` compares a computed grow metric with the same
+strict `above`/`below` semantics as `numeric_state`. `vpd` (kPa, leaf VPD,
+optional `leaf_offset` °C, default `-2`) and `dew_point` (°C, Magnus) read the
+`temperature` (°C) and `humidity` (% RH) entities; `dli` (mol/m²/day) integrates
+the `light` entity's PPFD (µmol/m²/s) over the bridge's local day, holding each
+sample up to 30 min and resetting at local midnight. DLI is kept in memory and
+restarts from zero when the bridge restarts. A missing or non-numeric input makes
+the condition false. Formulas live in `app/automations/metrics.py` and match the
+app's implementation.
 
 **State matching semantics.** Everywhere a rule compares a state string (a
 `state` trigger's `to`/`from`, a `state` condition, `wait_for_state`), the
