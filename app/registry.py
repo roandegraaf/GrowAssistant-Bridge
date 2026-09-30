@@ -18,6 +18,36 @@ from app.utils.singleton import SingletonMeta
 logger = logging.getLogger(__name__)
 
 
+SENSOR_DEVICE_CLASSES: dict[str, str] = {
+    "temperature": "temperature",
+    "humidity": "humidity",
+    "co2": "co2",
+    "ppfd": "ppfd",
+    "light_sensor": "illuminance",
+    "illuminance": "illuminance",
+    "ph": "ph",
+    "ec": "ec",
+    "soil_moisture": "soil_moisture",
+    "water_level": "water_level",
+    "pressure": "pressure",
+    "flow": "flow",
+}
+
+ACTUATOR_DEVICE_CLASSES: dict[str, str] = {
+    "light": "light",
+    "light_switch": "light",
+    "fan": "fan",
+    "exhaust_fan": "exhaust_fan",
+    "intake_fan": "intake_fan",
+    "circulation_fan": "circulation_fan",
+    "humidifier": "humidifier",
+    "humidity": "humidifier",
+    "dehumidifier": "dehumidifier",
+    "heater": "heater",
+    "pump": "pump",
+}
+
+
 class DeviceCategory(str, Enum):
     """Category of a device."""
 
@@ -243,6 +273,22 @@ class DeviceRegistry(metaclass=SingletonMeta):
             return "number"
         return "switch"
 
+    @staticmethod
+    def _device_class(d: DeviceInfo) -> Optional[str]:
+        """Semantic class the app binds space roles to, or None when unknown.
+
+        ``metadata["device_class"]`` wins, so an integration whose free-form
+        ``device_type`` is misleading can state the class explicitly.
+        """
+        explicit = d.metadata.get("device_class")
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        if d.category == DeviceCategory.SENSOR:
+            return SENSOR_DEVICE_CLASSES.get(d.device_type)
+        if d.category == DeviceCategory.ACTUATOR:
+            return ACTUATOR_DEVICE_CLASSES.get(d.device_type)
+        return None
+
     def serialize_manifest(self, version: int) -> dict[str, Any]:
         """Build the JSON-serializable manifest payload for the API.
 
@@ -254,7 +300,8 @@ class DeviceRegistry(metaclass=SingletonMeta):
         Each device carries the original 7 fields (unchanged, so the
         ``compute_manifest_hash`` parity check stays valid) plus three
         wire-only fields the app needs: ``entityDomain`` (HA entity
-        domain), ``writable`` (True for actuators) and ``unit``.
+        domain), ``writable`` (True for actuators), ``unit`` and
+        ``deviceClass`` (semantic class, or None).
         """
         devices = []
         for entity_id in sorted(self._devices.keys()):
@@ -272,6 +319,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
                     "entityDomain": self._ha_entity_domain(d),
                     "writable": d.category == DeviceCategory.ACTUATOR,
                     "unit": d.metadata.get("unit"),
+                    "deviceClass": self._device_class(d),
                 }
             )
         return {

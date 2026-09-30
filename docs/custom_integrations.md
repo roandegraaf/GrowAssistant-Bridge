@@ -25,6 +25,7 @@ This guide covers everything you need to know to develop custom integrations for
 5. [Self-Registration Pattern](#self-registration-pattern)
 6. [Configuration Validation](#configuration-validation)
 7. [Device Registry](#device-registry)
+   - [Device classes](#device-classes)
 8. [API Communication](#api-communication)
 9. [Complete Integration Example](#complete-integration-example)
 10. [Best Practices](#best-practices)
@@ -364,6 +365,53 @@ registry.register_device(
     metadata={"model": "DP-100", "max_flow": 100},
 )
 ```
+
+### Device classes
+
+Every manifest entry carries an optional `deviceClass`: what the entity *is*,
+independent of the integration that provides it. The app never looks at
+integration names; it binds each space's roles ("the tent temperature sensor",
+"the exhaust fan") to entities by `deviceClass`, and plan targets, alerts and
+flows ask for a role. An integration that reports a correct class works with
+every guidance feature without app changes.
+
+The class is resolved in `DeviceRegistry._device_class` (`app/registry.py`):
+
+1. `metadata["device_class"]`, when the integration sets it, wins.
+2. Otherwise the `device_type` is mapped, per category:
+
+| Category | `device_type` | `deviceClass` |
+|----------|---------------|---------------|
+| sensor   | `temperature`, `humidity`, `co2`, `ppfd`, `ph`, `ec`, `soil_moisture`, `water_level`, `pressure`, `flow` | same as the type |
+| sensor   | `light_sensor`, `illuminance` | `illuminance` |
+| actuator | `light`, `light_switch` | `light` |
+| actuator | `fan`, `exhaust_fan`, `intake_fan`, `circulation_fan`, `humidifier`, `dehumidifier`, `heater`, `pump` | same as the type |
+| actuator | `humidity` | `humidifier` |
+
+3. Anything else serializes as `null`. The entity still works (widgets,
+   commands, flows); the user just binds it to a role by hand.
+
+Set the class explicitly when your `device_type` is generic or misleading:
+
+```python
+registry.register_device(
+    name="probe1",
+    domain="my",
+    device_type="analog_in",
+    category=DeviceCategory.SENSOR,
+    integration_name=self.name,
+    metadata={"unit": "%", "device_class": "soil_moisture"},
+)
+```
+
+`deviceClass` is a wire-only field: it is not part of the manifest hash
+(`docs/bridge-protocol.md` §6.2), so adding or changing it never breaks hash
+parity. The app stores it on `Entity.deviceClass` and ignores classes it
+doesn't know.
+
+The contract tests in `tests/test_telemetry_contract.py` assert the serialized
+`deviceClass` per integration next to the telemetry join check; add a case
+there when you add an integration.
 
 ### Querying the Registry
 

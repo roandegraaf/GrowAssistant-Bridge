@@ -144,3 +144,49 @@ def test_original_seven_fields_preserved(reg):
         assert key in entry
     assert entry["category"] == "ACTUATOR"
     assert entry["metadata"] == {"foo": "bar"}
+
+
+@pytest.mark.parametrize(
+    ("device_type", "category", "expected"),
+    [
+        ("temperature", DeviceCategory.SENSOR, "temperature"),
+        ("light_sensor", DeviceCategory.SENSOR, "illuminance"),
+        ("humidity", DeviceCategory.SENSOR, "humidity"),
+        ("humidity", DeviceCategory.ACTUATOR, "humidifier"),
+        ("light", DeviceCategory.ACTUATOR, "light"),
+        ("fan", DeviceCategory.ACTUATOR, "fan"),
+        ("http_endpoint", DeviceCategory.SENSOR, None),
+        ("camera", DeviceCategory.CAMERA, None),
+    ],
+)
+def test_serialize_device_class_from_type(reg, device_type, category, expected):
+    reg.register_device(
+        name="dev",
+        domain="x",
+        device_type=device_type,
+        category=category,
+        integration_name="XIntegration",
+    )
+    assert _device(reg.serialize_manifest(1)["devices"], "x.dev")["deviceClass"] == expected
+
+
+def test_metadata_device_class_overrides_type_and_keeps_hash(reg):
+    reg.register_device(
+        name="probe",
+        domain="x",
+        device_type="water_level",
+        category=DeviceCategory.SENSOR,
+        integration_name="XIntegration",
+        metadata={"device_class": "soil_moisture"},
+    )
+    before = reg.compute_manifest_hash()
+    entry = _device(reg.serialize_manifest(1)["devices"], "x.probe")
+    assert entry["deviceClass"] == "soil_moisture"
+    reg.register_device(
+        name="probe",
+        domain="x",
+        device_type="water_level",
+        category=DeviceCategory.SENSOR,
+        integration_name="XIntegration",
+    )
+    assert reg.compute_manifest_hash() == before

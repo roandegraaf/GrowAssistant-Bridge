@@ -50,6 +50,11 @@ def _assert_samples_join(samples: list[dict[str, Any]], registry: DeviceRegistry
         assert "value" in sample, f"sample missing top-level value: {sample}"
 
 
+def _device_classes(registry: DeviceRegistry) -> dict[str, Any]:
+    """entityId -> deviceClass as the manifest puts it on the wire."""
+    return {d["entityId"]: d["deviceClass"] for d in registry.serialize_manifest(1)["devices"]}
+
+
 class TestMQTTContract:
     """MQTT samples join `mqtt.<type>` regardless of the raw topic string."""
 
@@ -100,6 +105,15 @@ class TestMQTTContract:
             "mqtt.temperature": 22.5,
             "mqtt.pump_status": "on",
             "mqtt.climate_json": 21.7,
+        }
+
+    def test_manifest_carries_device_classes(self, registry):
+        self._integration().register_capabilities(registry)
+
+        assert _device_classes(registry) == {
+            "mqtt.temperature": "temperature",
+            "mqtt.pump_status": None,
+            "mqtt.climate_json": None,
         }
 
     @pytest.mark.asyncio
@@ -301,6 +315,19 @@ class TestSimulatorContract:
         _assert_samples_join(samples, registry)
         assert len(samples) == 5
 
+    def test_manifest_carries_device_classes(self, registry):
+        from external_integrations.simulator import SimulatorIntegration
+
+        SimulatorIntegration({"enabled": True}).register_capabilities(registry)
+
+        assert _device_classes(registry) == {
+            "simulator.co2": "co2",
+            "simulator.soil_moisture": "soil_moisture",
+            "simulator.tent_humidity": "humidity",
+            "simulator.tent_temperature": "temperature",
+            "simulator.water_tank_level": "water_level",
+        }
+
 
 class TestClimateContract:
     """Climate samples join `climate.<name>` (custom-domain registration)."""
@@ -330,6 +357,14 @@ class TestClimateContract:
         assert {s["entity_id"] for s in samples} == {
             "climate.tent_heater",
             "climate.tent_humidifier",
+        }
+
+    def test_manifest_carries_device_classes(self, registry):
+        self._integration().register_capabilities(registry)
+
+        assert _device_classes(registry) == {
+            "climate.tent_heater": "heater",
+            "climate.tent_humidifier": "humidifier",
         }
 
     @pytest.mark.asyncio
