@@ -38,6 +38,10 @@ SENSORS = {
     "water_tank_level": ("water_level", "%"),
 }
 
+# The legacy device types above are kept for manifest-hash stability; the
+# semantic class rides in metadata instead.
+DEVICE_CLASS_OVERRIDES = {"soil_moisture": "soil_moisture", "co2": "co2"}
+
 
 @register_integration
 class SimulatorIntegration(Integration):
@@ -78,7 +82,7 @@ class SimulatorIntegration(Integration):
                 device_type=device_type,
                 category=DeviceCategory.SENSOR,
                 integration_name=self.name,
-                metadata={"unit": unit},
+                metadata={"unit": unit, "device_class": DEVICE_CLASS_OVERRIDES.get(name)},
             )
         logger.info("Registered %d simulated sensors", len(SENSORS))
 

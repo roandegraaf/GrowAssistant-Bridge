@@ -281,6 +281,7 @@ Each device entry:
 | `entityDomain`    | string   | **no**   | HA entity domain the app stores: `sensor`/`switch`/`number`/`light`/`camera`. |
 | `writable`        | bool     | **no**   | True for actuators — whether the app may command it. |
 | `unit`            | string?  | **no**   | Unit of measurement, or null. |
+| `deviceClass`     | string?  | **no**   | Semantic class (`temperature`, `humidity`, `co2`, `soil_moisture`, `exhaust_fan`, `humidifier`, …), or null when unknown. The app binds space roles to it. See [custom_integrations.md](./custom_integrations.md#device-classes). |
 
 The bridge emits the HA `entityDomain` explicitly (rather than the app inferring
 it): `SENSOR → sensor`; `ACTUATOR` with `deviceType == "light" → light`;
@@ -367,7 +368,8 @@ f5b1954d657d7247d578bd15ff4e4bca827986bd88bc1c6a086886ac0ed158df
       "metadata": {"pin": 17},
       "entityDomain": "switch",
       "writable": true,
-      "unit": null
+      "unit": null,
+      "deviceClass": "pump"
     },
     {
       "entityId": "mqtt.tent_temp",
@@ -380,7 +382,8 @@ f5b1954d657d7247d578bd15ff4e4bca827986bd88bc1c6a086886ac0ed158df
       "metadata": {"topic": "tent/sensors/temp"},
       "entityDomain": "sensor",
       "writable": false,
-      "unit": "°C"
+      "unit": "°C",
+      "deviceClass": "temperature"
     }
   ]
 }
