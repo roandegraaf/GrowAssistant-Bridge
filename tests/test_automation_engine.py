@@ -8,13 +8,16 @@ the fire_event loop guard, and end-to-end event/set_variable/fire_event flows.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
 import pytest
 
 from app.automations.engine import (
+    HOLD_TICK_SECONDS,
     AutomationEngine,
+    hold_wants_on,
     numeric_range_match,
     state_equals,
     time_condition_matches,
@@ -1195,3 +1198,338 @@ class TestFiredEcho:
 
         assert fake.calls == [("fan", "on", {}), ("fan", "on", {})]
         assert "Fired echo publish failed" in caplog.text
+
+
+# ─── climate_hold / ramp / stage ─────────────────────────────────────────────
+
+
+class Clock:
+    def __init__(self, start=FIXED_NOON):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+
+def _scripted(clock, on_tick=None):
+    """A sleep that advances the fake clock and yields, calling ``on_tick(n)``
+    after the n-th sleep so a test can change readings between hold ticks."""
+    ticks = []
+
+    async def sleep(seconds):
+        clock.now += timedelta(seconds=seconds)
+        ticks.append(seconds)
+        if on_tick is not None:
+            await on_tick(len(ticks))
+        await asyncio.sleep(0)
+
+    return sleep, ticks
+
+
+def _hold_rule(action, conditions=None, rule_id="hold"):
+    return {
+        "id": rule_id,
+        "enabled": True,
+        "triggers": [{"type": "event", "event_type": "go"}],
+        "conditions": conditions or [],
+        "actions": [action],
+    }
+
+
+async def _run_readings(action, entity, readings, conditions=None):
+    """Run one hold, feeding ``readings`` to ``entity`` one per tick."""
+    clock = Clock()
+
+    async def feed(n):
+        if n < len(readings):
+            await store.set(entity, readings[n])
+
+    sleep, _ticks = _scripted(clock, feed)
+    engine, store, _bus, fake = _build(now=clock, sleep=sleep)
+    await store.set(entity, readings[0])
+    engine.apply_rules([_hold_rule(action, conditions)])
+    engine.start()
+    try:
+        engine.emit_event("go")
+        await engine.join()
+    finally:
+        await engine.stop()
+    return [(name, action) for name, action, _payload in fake.calls]
+
+
+class TestHoldDecision:
+    def test_lower_switches_outside_the_band_and_keeps_state_inside(self):
+        assert hold_wants_on("lower", 64, 60, 3, False) is True
+        assert hold_wants_on("lower", 62, 60, 3, False) is False
+        assert hold_wants_on("lower", 62, 60, 3, True) is True
+        assert hold_wants_on("lower", 57, 60, 3, True) is False
+
+    def test_raise_is_the_mirror(self):
+        assert hold_wants_on("raise", 20, 22, 1, False) is True
+        assert hold_wants_on("raise", 22.5, 22, 1, True) is True
+        assert hold_wants_on("raise", 23, 22, 1, True) is False
+
+    def test_missing_reading_fails_safe_to_off(self):
+        assert hold_wants_on("raise", None, 22, 1, True) is False
+
+
+class TestClimateHold:
+    async def test_lower_direction_holds_humidity_around_target(self):
+        _register("switch.dehumidifier")
+        action = {
+            "type": "climate_hold",
+            "entity": "switch.dehumidifier",
+            "sensor": "sensor.rh",
+            "target": 60,
+            "hysteresis": 3,
+            "direction": "lower",
+            "min_cycle": 0,
+            "seconds": 6 * HOLD_TICK_SECONDS,
+        }
+        calls = await _run_readings(action, "sensor.rh", [65, 61, 58, 56, 62, 64])
+        assert calls == [
+            ("dehumidifier", "on"),
+            ("dehumidifier", "off"),
+            ("dehumidifier", "on"),
+            ("dehumidifier", "off"),
+        ]
+
+    async def test_raise_direction_heats_until_above_band(self):
+        _register("switch.heater")
+        action = {
+            "type": "climate_hold",
+            "entity": "switch.heater",
+            "sensor": "sensor.temp",
+            "target": 22,
+            "hysteresis": 1,
+            "direction": "raise",
+            "min_cycle": 0,
+            "seconds": 4 * HOLD_TICK_SECONDS,
+        }
+        calls = await _run_readings(action, "sensor.temp", [20, 21.5, 23.5, 22])
+        assert calls == [("heater", "on"), ("heater", "off")]
+
+    async def test_min_cycle_stops_chatter(self):
+        _register("switch.fan")
+        action = {
+            "type": "climate_hold",
+            "entity": "switch.fan",
+            "sensor": "sensor.rh",
+            "target": 60,
+            "hysteresis": 1,
+            "direction": "lower",
+            "min_cycle": 60,
+            "seconds": 4 * HOLD_TICK_SECONDS,
+        }
+        calls = await _run_readings(action, "sensor.rh", [62, 58, 62, 58])
+        assert calls == [("fan", "on"), ("fan", "off")]
+
+    async def test_vpd_source_uses_the_metric(self):
+        _register("switch.humidifier")
+        clock = Clock()
+
+        async def feed(n):
+            if n == 1:
+                await store.set("sensor.rh", 75)
+
+        sleep, _ticks = _scripted(clock, feed)
+        engine, store, _bus, fake = _build(now=clock, sleep=sleep)
+        await store.set("sensor.temp", 26)
+        await store.set("sensor.rh", 50)
+        assert vpd_kpa(26, 50) > 1.1 and vpd_kpa(26, 75) < 0.9
+        action = {
+            "type": "climate_hold",
+            "entity": "switch.humidifier",
+            "metric": "vpd",
+            "temperature": "sensor.temp",
+            "humidity": "sensor.rh",
+            "target": 1.0,
+            "hysteresis": 0.1,
+            "direction": "lower",
+            "min_cycle": 0,
+            "seconds": 2 * HOLD_TICK_SECONDS,
+        }
+        engine.apply_rules([_hold_rule(action)])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert [c[1] for c in fake.calls] == ["on", "off"]
+
+    async def test_hold_ends_and_switches_off_when_conditions_fail(self):
+        _register("light.lamp")
+        clock = Clock()
+        sleep, ticks = _scripted(clock)
+        engine, _store, _bus, fake = _build(now=clock, sleep=sleep)
+        window = [{"type": "time", "after": "06:00", "before": "12:00:30"}]
+        engine.apply_rules([_hold_rule({"type": "climate_hold", "entity": "light.lamp"}, window)])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert fake.calls == [("lamp", "on", {}), ("lamp", "off", {})]
+        assert len(ticks) == 3
+
+    async def test_cancel_switches_off(self):
+        _register("light.lamp")
+        clock = Clock()
+
+        async def remove_rule(n):
+            if n == 3:
+                engine.apply_rules([])
+
+        sleep, _ticks = _scripted(clock, remove_rule)
+        engine, _store, _bus, fake = _build(now=clock, sleep=sleep)
+        engine.apply_rules([_hold_rule({"type": "climate_hold", "entity": "light.lamp"})])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert fake.calls == [("lamp", "on", {}), ("lamp", "off", {})]
+
+    async def test_unchanged_rule_keeps_running_across_republish(self):
+        _register("light.lamp")
+        clock = Clock()
+        rule = _hold_rule({"type": "climate_hold", "entity": "light.lamp"})
+
+        async def republish(n):
+            if n == 2:
+                engine.apply_rules([json.loads(json.dumps(rule))], stages={"s1": "flowering"})
+                engine.emit_event("go")
+            if n == 5:
+                engine.apply_rules([])
+
+        sleep, ticks = _scripted(clock, republish)
+        engine, _store, _bus, fake = _build(now=clock, sleep=sleep)
+        engine.apply_rules([rule])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert fake.calls == [("lamp", "on", {}), ("lamp", "off", {})]
+        assert len(ticks) == 5
+
+    async def test_changed_rule_run_is_cancelled(self):
+        _register("switch.fan")
+        engine, _store, _bus, fake = _build(sleep=asyncio.sleep)
+        rule = {
+            "id": "r",
+            "enabled": True,
+            "triggers": [{"type": "event", "event_type": "go"}],
+            "actions": [
+                {"type": "delay", "seconds": 0.05},
+                {"type": "call", "entity": "switch.fan", "service": "turn_on"},
+            ],
+        }
+        engine.apply_rules([rule])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await asyncio.sleep(0.01)
+            engine.apply_rules([{**rule, "name": "edited"}])
+            await engine.join()
+            assert fake.calls == []
+        finally:
+            await engine.stop()
+
+
+class TestRamp:
+    async def test_ramps_in_equal_steps_from_the_start_value(self):
+        _register("number.dimmer")
+        clock = Clock()
+        sleep, ticks = _scripted(clock)
+        engine, _store, _bus, fake = _build(now=clock, sleep=sleep)
+        ramp = {"type": "ramp", "entity": "number.dimmer", "from": 0, "to": 100}
+        engine.apply_rules([_hold_rule({**ramp, "minutes": 1, "steps": 4})])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert [c[2]["value"] for c in fake.calls] == [0, 25, 50, 75, 100]
+        assert ticks == [15, 15, 15, 15]
+
+    async def test_defaults_to_current_value_and_one_step_per_minute(self):
+        _register("number.dimmer")
+        clock = Clock()
+        sleep, ticks = _scripted(clock)
+        engine, store, _bus, fake = _build(now=clock, sleep=sleep)
+        await store.set("number.dimmer", 40)
+        ramp = {"type": "ramp", "entity": "number.dimmer", "to": 100, "seconds": 120}
+        engine.apply_rules([_hold_rule(ramp)])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        assert [c[2]["value"] for c in fake.calls] == [70, 100]
+        assert ticks == [60, 60]
+
+
+class TestStage:
+    def _rule(self, to=None):
+        trigger = {"type": "stage", "space": "s1"}
+        if to is not None:
+            trigger["to"] = to
+        return {
+            "id": "st",
+            "enabled": True,
+            "triggers": [trigger],
+            "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+        }
+
+    async def test_first_apply_seeds_then_a_change_fires(self):
+        _register("switch.fan")
+        engine, _store, _bus, fake = _build()
+        engine.start()
+        try:
+            engine.apply_rules([self._rule()], stages={"s1": "vegetative"})
+            await engine.join()
+            assert fake.calls == []
+            engine.apply_rules([self._rule()], stages={"s1": "vegetative"})
+            await engine.join()
+            assert fake.calls == []
+            engine.apply_rules([self._rule()], stages={"s1": "flowering"})
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    async def test_to_filters_the_new_stage(self):
+        _register("switch.fan")
+        engine, _store, _bus, fake = _build()
+        engine.start()
+        try:
+            engine.apply_rules([self._rule("flowering")], stages={"s1": "seedling"})
+            engine.apply_rules([self._rule("flowering")], stages={"s1": "vegetative"})
+            await engine.join()
+            assert fake.calls == []
+            engine.apply_rules([self._rule("flowering")], stages={"s1": "flowering"})
+            await engine.join()
+            assert fake.calls == [("fan", "on", {})]
+        finally:
+            await engine.stop()
+
+    def test_stage_condition(self):
+        engine, _store, _bus, _fake = _build()
+        engine.apply_rules([], stages={"s1": "flowering"})
+        cond = {"type": "stage", "space": "s1", "stage": "flowering"}
+        assert engine._evaluate_condition(cond, FIXED_NOON) is True
+        assert engine._evaluate_condition({**cond, "stage": "vegetative"}, FIXED_NOON) is False
+        assert engine._evaluate_condition({**cond, "space": "s2"}, FIXED_NOON) is False
+
+    def test_window_ending_at_midnight(self):
+        window = {"after": "06:00", "before": "00:00"}
+        assert time_condition_matches(window, datetime(2026, 1, 1, 23, 59)) is True
+        assert time_condition_matches(window, datetime(2026, 1, 1, 0, 1)) is False
+        assert time_condition_matches(window, datetime(2026, 1, 1, 6, 0)) is True

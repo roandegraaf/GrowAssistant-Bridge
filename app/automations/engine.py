@@ -31,8 +31,9 @@ property for a grow tent.
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Awaitable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from . import templates
@@ -63,6 +64,15 @@ MAX_EVENT_DEPTH = 10
 # automations while still guaranteeing recovery. Tune if longer waits are
 # legitimately needed.
 DEFAULT_WAIT_FOR_STATE_TIMEOUT = 3600.0
+
+# climate_hold re-reads its sensor this often. Sensor values only refresh every
+# collection interval (default 60s), so a faster tick buys nothing.
+HOLD_TICK_SECONDS = 15.0
+# Minimum time between two switches of a held actuator (compressor/relay wear).
+DEFAULT_MIN_CYCLE_SECONDS = 60.0
+# A ramp without an explicit step count moves once per minute, capped.
+DEFAULT_RAMP_STEP_SECONDS = 60.0
+MAX_RAMP_STEPS = 60
 
 
 class _WaitForStateAborted(Exception):
@@ -234,6 +244,25 @@ def time_condition_matches(condition: dict[str, Any], now: datetime) -> bool:
     return True
 
 
+def hold_wants_on(
+    direction: Any, value: Optional[float], target: float, hysteresis: float, is_on: bool
+) -> bool:
+    """Hysteresis decision for a ``climate_hold`` actuator.
+
+    ``lower``: the actuator pushes the reading down (exhaust, dehumidifier) — on
+    at ``target + hysteresis``, off at ``target - hysteresis``. ``raise`` is the
+    mirror (heater, humidifier). Inside the band the current state is kept, which
+    is what stops it chattering. A missing reading fails safe to off.
+    """
+    if value is None:
+        return False
+    high = value >= target + hysteresis
+    low = value <= target - hysteresis
+    if direction == "lower":
+        return True if high else False if low else is_on
+    return True if low else False if high else is_on
+
+
 def duration_seconds(action: dict[str, Any]) -> float:
     """Total seconds for a ``delay`` action's hours/minutes/seconds."""
     return (
@@ -290,12 +319,16 @@ class AutomationEngine:
         self._scheduler_interval = scheduler_interval
 
         self._rules: list[dict[str, Any]] = []
+        # space id → grow stage, published by the app with the rule set. None
+        # until the first apply, which only seeds the baseline for stage triggers.
+        self._stages: Optional[dict[str, str]] = None
         # entity_id → list of (rule, trigger) for state/numeric_state triggers
         self._entity_triggers: dict[str, list[tuple[dict, dict]]] = {}
         # previous observed value per entity (for edge detection; absence = unseen)
         self._prev_value: dict[str, Any] = {}
-        # rule ids with an action sequence currently running (single run mode)
-        self._active: set[str] = set()
+        # rule id → (canonical rule JSON, run task) while its actions run
+        # (single run mode). The JSON lets apply_rules keep unchanged runs.
+        self._runs: dict[Any, tuple[str, asyncio.Task]] = {}
         # pending `for:` timers, keyed (rule_id, trigger_index)
         self._for_tasks: dict[tuple, asyncio.Task] = {}
         # last-fired marker per time/time_pattern trigger, keyed (rule_id, trigger_index)
@@ -352,21 +385,24 @@ class AutomationEngine:
         await self.join()
         logger.info("Automation engine stopped")
 
-    def apply_rules(self, rules: list[dict[str, Any]]) -> None:
-        """Replace the running rule set (enabled rules only).
+    def apply_rules(
+        self, rules: list[dict[str, Any]], stages: Optional[dict[str, str]] = None
+    ) -> None:
+        """Replace the running rule set (enabled rules only) and the grow stages.
 
-        Cancels in-flight runs/timers and reseeds edge-detection baselines from
-        the StateStore's current snapshot (rather than clearing them) — so a
-        freshly-applied rule does not fire on the first sample it sees (its
-        baseline already equals the current value, so there is no edge), while
-        entities that are *not* being changed keep their real baseline and a
-        genuine later transition is still detected. Also resets time markers so
-        a deleted rule's pending ``delay`` cannot fire. Idempotent: re-applying
-        the same set is safe (the manager only calls this for a strictly-newer
-        version, so reconnect redelivery never resets baselines).
+        Cancels in-flight runs of rules that changed or disappeared (so a deleted
+        rule's pending ``delay`` cannot fire), but keeps the run of a rule whose
+        definition is byte-for-byte unchanged — every stage change republishes
+        the whole set, and that must not interrupt a long ``climate_hold`` or
+        ``delay`` elsewhere. Reseeds edge-detection baselines from the
+        StateStore's current snapshot (rather than clearing them) — so a
+        freshly-applied rule does not fire on the first sample it sees, while
+        entities that are *not* being changed keep their real baseline. Resets
+        time markers. ``stage`` triggers fire for spaces whose stage differs from
+        the previous apply; the first apply only seeds that baseline.
         """
-        self._cancel_tasks()
         self._rules = [r for r in rules if isinstance(r, dict)]
+        self._cancel_tasks(keep={r.get("id"): _canonical(r) for r in self._rules})
         # Seed from the store so an unrelated rule edit cannot swallow an
         # in-progress transition on some other entity (previously this cleared
         # every baseline, making the next sample look like first_seen).
@@ -375,15 +411,21 @@ class AutomationEngine:
         self._rebuild_entity_index()
         lights = _dli_light_entities(self._rules)
         self._dli = {e: self._dli.get(e) or DliAccumulator() for e in lights}
+        previous_stages = self._stages
+        self._stages = {k: v for k, v in (stages or {}).items() if isinstance(v, str)}
         logger.info("Automation engine applied %d enabled rule(s)", len(self._rules))
+        if previous_stages is not None:
+            self._fire_stage_triggers(previous_stages)
 
-    def _cancel_tasks(self) -> None:
+    def _cancel_tasks(self, keep: Optional[dict[Any, str]] = None) -> None:
         for task in list(self._for_tasks.values()):
             task.cancel()
         self._for_tasks.clear()
-        for task in list(self._run_tasks):
+        for rule_id, (canonical, task) in list(self._runs.items()):
+            if keep is not None and keep.get(rule_id) == canonical:
+                continue
             task.cancel()
-        self._active.clear()
+            del self._runs[rule_id]
 
     async def join(self) -> None:
         """Await all outstanding rule-run tasks, including ones spawned by a
@@ -506,6 +548,21 @@ class AutomationEngine:
 
         self._for_tasks[key] = asyncio.create_task(_waiter())
 
+    # ─── Stage triggers ─────────────────────────────────────────────
+
+    def _fire_stage_triggers(self, previous: dict[str, str]) -> None:
+        stages = self._stages or {}
+        for rule in self._rules:
+            for trig in rule.get("triggers") or []:
+                if not isinstance(trig, dict) or trig.get("type") != "stage":
+                    continue
+                stage = stages.get(trig.get("space"))
+                if stage is None or stage == previous.get(trig.get("space")):
+                    continue
+                if trig.get("to") is not None and trig.get("to") != stage:
+                    continue
+                self._fire_rule(rule, self._trigger_ctx(trig, stage))
+
     # ─── Time-driven triggers ───────────────────────────────────────
 
     async def _scheduler_loop(self) -> None:
@@ -597,13 +654,17 @@ class AutomationEngine:
     ) -> None:
         """Spawn the action sequence, honouring single run mode."""
         rule_id = rule.get("id")
-        if rule_id in self._active:
+        if rule_id in self._runs:
             logger.info("Rule '%s' already running (single) — ignoring trigger", rule_id)
             return
-        self._active.add(rule_id)
         task = asyncio.create_task(self._run_rule(rule, trigger_ctx, chain or EventChain()))
+        self._runs[rule_id] = (_canonical(rule), task)
         self._run_tasks.add(task)
         task.add_done_callback(self._run_tasks.discard)
+
+    def _release(self, rule_id: Any) -> None:
+        if self._runs.get(rule_id, (None, None))[1] is asyncio.current_task():
+            del self._runs[rule_id]
 
     async def _run_rule(
         self, rule: dict[str, Any], trigger_ctx: dict[str, Any], chain: EventChain
@@ -620,7 +681,7 @@ class AutomationEngine:
             for action in rule.get("actions") or []:
                 if not isinstance(action, dict):
                     continue
-                failure = await self._run_action(action, trigger_ctx, variables, chain, rule_id)
+                failure = await self._run_action(action, trigger_ctx, variables, chain, rule)
                 if failure is not None:
                     failures.append(failure)
         except asyncio.CancelledError:
@@ -636,7 +697,7 @@ class AutomationEngine:
             if fired:
                 failures.append(f"{type(e).__name__}: {e}")
         finally:
-            self._active.discard(rule_id)
+            self._release(rule_id)
         if fired:
             await self._publish_fired(rule_id, failures)
 
@@ -662,7 +723,7 @@ class AutomationEngine:
         trigger_ctx: dict[str, Any],
         variables: dict[str, Any],
         chain: EventChain,
-        rule_id: Any,
+        rule: dict[str, Any],
     ) -> Optional[str]:
         """Run one action. Returns a short failure description when the action
         ran but did not succeed (currently only a failed/skipped ``call``), or
@@ -681,7 +742,11 @@ class AutomationEngine:
             data = self._render_data(action.get("event_data"), trigger_ctx, variables)
             self._fire_event(action.get("event_type"), data, chain)
         elif atype == "notification":
-            await self._action_notification(action, trigger_ctx, variables, rule_id)
+            await self._action_notification(action, trigger_ctx, variables, rule.get("id"))
+        elif atype == "climate_hold":
+            return await self._action_climate_hold(action, rule)
+        elif atype == "ramp":
+            return await self._action_ramp(action)
         else:
             logger.warning("Unknown action type '%s' — skipping", atype)
         return None
@@ -708,6 +773,91 @@ class AutomationEngine:
         # command itself failed) is reported in the fired echo, matching what
         # the executor already logged.
         return None if ok else f"call '{service}' on '{entity}' failed"
+
+    async def _action_climate_hold(
+        self, action: dict[str, Any], rule: dict[str, Any]
+    ) -> Optional[str]:
+        """Keep an actuator switching around a target until the hold ends.
+
+        The hold ends when its duration elapses, when the rule's conditions stop
+        passing (e.g. a time window closes or the stage changes), or when the run
+        is cancelled (rule edited/removed, bridge stopping). It owns the actuator:
+        on every exit it is switched off. Without a sensor or metric the actuator
+        is simply held on (a light schedule). The actuator state is re-read from
+        the store every tick instead of remembered, so an off sent by a cancelled
+        predecessor is noticed and corrected.
+        """
+        entity = action.get("entity")
+        total = duration_seconds(action)
+        deadline = self._now() + timedelta(seconds=total) if total > 0 else None
+        min_cycle = to_float(action.get("min_cycle"))
+        min_cycle = DEFAULT_MIN_CYCLE_SECONDS if min_cycle is None else min_cycle
+        sensorless = action.get("sensor") is None and action.get("metric") is None
+        last_switch: Optional[datetime] = None
+        failure: Optional[str] = None
+        try:
+            while True:
+                now = self._now()
+                if deadline is not None and now >= deadline:
+                    break
+                if not self._evaluate_conditions(rule.get("conditions") or [], now):
+                    break
+                is_on = state_equals(self._store.get(entity), "on")
+                want = sensorless or hold_wants_on(
+                    action.get("direction"),
+                    self._hold_reading(action),
+                    to_float(action.get("target")) or 0.0,
+                    to_float(action.get("hysteresis")) or 0.0,
+                    is_on,
+                )
+                cooled = last_switch is None or (now - last_switch).total_seconds() >= min_cycle
+                if want != is_on and cooled:
+                    service = "turn_on" if want else "turn_off"
+                    if await self._executor.call(entity, service, {}):
+                        last_switch = now
+                    else:
+                        failure = f"climate_hold '{service}' on '{entity}' failed"
+                await self._sleep(HOLD_TICK_SECONDS)
+        finally:
+            if state_equals(self._store.get(entity), "on"):
+                await self._executor.call(entity, "turn_off", {})
+        return failure
+
+    def _hold_reading(self, action: dict[str, Any]) -> Optional[float]:
+        if action.get("metric") == "vpd":
+            temp = to_float(self._store.get(action.get("temperature")))
+            rh = to_float(self._store.get(action.get("humidity")))
+            if temp is None or rh is None:
+                return None
+            offset = to_float(action.get("leaf_offset"))
+            return vpd_kpa(temp, rh, -2.0 if offset is None else offset)
+        return to_float(self._store.get(action.get("sensor")))
+
+    async def _action_ramp(self, action: dict[str, Any]) -> Optional[str]:
+        """Move a dimmable entity from ``from`` (else its current value, else 0)
+        to ``to`` in equal ``set_value`` steps spread over the duration."""
+        entity = action.get("entity")
+        target = to_float(action.get("to"))
+        if target is None:
+            return f"ramp on '{entity}' has no target"
+        start = to_float(action.get("from"))
+        if start is None:
+            start = to_float(self._store.get(entity))
+        if start is None:
+            start = 0.0
+        total = duration_seconds(action)
+        steps = int(to_float(action.get("steps")) or 0) or max(
+            1, min(MAX_RAMP_STEPS, math.ceil(total / DEFAULT_RAMP_STEP_SECONDS))
+        )
+        ok = True
+        if action.get("from") is not None:
+            ok = await self._executor.call(entity, "set_value", {"value": start}) and ok
+        for i in range(1, steps + 1):
+            if total > 0:
+                await self._sleep(total / steps)
+            value = round(start + (target - start) * i / steps, 2)
+            ok = await self._executor.call(entity, "set_value", {"value": value}) and ok
+        return None if ok else f"ramp on '{entity}' failed"
 
     async def _action_wait_for_state(self, action: dict[str, Any]) -> None:
         entity = action.get("entity")
@@ -843,6 +993,9 @@ class AutomationEngine:
             )
         if ctype == "time":
             return time_condition_matches(condition, now)
+        if ctype == "stage":
+            stage = (self._stages or {}).get(condition.get("space"))
+            return stage is not None and stage == condition.get("stage")
         if ctype == "derived":
             value = self._derived_value(condition, now)
             return value is not None and numeric_range_match(
@@ -866,6 +1019,10 @@ class AutomationEngine:
         if metric == "dew_point":
             return dew_point_c(temp, rh)
         return None
+
+
+def _canonical(rule: dict[str, Any]) -> str:
+    return json.dumps(rule, sort_keys=True, default=str)
 
 
 def _dli_light_entities(rules: list[dict[str, Any]]) -> set[str]:

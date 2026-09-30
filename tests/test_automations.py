@@ -103,6 +103,63 @@ class TestValidate:
         assert "at least one trigger" in msgs
         assert "at least one action" in msgs
 
+    def test_stage_hold_and_ramp_validate(self):
+        _register("sensor.temp")
+        _register("sensor.rh")
+        _register("switch.fan", DeviceCategory.ACTUATOR)
+        _register("number.dimmer", DeviceCategory.ACTUATOR)
+        mgr = AutomationManager()
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "stage", "space": "s1", "to": "flowering"}],
+            "conditions": [{"type": "stage", "space": "s1", "stage": "flowering"}],
+            "actions": [
+                {"type": "climate_hold", "entity": "switch.fan"},
+                {
+                    "type": "climate_hold",
+                    "entity": "switch.fan",
+                    "sensor": "sensor.rh",
+                    "target": 60,
+                    "hysteresis": 3,
+                    "direction": "lower",
+                },
+                {
+                    "type": "climate_hold",
+                    "entity": "switch.fan",
+                    "metric": "vpd",
+                    "temperature": "sensor.temp",
+                    "humidity": "sensor.rh",
+                    "target": 1.2,
+                    "direction": "raise",
+                },
+                {"type": "ramp", "entity": "number.dimmer", "to": 100, "minutes": 15},
+            ],
+        }
+        assert mgr.validate([rule]) == []
+
+    def test_stage_hold_and_ramp_errors(self):
+        _register("switch.fan", DeviceCategory.ACTUATOR)
+        mgr = AutomationManager()
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "stage", "to": "bloom"}],
+            "conditions": [{"type": "stage", "space": "s1"}],
+            "actions": [
+                {"type": "climate_hold", "entity": "switch.fan", "sensor": "sensor.rh"},
+                {"type": "climate_hold", "entity": "switch.fan", "metric": "co2"},
+                {"type": "ramp", "entity": "switch.fan"},
+            ],
+        }
+        msgs = " ".join(e["message"] for e in mgr.validate([rule]))
+        assert "'stage' requires a space" in msgs
+        assert "unknown grow stage 'bloom'" in msgs
+        assert "unknown grow stage 'None'" in msgs
+        assert "unknown entity 'sensor.rh'" in msgs
+        assert "numeric target" in msgs
+        assert "raise or lower" in msgs
+        assert "unknown hold metric 'co2'" in msgs
+        assert "'ramp' requires a 'to' value" in msgs
+
     def test_notification_action_validates(self):
         mgr = AutomationManager()
         rule = {
@@ -255,12 +312,14 @@ class StubEngine:
 
     def __init__(self):
         self.applied: list[list] = []
+        self.stages: list = []
         self.events: list = []
         self.started = False
         self.stopped = False
 
-    def apply_rules(self, rules):
+    def apply_rules(self, rules, stages=None):
         self.applied.append(list(rules))
+        self.stages.append(stages)
 
     def emit_event(self, event_type, event_data=None):
         self.events.append((event_type, event_data))
@@ -344,6 +403,26 @@ class TestVersionedReconciliation:
         mgr.start_engine()  # cached enabled rules run locally on restart (P5)
         assert eng.applied == [[_R1]]
         assert eng.started is True
+
+    def test_restores_stages_from_cache(self, monkeypatch):
+        payload = {"automations": [_R1], "version": 7, "stages": {"s1": "flowering"}}
+        cached = {"payload": json.dumps(payload), "version": 7}
+        monkeypatch.setattr("app.automations.manager.config_store.get_config", lambda key: cached)
+        mgr = AutomationManager()
+        eng = StubEngine()
+        mgr.set_engine(eng)
+        mgr.start_engine()
+        assert eng.stages == [{"s1": "flowering"}]
+
+    async def test_passes_published_stages_to_the_engine(self):
+        eng = StubEngine()
+        mgr = AutomationManager()
+        mgr.set_engine(eng)
+        payload = {"automations": [_R1], "version": 1, "stages": {"s1": "vegetative", "bad": 3}}
+        await mgr.apply_payload(json.dumps(payload).encode("utf-8"))
+        assert eng.stages[-1] == {"s1": "vegetative"}
+        await mgr.apply_payload(_ruleset([], 2))
+        assert eng.stages[-1] == {}
 
     async def test_stop_engine_delegates(self):
         eng = StubEngine()

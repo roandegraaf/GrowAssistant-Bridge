@@ -55,15 +55,26 @@ CONFIG_KEY = "automations"
 
 # Recognised vocabulary — mirrors the app's Zod schema. Structural validation
 # only; the evaluator slice gives these runtime behaviour.
-TRIGGER_TYPES = {"state", "numeric_state", "time", "time_pattern", "event"}
-CONDITION_TYPES = {"state", "numeric_state", "time", "derived", "and", "or", "not"}
+TRIGGER_TYPES = {"state", "numeric_state", "time", "time_pattern", "event", "stage"}
+CONDITION_TYPES = {"state", "numeric_state", "time", "derived", "stage", "and", "or", "not"}
 DERIVED_METRICS = {"vpd", "dew_point", "dli"}
-ACTION_TYPES = {"call", "delay", "wait_for_state", "set_variable", "fire_event", "notification"}
+ACTION_TYPES = {
+    "call",
+    "delay",
+    "wait_for_state",
+    "set_variable",
+    "fire_event",
+    "notification",
+    "climate_hold",
+    "ramp",
+}
+GROW_STAGES = {"germination", "seedling", "vegetative", "flowering", "harvest", "drying", "curing"}
+HOLD_DIRECTIONS = {"raise", "lower"}
 
 # Node types that reference an entity (validated against the registry).
 _ENTITY_TRIGGERS = {"state", "numeric_state"}
 _ENTITY_CONDITIONS = {"state", "numeric_state"}
-_ENTITY_ACTIONS = {"call", "wait_for_state"}
+_ENTITY_ACTIONS = {"call", "wait_for_state", "climate_hold", "ramp"}
 _LOGICAL_CONDITIONS = {"and", "or", "not"}
 
 StatusPublisher = Callable[[dict[str, Any]], Awaitable[Any]]
@@ -75,6 +86,7 @@ class AutomationManager:
     def __init__(self) -> None:
         self._raw: Optional[str] = None  # exact payload string last received ("" = cleared)
         self._automations: list[dict[str, Any]] = []
+        self._stages: dict[str, str] = {}
         self._publish_status: Optional[StatusPublisher] = None
         self._engine: Optional[AutomationEngine] = None
         # Last rule-set version applied to the engine (None = none applied yet).
@@ -86,6 +98,7 @@ class AutomationManager:
         if cached is not None and isinstance(cached.get("payload"), str):
             self._raw = cached["payload"]
             self._automations = self._parse_list(self._raw)
+            self._stages = self._parse_stages(self._raw)
             v = cached.get("version")
             self._applied_version = v if isinstance(v, int) else None
         logger.info(
@@ -112,7 +125,7 @@ class AutomationManager:
         automations)."""
         if self._engine is None:
             return
-        self._engine.apply_rules(self._enabled_rules())
+        self._engine.apply_rules(self._enabled_rules(), stages=self._stages)
         self._engine.start()
 
     async def stop_engine(self) -> None:
@@ -153,9 +166,10 @@ class AutomationManager:
             # the reconciliation guard and let a future versioned set win.
             self._raw = ""
             self._automations = []
+            self._stages = {}
             self._persist("")
             if self._engine is not None:
-                self._engine.apply_rules([])
+                self._engine.apply_rules([], stages={})
             return await self._emit_status(ok=True, errors=[], validated_hash=validated_hash)
 
         try:
@@ -187,12 +201,13 @@ class AutomationManager:
         ):
             self._raw = text
             self._automations = automations
+            self._stages = self._parse_stages(text)
             if incoming_version is not None:
                 self._applied_version = incoming_version
             self._persist(text)
             if self._engine is not None:
                 enabled = self._enabled_rules()
-                self._engine.apply_rules(enabled)
+                self._engine.apply_rules(enabled, stages=self._stages)
                 # Seed a real lifecycle event so rules can react to a (re)deploy.
                 self._engine.emit_event("rule_set_applied", {"count": len(enabled)})
         else:
@@ -272,6 +287,15 @@ class AutomationManager:
             return
         if ntype in entity_types:
             self._check_entity(node.get("entity"), label, ntype, rid, errors)
+        if ntype == "stage":
+            self._check_stage(node, "to", False, rid, errors)
+        elif ntype == "climate_hold":
+            self._check_climate_hold(node, rid, errors)
+        elif ntype == "ramp":
+            if not isinstance(node.get("to"), (int, float)):
+                errors.append(
+                    {"automationId": rid, "message": "action 'ramp' requires a 'to' value"}
+                )
         elif ntype == "notification":
             # Only ever reached for an action node ("notification" ∈ ACTION_TYPES only).
             self._check_notification(node, rid, errors)
@@ -290,6 +314,8 @@ class AutomationManager:
                 self._check_condition(child, rid, errors)
         elif ctype in _ENTITY_CONDITIONS:
             self._check_entity(node.get("entity"), "condition", ctype, rid, errors)
+        elif ctype == "stage":
+            self._check_stage(node, "stage", True, rid, errors)
         elif ctype == "derived":
             if node.get("metric") not in DERIVED_METRICS:
                 msg = f"unknown derived metric '{node.get('metric')}'"
@@ -307,6 +333,42 @@ class AutomationManager:
             errors.append({"automationId": rid, "message": f"{label} '{ntype}' requires an entity"})
         elif registry.get_device(entity) is None:
             errors.append({"automationId": rid, "message": f"unknown entity '{entity}'"})
+
+    @staticmethod
+    def _check_stage(
+        node: dict[str, Any], field: str, required: bool, rid: Any, errors: list[dict[str, Any]]
+    ) -> None:
+        ntype = node.get("type")
+        if not node.get("space") or not isinstance(node.get("space"), str):
+            errors.append({"automationId": rid, "message": f"'{ntype}' requires a space"})
+        stage = node.get(field)
+        if (stage is not None or required) and stage not in GROW_STAGES:
+            errors.append({"automationId": rid, "message": f"unknown grow stage '{stage}'"})
+
+    def _check_climate_hold(
+        self, node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]
+    ) -> None:
+        """A sensorless hold just keeps the actuator on; with a ``sensor`` or the
+        ``vpd`` metric it needs a numeric target and a direction."""
+        metric = node.get("metric")
+        if metric is not None and metric != "vpd":
+            errors.append({"automationId": rid, "message": f"unknown hold metric '{metric}'"})
+            return
+        if metric == "vpd":
+            for field in ("temperature", "humidity"):
+                self._check_entity(node.get(field), "action", "climate_hold", rid, errors)
+        elif node.get("sensor") is not None:
+            self._check_entity(node.get("sensor"), "action", "climate_hold", rid, errors)
+        else:
+            return
+        if not isinstance(node.get("target"), (int, float)):
+            errors.append(
+                {"automationId": rid, "message": "climate_hold requires a numeric target"}
+            )
+        if node.get("direction") not in HOLD_DIRECTIONS:
+            errors.append(
+                {"automationId": rid, "message": "climate_hold direction must be raise or lower"}
+            )
 
     @staticmethod
     def _check_notification(node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]) -> None:
@@ -343,6 +405,17 @@ class AutomationManager:
             len(errors),
         )
         return status
+
+    @staticmethod
+    def _parse_stages(text: str) -> dict[str, str]:
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return {}
+        stages = data.get("stages") if isinstance(data, dict) else None
+        if not isinstance(stages, dict):
+            return {}
+        return {k: v for k, v in stages.items() if isinstance(k, str) and isinstance(v, str)}
 
     @staticmethod
     def _parse_list(text: str) -> list[dict[str, Any]]:
