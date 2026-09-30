@@ -375,6 +375,7 @@ The class is resolved in `DeviceRegistry._device_class` (`app/registry.py`):
 | actuator | `light`, `light_switch` | `light` |
 | actuator | `fan`, `exhaust_fan`, `intake_fan`, `circulation_fan`, `humidifier`, `dehumidifier`, `heater`, `pump` | same as the type |
 | actuator | `humidity` | `humidifier` |
+| camera   | any | `camera` |
 
 3. Anything else serializes as `null`. The entity still works (widgets,
    commands, flows); the user just binds it to a role by hand.

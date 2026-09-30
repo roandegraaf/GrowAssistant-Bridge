@@ -131,6 +131,25 @@ Same auth as token refresh (`{bridgeId, bridgeSecret}`). Response:
 these via `app/auth.py` `fetch_ice_servers` for its camera path (§11). Source:
 `app/api/bridge/ice-servers/route.ts` + `lib/bridge/turn.ts`.
 
+### 2.3.1 `POST /api/bridge/snapshots` — upload a camera still
+
+Same auth, plus `entityId` (a `camera.<name>` entity of this bridge) and an
+`action`. The app resolves the camera's space and that space's active grow from
+the authenticated bridge on every call; the body never names a tenant or grow.
+
+1. `{"action": "start", "contentType": "image/jpeg", "size": 12345, …auth}` →
+   200 `{"key", "url", "contentType"}`: a 5-minute presigned PUT.
+2. `PUT <url>` straight to object storage with exactly that `Content-Type`.
+3. `{"action": "finish", "key": "<key>", …auth}` → 200 `{"id"}`. The app runs the
+   same validation as browser uploads (size, type, decodable image, thumbnail)
+   and records a grow `Photo` tagged with the camera.
+
+Errors: 400 missing fields, 401 bad secret, 409 the camera is unknown, not in a
+space, or the space has no active grow (skip, not a failure), 422 the photo
+failed validation, 503 the app has no object storage. JPEG, PNG or WebP up to
+15 MB. Source: `app/api/bridge/snapshots/route.ts` + `lib/bridge/snapshots.ts`;
+bridge side `app/auth.py` `upload_snapshot`.
+
 ### 2.4 The MQTT token (JWT)
 
 The token is an **HS256 JWT** signed by the app with `MQTT_JWT_SECRET`
@@ -763,6 +782,15 @@ the app appends the `_lofps` suffix to the stream id server-side
 (`lib/bridge/webrtc.ts` `LOW_FRAMERATE_STREAM_SUFFIX`), so the bridge must expose
 a `camera.<name>_lofps` variant per camera. ICE servers for go2rtc are fetched
 via §2.3.
+
+### 11.4 Scheduled snapshots (timelapse)
+
+Every `snapshot_interval_minutes` (default 60, `0` = off) the camera integration
+grabs one still per camera and uploads it via §2.3.1. The still comes from the
+camera's `snapshot_url` when configured, else go2rtc's
+`GET /api/frame.jpeg?src=camera.<name>` (needs ffmpeg on the bridge host for
+H.264 sources). The app plays a grow's stills as a timelapse at
+`/grows/<id>/timelapse`; they stay out of the grow timeline and the archive.
 
 ---
 

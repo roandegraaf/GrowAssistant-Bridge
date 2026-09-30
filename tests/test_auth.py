@@ -396,3 +396,70 @@ class TestAuthManagerFetchIceServers:
         auth_manager._client = MagicMock()
         auth_manager._credentials = None
         assert await auth_manager.fetch_ice_servers() is None
+
+
+class TestAuthManagerUploadSnapshot:
+    """upload_snapshot: start → presigned PUT to storage → finish."""
+
+    def _paired(self, auth_manager, *responses):
+        auth_manager._client = MagicMock()
+        auth_manager._credentials = {"bridgeId": "b1", "bridgeSecret": "s1", "token": "t"}
+        auth_manager._client.post = AsyncMock(side_effect=list(responses))
+
+    def _storage(self, status=200):
+        storage = MagicMock()
+        storage.__aenter__ = AsyncMock(return_value=storage)
+        storage.__aexit__ = AsyncMock(return_value=False)
+        put = MagicMock()
+        put.status_code = status
+        storage.put = AsyncMock(return_value=put)
+        return storage
+
+    @pytest.mark.asyncio
+    async def test_start_put_finish(self, auth_manager):
+        upload = {"key": "t/x/p/1.jpg", "url": "https://s3/put?sig", "contentType": "image/jpeg"}
+        self._paired(auth_manager, _response(200, upload), _response(200, {"id": "ph1"}))
+        storage = self._storage()
+        with patch("app.auth.httpx.AsyncClient", return_value=storage):
+            assert await auth_manager.upload_snapshot("camera.tent", b"img", "image/jpeg") is True
+
+        start, finish = auth_manager._client.post.call_args_list
+        assert start.args[0].endswith("/api/bridge/snapshots")
+        assert start.kwargs["json"] == {
+            "bridgeId": "b1",
+            "bridgeSecret": "s1",
+            "entityId": "camera.tent",
+            "action": "start",
+            "contentType": "image/jpeg",
+            "size": 3,
+        }
+        storage.put.assert_awaited_once_with(
+            "https://s3/put?sig", content=b"img", headers={"Content-Type": "image/jpeg"}
+        )
+        assert finish.kwargs["json"]["action"] == "finish"
+        assert finish.kwargs["json"]["key"] == "t/x/p/1.jpg"
+
+    @pytest.mark.asyncio
+    async def test_no_active_grow_skips_upload(self, auth_manager):
+        self._paired(auth_manager, _response(409, {"error": "no active grow"}))
+        storage = self._storage()
+        with patch("app.auth.httpx.AsyncClient", return_value=storage):
+            assert await auth_manager.upload_snapshot("camera.tent", b"img", "image/jpeg") is False
+        storage.put.assert_not_called()
+        assert auth_manager._client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_skips_finish(self, auth_manager):
+        upload = {"key": "k", "url": "https://s3/put", "contentType": "image/jpeg"}
+        self._paired(auth_manager, _response(200, upload))
+        with patch("app.auth.httpx.AsyncClient", return_value=self._storage(status=403)):
+            assert await auth_manager.upload_snapshot("camera.tent", b"img", "image/jpeg") is False
+        assert auth_manager._client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unpaired_does_nothing(self, auth_manager):
+        auth_manager._client = MagicMock()
+        auth_manager._client.post = AsyncMock()
+        auth_manager._credentials = None
+        assert await auth_manager.upload_snapshot("camera.tent", b"img", "image/jpeg") is False
+        auth_manager._client.post.assert_not_called()

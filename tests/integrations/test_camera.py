@@ -5,6 +5,7 @@ httpx is patched via ``patch.object(httpx, "AsyncClient", ...)`` with an
 AsyncMock.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -228,6 +229,8 @@ class TestConnect:
             mock_config.get.return_value = str(tmp_path)
             assert await integration.connect() is True
         assert integration._process is proc
+        assert integration._snapshot_task is not None
+        integration._snapshot_task.cancel()
         # ICE servers fetched from the app are stored for the go2rtc config.
         assert integration._ice_servers == [
             {"urls": ["turn:t:3478"], "username": "u", "credential": "c"}
@@ -489,3 +492,85 @@ class TestDisconnect:
         integration = CameraIntegration(_config())
         integration._process = None
         await integration.disconnect()  # must not raise
+
+
+class TestSnapshots:
+    """Scheduled stills: go2rtc frame or a plain snapshot URL, uploaded via auth."""
+
+    def _response(self, status=200, content=b"\xff\xd8jpeg", ctype="image/jpeg"):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.content = content
+        resp.headers = {"content-type": ctype}
+        return resp
+
+    def test_interval_defaults_and_can_be_disabled(self):
+        assert CameraIntegration(_config()).snapshot_interval_minutes == 60
+        assert (
+            CameraIntegration(_config(snapshot_interval_minutes=0)).snapshot_interval_minutes == 0
+        )
+        with pytest.raises(ConfigurationError):
+            CameraIntegration(_config(snapshot_interval_minutes=-1))
+
+    @pytest.mark.asyncio
+    async def test_fetch_from_go2rtc_frame(self):
+        integration = CameraIntegration(_config())
+        client = _mock_async_client(response=self._response())
+        with patch.object(httpx, "AsyncClient", return_value=client):
+            data, ctype = await integration.fetch_snapshot("camera.tent1")
+        assert (data, ctype) == (b"\xff\xd8jpeg", "image/jpeg")
+        client.get.assert_awaited_once_with(
+            "http://127.0.0.1:1984/api/frame.jpeg", params={"src": "camera.tent1"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_from_snapshot_url_keeps_its_content_type(self):
+        integration = CameraIntegration(
+            _config(
+                cameras=[
+                    {"name": "tent1", "source": "ffmpeg:x", "snapshot_url": "http://cam/still.png"}
+                ]
+            )
+        )
+        client = _mock_async_client(response=self._response(ctype="image/png; charset=binary"))
+        with patch.object(httpx, "AsyncClient", return_value=client):
+            _, ctype = await integration.fetch_snapshot("camera.tent1")
+        assert ctype == "image/png"
+        client.get.assert_awaited_once_with("http://cam/still.png", params=None)
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_raises(self):
+        integration = CameraIntegration(_config())
+        client = _mock_async_client(response=self._response(status=500))
+        with patch.object(httpx, "AsyncClient", return_value=client):
+            with pytest.raises(RuntimeError):
+                await integration.fetch_snapshot("camera.tent1")
+
+    @pytest.mark.asyncio
+    async def test_snapshot_all_uploads_each_camera_and_isolates_failures(self):
+        integration = CameraIntegration(
+            _config(cameras=[{"name": "a", "source": "x"}, {"name": "b", "source": "y"}])
+        )
+
+        async def fetch(stream_id):
+            if stream_id == "camera.a":
+                raise RuntimeError("offline")
+            return b"img", "image/jpeg"
+
+        upload = AsyncMock(return_value=True)
+        with (
+            patch.object(integration, "fetch_snapshot", side_effect=fetch),
+            patch("app.integrations.camera.camera.auth_manager.upload_snapshot", upload),
+        ):
+            assert await integration.snapshot_all() == 1
+        upload.assert_awaited_once_with("camera.b", b"img", "image/jpeg")
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_the_schedule(self):
+        integration = CameraIntegration(_config())
+        integration._snapshot_task = asyncio.create_task(asyncio.sleep(3600))
+        task = integration._snapshot_task
+        await integration.disconnect()
+        await asyncio.sleep(0)
+        assert task.cancelled()
+        assert integration._snapshot_task is None

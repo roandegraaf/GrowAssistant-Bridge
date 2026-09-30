@@ -287,6 +287,8 @@ class DeviceRegistry(metaclass=SingletonMeta):
             return SENSOR_DEVICE_CLASSES.get(d.device_type)
         if d.category == DeviceCategory.ACTUATOR:
             return ACTUATOR_DEVICE_CLASSES.get(d.device_type)
+        if d.category == DeviceCategory.CAMERA:
+            return "camera"
         return None
 
     def serialize_manifest(self, version: int) -> dict[str, Any]:

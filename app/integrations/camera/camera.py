@@ -48,6 +48,9 @@ WEBRTC_PORT = 8555
 # LOW_FRAMERATE_STREAM_SUFFIX (lib/bridge/webrtc.ts) — the browser requests
 # camera.<name><LOW_FRAMERATE_SUFFIX> when its WebRTC path is TURN-relayed.
 LOW_FRAMERATE_SUFFIX = "_lofps"
+# go2rtc may need ffmpeg to decode a keyframe for /api/frame.jpeg, which can
+# take several seconds on an H.264 source.
+SNAPSHOT_FETCH_TIMEOUT_S = 15.0
 
 
 @register_integration
@@ -65,6 +68,7 @@ class CameraIntegration(Integration):
         self.go2rtc_api_port: int = self.config.get("go2rtc_api_port", 1984)
         self.low_framerate_fps: float = self.config.get("low_framerate_fps", 0.5)
         self.stun_candidate_port: int = self.config.get("stun_candidate_port", WEBRTC_PORT)
+        self.snapshot_interval_minutes: int = self.config.get("snapshot_interval_minutes", 60)
 
         # Build the stream map (entity_id -> source) and the set of valid
         # stream ids up front from config — independent of register_capabilities
@@ -72,6 +76,7 @@ class CameraIntegration(Integration):
         # Only the base cameras are registered as devices; the _lofps variants
         # are negotiation-only (see _build_go2rtc_streams / negotiate_webrtc).
         self._streams: dict[str, str] = {}
+        self._snapshot_urls: dict[str, str] = {}
         for cam in self.config.get("cameras", []) or []:
             if not isinstance(cam, dict):
                 logger.error(f"Invalid camera config: {cam}")
@@ -82,12 +87,15 @@ class CameraIntegration(Integration):
                 logger.error(f"Invalid camera config (missing name/source): {cam}")
                 continue
             self._streams[f"camera.{name}"] = source
+            if cam.get("snapshot_url"):
+                self._snapshot_urls[f"camera.{name}"] = cam["snapshot_url"]
 
         # ICE servers (STUN + TURN) for go2rtc, fetched from the app at connect().
         # Empty until then; the TURN shared secret never lives on the bridge.
         self._ice_servers: list = []
 
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._snapshot_task: Optional[asyncio.Task] = None
         self._config_path: Optional[str] = None
 
         logger.info(
@@ -228,7 +236,47 @@ class CameraIntegration(Integration):
             return False
 
         logger.info("go2rtc is ready")
+        if self.snapshot_interval_minutes > 0 and self._streams:
+            self._snapshot_task = asyncio.create_task(self._snapshot_loop())
         return True
+
+    async def fetch_snapshot(self, stream_id: str) -> tuple[bytes, str]:
+        """Grab one still: the camera's ``snapshot_url`` when set, else go2rtc's
+        ``/api/frame.jpeg`` for the stream. Returns ``(bytes, content_type)``."""
+        url = self._snapshot_urls.get(stream_id)
+        params = None
+        if url is None:
+            url = f"{self._api_base}/api/frame.jpeg"
+            params = {"src": stream_id}
+        async with httpx.AsyncClient(timeout=SNAPSHOT_FETCH_TIMEOUT_S) as client:
+            resp = await client.get(url, params=params)
+        if resp.status_code != 200 or not resp.content:
+            raise RuntimeError(f"snapshot fetch failed: HTTP {resp.status_code}")
+        content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        return resp.content, content_type or "image/jpeg"
+
+    async def snapshot_all(self) -> int:
+        """Take and upload one snapshot per camera; returns how many landed.
+        One camera failing never stops the others."""
+        uploaded = 0
+        for stream_id in self._streams:
+            try:
+                data, content_type = await self.fetch_snapshot(stream_id)
+                if await auth_manager.upload_snapshot(stream_id, data, content_type):
+                    uploaded += 1
+            except Exception as e:
+                logger.warning(f"Snapshot for {stream_id} failed: {e}")
+        return uploaded
+
+    async def _snapshot_loop(self) -> None:
+        interval = self.snapshot_interval_minutes * 60
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if auth_manager.is_authenticated():
+                    await self.snapshot_all()
+        except asyncio.CancelledError:
+            pass
 
     def register_capabilities(self, registry: "DeviceRegistry") -> None:
         """Register each configured camera as a CAMERA-category device."""
@@ -336,7 +384,10 @@ class CameraIntegration(Integration):
         return True
 
     async def disconnect(self) -> None:
-        """Terminate the supervised go2rtc process gracefully."""
+        """Stop scheduled snapshots and terminate go2rtc gracefully."""
+        if self._snapshot_task is not None:
+            self._snapshot_task.cancel()
+            self._snapshot_task = None
         process = self._process
         self._process = None
         if process is None or process.returncode is not None:
