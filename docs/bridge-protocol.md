@@ -538,7 +538,8 @@ never a delta. Republished in full on every mutation. Source:
       "actions": [ … ]
     }
   ],
-  "version": 7
+  "version": 7,
+  "stages": { "space_1": "flowering" }
 }
 ```
 
@@ -552,10 +553,10 @@ never a delta. Republished in full on every mutation. Source:
   always replays the latest desired set to a reconnecting bridge.
 
 The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
-(triggers `state`/`numeric_state`/`time`/`time_pattern`/`event`; recursive
-`and`/`or`/`not` + `state`/`numeric_state`/`time`/`derived` conditions; actions `call`/
-`delay`/`wait_for_state`/`set_variable`/`fire_event`/`notification`; `{{ }}`
-templating). The bridge evaluator (`app/automations/`) implements that full
+(triggers `state`/`numeric_state`/`time`/`time_pattern`/`event`/`stage`; recursive
+`and`/`or`/`not` + `state`/`numeric_state`/`time`/`derived`/`stage` conditions; actions
+`call`/`delay`/`wait_for_state`/`set_variable`/`fire_event`/`notification`/
+`climate_hold`/`ramp`; `{{ }}` templating). The bridge evaluator (`app/automations/`) implements that full
 vocabulary. The `notification` action publishes back to the app on `…/notify`
 (§10.3).
 
@@ -569,6 +570,38 @@ sample up to 30 min and resetting at local midnight. DLI is kept in memory and
 restarts from zero when the bridge restarts. A missing or non-numeric input makes
 the condition false. Formulas live in `app/automations/metrics.py` and match the
 app's implementation.
+
+**Grow stages.** The bridge knows nothing about grows, so the app publishes the
+active grow stage of every space its rules reference in `stages`
+(`{spaceId: stage}`, stage ∈ `germination`/`seedling`/`vegetative`/`flowering`/
+`harvest`/`drying`/`curing`; a space without an active grow is absent). A stage
+change republishes the rule set (new `version`). `{"type": "stage", "space",
+"stage"}` is a condition that holds while that space is in that stage.
+`{"type": "stage", "space", "to"?}` is a trigger that fires when an applied set
+carries a different stage for the space than the previous one (optionally only
+into `to`); the first set after a restart only seeds the baseline.
+
+**Unchanged rules keep running.** Applying a newer set cancels in-flight runs of
+rules that changed or were removed, but a rule whose JSON is identical keeps its
+run (a long `delay` or `climate_hold` survives an unrelated edit or a stage
+change).
+
+**`climate_hold`.** `{"type": "climate_hold", "entity", "sensor"? | "metric":
+"vpd" + "temperature" + "humidity" (+ "leaf_offset"?), "target", "hysteresis",
+"direction": "raise" | "lower", "min_cycle"? (s, default 60), "hours"/"minutes"/
+"seconds"?}` switches `entity` on/off around the reading every 15 s: `lower`
+(exhaust, dehumidifier) turns on at `target + hysteresis` and off at
+`target - hysteresis`, `raise` (heater, humidifier) the reverse, and inside the
+band the state is kept. Never switches twice within `min_cycle`. A missing
+reading means off. Without `sensor`/`metric` the entity is simply held on (a
+light schedule). The hold runs until its duration elapses, the rule's
+conditions stop passing (checked every tick), or the run is cancelled; on every
+exit the entity is switched off. The fired echo is sent when the hold ends.
+
+**`ramp`.** `{"type": "ramp", "entity", "from"?, "to", "hours"/"minutes"/
+"seconds"?, "steps"?}` sends `set_value` in equal steps from `from` (else the
+entity's current value, else 0) to `to`, spread over the duration (default one
+step per minute, at most 60).
 
 **State matching semantics.** Everywhere a rule compares a state string (a
 `state` trigger's `to`/`from`, a `state` condition, `wait_for_state`), the
