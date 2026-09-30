@@ -133,6 +133,11 @@ integrations:
     low_framerate_fps: 0.5
     # WebRTC port go2rtc advertises for STUN public-IP discovery (stun:<port>).
     stun_candidate_port: 8555
+    # Minutes between scheduled stills uploaded to the app as grow photos (the
+    # per-grow timelapse). Only cameras placed in a space with an active grow
+    # upload. 0 turns it off. Stills come from go2rtc's /api/frame.jpeg (needs
+    # ffmpeg for H.264 sources) unless a camera sets snapshot_url.
+    snapshot_interval_minutes: 60
     # NOTE: go2rtc's STUN/TURN ICE servers are fetched from the app at startup
     # (POST /api/bridge/ice-servers, authenticated with the bridge secret) — the
     # TURN shared secret is never stored on the bridge. STUN covers the common
@@ -141,6 +146,7 @@ integrations:
       - name: tent1            # entity_id becomes camera.tent1
         # Any go2rtc stream source string (ffmpeg:/rtsp:/exec:/...). Example
         # below is a self-contained test pattern (no real camera needed):
+        # snapshot_url: http://192.168.1.50/capture   # optional plain still URL
         source: "exec:ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=15 -f lavfi -i sine=frequency=1000 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 30 -c:a aac -f rtsp {output}"
 
   # Autonomous climate control (external_integrations/climate_control.py).
