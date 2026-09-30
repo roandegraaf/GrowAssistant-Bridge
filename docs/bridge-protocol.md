@@ -539,7 +539,8 @@ never a delta. Republished in full on every mutation. Source:
     }
   ],
   "version": 7,
-  "stages": { "space_1": "flowering" }
+  "stages": { "space_1": "flowering" },
+  "calibrations": { "mqtt.temperature": { "offset": -0.4, "scale": 1 } }
 }
 ```
 
@@ -580,6 +581,18 @@ change republishes the rule set (new `version`). `{"type": "stage", "space",
 `{"type": "stage", "space", "to"?}` is a trigger that fires when an applied set
 carries a different stage for the space than the previous one (optionally only
 into `to`); the first set after a restart only seeds the baseline.
+
+**Calibrations.** `calibrations` (`{entityId: {offset?, scale?}}`, omitted when
+none are set) carries the user's per-entity sensor calibration: `calibrated =
+raw × scale + offset` (offset default 0, scale default 1, scale > 0). The bridge
+applies it in the collection loop to the top-level numeric `value` of every
+sample for that entity, **before** the sample is published on `…/telemetry`,
+written to the engine's state store or fanned out to `on_telemetry()`. Telemetry
+is therefore already calibrated when it reaches the app, and flows evaluate the
+same corrected value. Malformed entries (non-finite, boolean, scale ≤ 0) are
+ignored. Calibrations follow the rule set's version guard: a change republishes
+with a new `version`, and a set without `calibrations` clears them. Source:
+`app/calibration.py`.
 
 **Unchanged rules keep running.** Applying a newer set cancels in-flight runs of
 rules that changed or were removed, but a rule whose JSON is identical keeps its
