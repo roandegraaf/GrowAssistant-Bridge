@@ -37,6 +37,7 @@ DEFAULT_TOKEN_TTL_SECONDS = 24 * 60 * 60
 UNPAIRED_RECHECK_INTERVAL = 60.0
 # Delay before retrying a proactive refresh that failed (app briefly down, etc.).
 REFRESH_RETRY_INTERVAL = 60.0
+SNAPSHOT_PUT_TIMEOUT_S = 30.0
 
 
 class AuthManager(metaclass=SingletonMeta):
@@ -353,6 +354,60 @@ class AuthManager(metaclass=SingletonMeta):
 
         logger.info(f"Fetched {len(ice_servers)} ICE server(s) for go2rtc")
         return ice_servers
+
+    async def upload_snapshot(self, entity_id: str, data: bytes, content_type: str) -> bool:
+        """Upload a camera still to the app as a grow photo.
+
+        Three steps against ``/api/bridge/snapshots`` (bridgeId + bridgeSecret
+        auth): ``start`` returns a presigned PUT, the bytes go straight to
+        object storage, then ``finish`` lets the app validate and record it.
+        A 409 means the camera isn't in a space with an active grow (skipped).
+        """
+        if not self._client:
+            logger.error("Authentication manager not started")
+            return False
+        bridge_id = self.get_client_id()
+        bridge_secret = self.get_bridge_secret()
+        if not bridge_id or not bridge_secret:
+            logger.debug("Skipping snapshot upload: bridge is not paired")
+            return False
+
+        url = f"{self._base_url}/api/bridge/snapshots"
+        auth = {"bridgeId": bridge_id, "bridgeSecret": bridge_secret, "entityId": entity_id}
+        try:
+            start = await self._client.post(
+                url,
+                json={**auth, "action": "start", "contentType": content_type, "size": len(data)},
+            )
+            if start.status_code == 409:
+                logger.info(f"Snapshot for {entity_id} skipped: {start.json().get('error')}")
+                return False
+            if start.status_code != 200:
+                logger.warning(f"Snapshot start for {entity_id} failed ({start.status_code})")
+                return False
+            upload = start.json()
+
+            # The presigned URL points at object storage, not the app: use a
+            # plain client so no app-bound defaults leak into the signed request.
+            async with httpx.AsyncClient(timeout=SNAPSHOT_PUT_TIMEOUT_S) as storage:
+                put = await storage.put(
+                    upload["url"], content=data, headers={"Content-Type": upload["contentType"]}
+                )
+            if put.status_code >= 300:
+                logger.warning(f"Snapshot PUT for {entity_id} failed ({put.status_code})")
+                return False
+
+            finish = await self._client.post(
+                url, json={**auth, "action": "finish", "key": upload["key"]}
+            )
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            logger.error(f"Snapshot upload for {entity_id} failed: {e}")
+            return False
+
+        if finish.status_code != 200:
+            logger.warning(f"Snapshot finish for {entity_id} failed ({finish.status_code})")
+            return False
+        return True
 
     def _hostname(self) -> str:
         """Return this host's name for the pairing call."""

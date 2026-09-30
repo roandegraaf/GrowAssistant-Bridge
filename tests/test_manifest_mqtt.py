@@ -156,7 +156,7 @@ def test_original_seven_fields_preserved(reg):
         ("light", DeviceCategory.ACTUATOR, "light"),
         ("fan", DeviceCategory.ACTUATOR, "fan"),
         ("http_endpoint", DeviceCategory.SENSOR, None),
-        ("camera", DeviceCategory.CAMERA, None),
+        ("camera", DeviceCategory.CAMERA, "camera"),
     ],
 )
 def test_serialize_device_class_from_type(reg, device_type, category, expected):

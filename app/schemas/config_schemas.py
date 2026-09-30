@@ -273,6 +273,13 @@ class CameraConfig(BaseModel):
 
     name: str = Field(..., min_length=1, description="Camera name; entity_id is camera.<name>")
     source: str = Field(..., min_length=1, description="go2rtc stream source string")
+    snapshot_url: str | None = Field(
+        default=None,
+        description=(
+            "Plain HTTP(S) URL returning a still image. When set, scheduled "
+            "snapshots fetch it instead of go2rtc's /api/frame.jpeg."
+        ),
+    )
 
 
 class CameraIntegrationConfig(BaseIntegrationConfig):
@@ -298,6 +305,15 @@ class CameraIntegrationConfig(BaseIntegrationConfig):
             "Framerate of each camera's reduced-quality variant stream "
             "(camera.<name>_lofps), requested by the browser when its WebRTC "
             "path is TURN-relayed (adaptive framerate)."
+        ),
+    )
+    snapshot_interval_minutes: int = Field(
+        default=60,
+        ge=0,
+        le=1440,
+        description=(
+            "Minutes between scheduled snapshots uploaded to the app as grow "
+            "photos (the timelapse). 0 turns scheduled snapshots off."
         ),
     )
     stun_candidate_port: int = Field(
