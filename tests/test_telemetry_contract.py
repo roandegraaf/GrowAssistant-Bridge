@@ -12,9 +12,13 @@ registered ids.
 """
 
 import asyncio
+import json
+import sys
+import threading
 import time
+from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -421,3 +425,91 @@ class TestClimateContract:
             await task
         except asyncio.CancelledError:
             pass
+
+
+ACME_DIR = str(Path(__file__).parent / "fixtures" / "third_party")
+
+
+@pytest.fixture
+def acme_class():
+    """Load the fake vendor exactly like any external integration, then unload it."""
+    from app.integrations import (
+        _integration_by_config_key,
+        _integration_classes,
+        _load_from_directory,
+        get_integration_class_by_config_key,
+    )
+
+    classes, keys, path = (
+        dict(_integration_classes),
+        dict(_integration_by_config_key),
+        list(sys.path),
+    )
+    assert "acme" in _load_from_directory(ACME_DIR)
+    yield get_integration_class_by_config_key("acme")
+    _integration_classes.clear()
+    _integration_classes.update(classes)
+    _integration_by_config_key.clear()
+    _integration_by_config_key.update(keys)
+    sys.path[:] = path
+
+
+@pytest.fixture
+def application():
+    from app.main import Application
+
+    Application._instance = None
+    Application._lock = threading.Lock()
+    with patch("app.main.signal.signal"):
+        yield Application()
+    Application._instance = None
+    Application._lock = threading.Lock()
+
+
+class TestThirdPartyContract:
+    """A drop-in vendor integration works end to end with no core changes:
+    manifest → telemetry on the wire → command dispatch by full entity id."""
+
+    async def test_manifest_telemetry_and_command(
+        self, acme_class, registry, application, monkeypatch
+    ):
+        from app.mqtt_transport import mqtt_transport
+
+        integration = acme_class({"enabled": True})
+        assert await integration.connect()
+        integration.register_capabilities(registry)
+
+        devices = {d["entityId"]: d for d in registry.serialize_manifest(1)["devices"]}
+        assert {
+            k: (d["deviceClass"], d["entityDomain"], d["writable"]) for k, d in devices.items()
+        } == {
+            "acme.grow_temp": ("temperature", "sensor", False),
+            "acme.vent": ("exhaust_fan", "switch", True),
+        }
+        assert devices["acme.grow_temp"]["unit"] == "°C"
+
+        samples = [s async for s in integration.receive_data()]
+        _assert_samples_join(samples, registry)
+
+        client = MagicMock()
+        monkeypatch.setattr(mqtt_transport, "_client", client)
+        monkeypatch.setattr(mqtt_transport, "_connected", True)
+        monkeypatch.setattr(mqtt_transport, "_topic", lambda suffix: f"ga/t/bridge/b/{suffix}")
+        points = [{**s, "integration": integration.name, "timestamp": 0} for s in samples]
+        ok, _ = await mqtt_transport.send_data(points)
+        assert ok
+        topic, body = client.publish.call_args.args[:2]
+        assert topic == "ga/t/bridge/b/telemetry"
+        wire = {s["entityId"]: s["value"] for s in json.loads(body)["samples"]}
+        assert wire == {"acme.grow_temp": 23.4, "acme.vent": False}
+
+        application._integrations = {integration.name: integration}
+        result = AsyncMock()
+        monkeypatch.setattr("app.main.registry", registry)
+        monkeypatch.setattr("app.main.mqtt_transport.send_command_result", result)
+        await application._process_command(
+            {"id": "c1", "targetType": "actuator", "targetId": "acme.vent", "action": "on"}
+        )
+        assert integration.commands == [("vent", "on", {})]
+        assert integration.vent_on is True
+        assert result.await_args.args[:2] == ("c1", True)

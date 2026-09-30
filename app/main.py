@@ -23,6 +23,7 @@ from app.automations import (
     EventBus,
     StateStore,
 )
+from app.calibration import calibrate
 from app.config import config, init_logging
 from app.config_store import config_store
 from app.integrations import (
@@ -399,21 +400,7 @@ class Application:
                     try:
                         async for item in integration.receive_data():
                             if item:
-                                item["timestamp"] = timestamp
-                                item["integration"] = name
-                                await queue_manager.put(item)
-                                # Feed the automation StateStore using the SAME
-                                # entity-id derivation as telemetry, so trigger /
-                                # condition entity refs line up with the manifest.
-                                value = item.get("value")
-                                entity_id = mqtt_transport._derive_entity_id(item)
-                                if entity_id and value is not None:
-                                    if self._state_store is not None:
-                                        await self._state_store.set(entity_id, value)
-                                    # Fan the sample out to every integration so
-                                    # control-style ones (climate) can follow
-                                    # sensors they don't own.
-                                    await self._fan_out_telemetry(entity_id, value)
+                                await self._collect_sample(name, item, timestamp)
                     except Exception as e:
                         logger.error(f"Error collecting data from {name}: {e}")
 
@@ -427,6 +414,24 @@ class Application:
             logger.error(f"Error in data collection task: {e}")
 
         logger.info("Data collection task stopped")
+
+    async def _collect_sample(self, integration_name: str, item: dict[str, Any], timestamp: int):
+        item["timestamp"] = timestamp
+        item["integration"] = integration_name
+        # Same entity-id derivation as telemetry, so trigger / condition entity
+        # refs line up with the manifest.
+        entity_id = mqtt_transport._derive_entity_id(item)
+        if entity_id and self._automations is not None:
+            calibration = self._automations.calibrations.get(entity_id)
+            if calibration is not None and "value" in item:
+                item["value"] = calibrate(item["value"], calibration)
+        await queue_manager.put(item)
+        value = item.get("value")
+        if entity_id and value is not None:
+            if self._state_store is not None:
+                await self._state_store.set(entity_id, value)
+            # Control-style integrations (climate) follow sensors they don't own.
+            await self._fan_out_telemetry(entity_id, value)
 
     async def _fan_out_telemetry(self, entity_id: str, value: Any) -> None:
         """Offer a collected sample to every integration's on_telemetry hook.

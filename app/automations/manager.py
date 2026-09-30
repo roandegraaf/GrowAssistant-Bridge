@@ -43,6 +43,7 @@ from collections.abc import Awaitable
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from app.calibration import Calibration, parse_calibrations
 from app.config_store import config_store
 from app.registry import registry
 
@@ -87,6 +88,7 @@ class AutomationManager:
         self._raw: Optional[str] = None  # exact payload string last received ("" = cleared)
         self._automations: list[dict[str, Any]] = []
         self._stages: dict[str, str] = {}
+        self._calibrations: dict[str, Calibration] = {}
         self._publish_status: Optional[StatusPublisher] = None
         self._engine: Optional[AutomationEngine] = None
         # Last rule-set version applied to the engine (None = none applied yet).
@@ -99,6 +101,7 @@ class AutomationManager:
             self._raw = cached["payload"]
             self._automations = self._parse_list(self._raw)
             self._stages = self._parse_stages(self._raw)
+            self._calibrations = self._parse_calibrations(self._raw)
             v = cached.get("version")
             self._applied_version = v if isinstance(v, int) else None
         logger.info(
@@ -106,6 +109,11 @@ class AutomationManager:
             len(self._automations),
             self._applied_version,
         )
+
+    @property
+    def calibrations(self) -> dict[str, Calibration]:
+        """Per-entity calibrations from the applied rule set (applied by the collection loop)."""
+        return self._calibrations
 
     def set_status_publisher(self, fn: StatusPublisher) -> None:
         """Register the coroutine that publishes a status dict (transport-provided)."""
@@ -167,6 +175,7 @@ class AutomationManager:
             self._raw = ""
             self._automations = []
             self._stages = {}
+            self._calibrations = {}
             self._persist("")
             if self._engine is not None:
                 self._engine.apply_rules([], stages={})
@@ -202,6 +211,7 @@ class AutomationManager:
             self._raw = text
             self._automations = automations
             self._stages = self._parse_stages(text)
+            self._calibrations = parse_calibrations(data.get("calibrations"))
             if incoming_version is not None:
                 self._applied_version = incoming_version
             self._persist(text)
@@ -405,6 +415,14 @@ class AutomationManager:
             len(errors),
         )
         return status
+
+    @staticmethod
+    def _parse_calibrations(text: str) -> dict[str, Calibration]:
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return {}
+        return parse_calibrations(data.get("calibrations") if isinstance(data, dict) else None)
 
     @staticmethod
     def _parse_stages(text: str) -> dict[str, str]:
