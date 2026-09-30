@@ -154,6 +154,26 @@ class TestValidate:
         errors = mgr.validate([rule])
         assert any("unknown entity 'sensor.ghost'" in e["message"] for e in errors)
 
+    def test_derived_condition_validates_metric_and_inputs(self):
+        _register("sensor.temp")
+        _register("sensor.ppfd")
+        _register("switch.fan", DeviceCategory.ACTUATOR)
+        mgr = AutomationManager()
+        vpd = {"type": "derived", "metric": "vpd", "temperature": "sensor.temp", "above": 1}
+        dli = {"type": "derived", "metric": "dli", "light": "sensor.ppfd", "below": 20}
+        bogus = {"type": "derived", "metric": "heat_index", "above": 1}
+        rule = {
+            "id": "a1",
+            "triggers": [{"type": "time", "at": "06:00"}],
+            "conditions": [vpd, dli, bogus],
+            "actions": [{"type": "call", "entity": "switch.fan", "service": "turn_on"}],
+        }
+        msgs = [e["message"] for e in mgr.validate([rule])]
+        assert msgs == [
+            "condition 'derived' requires an entity",
+            "unknown derived metric 'heat_index'",
+        ]
+
 
 class TestApplyPayload:
     async def test_valid_payload_publishes_ok_status_with_hash_echo(self):
