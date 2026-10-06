@@ -1,244 +1,29 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pair Bridge - GrowAssistant</title>
+{% extends "auth_base.html" %}
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.built.css') }}">
+{% block title %}Pair this bridge{% endblock %}
 
-    <style>
-        :root {
-            --brand: #22c55e;
-            --brand-dim: rgba(34, 197, 94, 0.15);
-            --surface: #0a0a0a;
-            --border: #1f1f1f;
-            --border-subtle: #171717;
-            --text-primary: #fafafa;
-            --text-secondary: #a1a1aa;
-            --text-muted: #52525b;
-            --danger: #ef4444;
-        }
+{% block card %}
+<div class="flex flex-col gap-1">
+    <h1 class="text-title-2 m-0">Pair this bridge</h1>
+    <p class="m-0 text-muted">Enter the pairing code from the GrowAssistant app to connect this bridge to your grow.</p>
+</div>
 
-        body {
-            font-family: 'Outfit', system-ui, sans-serif;
-            background: #030303;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem 1.5rem;
-        }
+{% include 'partials/_form_error.html' %}
 
-        .ambient-glow {
-            position: fixed;
-            top: -50%;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 100vw;
-            height: 100vh;
-            background: radial-gradient(ellipse at center, var(--brand-dim) 0%, transparent 60%);
-            pointer-events: none;
-            opacity: 0.5;
-        }
-
-        .card {
-            position: relative;
-            z-index: 1;
-            max-width: 440px;
-            width: 100%;
-            background: var(--surface);
-            border: 1px solid var(--border-subtle);
-            border-radius: 20px;
-            padding: 2.5rem;
-            text-align: center;
-        }
-
-        .logo-mark {
-            width: 56px;
-            height: 56px;
-            background: linear-gradient(135deg, var(--brand-dim) 0%, transparent 100%);
-            border: 1px solid rgba(34, 197, 94, 0.2);
-            border-radius: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1.5rem;
-        }
-
-        .logo-mark svg { width: 28px; height: 28px; color: var(--brand); }
-
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-            letter-spacing: -0.025em;
-        }
-
-        .subtitle {
-            font-size: 0.9375rem;
-            color: var(--text-secondary);
-            line-height: 1.5;
-            margin-bottom: 2rem;
-        }
-
-        .code-input {
-            width: 100%;
-            background: #030303;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1rem;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 1.5rem;
-            font-weight: 600;
-            letter-spacing: 0.25em;
-            text-align: center;
-            color: var(--text-primary);
-            text-transform: uppercase;
-            margin-bottom: 1rem;
-        }
-
-        .code-input:focus {
-            outline: none;
-            border-color: var(--brand);
-            box-shadow: 0 0 0 3px var(--brand-dim);
-        }
-
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-            width: 100%;
-            padding: 0.875rem 1.5rem;
-            border: none;
-            border-radius: 10px;
-            font-family: inherit;
-            font-size: 0.9375rem;
-            font-weight: 600;
-            cursor: pointer;
-            background: var(--brand);
-            color: #030303;
-            transition: all 0.2s ease;
-        }
-
-        .btn:hover { background: #16a34a; }
-
-        .alert {
-            border-radius: 10px;
-            padding: 0.875rem 1rem;
-            font-size: 0.875rem;
-            margin-bottom: 1.5rem;
-            text-align: left;
-        }
-
-        .alert-error {
-            background: rgba(239, 68, 68, 0.08);
-            border: 1px solid rgba(239, 68, 68, 0.2);
-            color: var(--danger);
-        }
-
-        .instructions {
-            text-align: left;
-            margin-top: 2rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid var(--border-subtle);
-        }
-
-        .instructions-title {
-            font-size: 0.6875rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 1rem;
-        }
-
-        .instruction-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.875rem;
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-            line-height: 1.5;
-            margin-bottom: 0.75rem;
-        }
-
-        .instruction-number {
-            width: 22px;
-            height: 22px;
-            background: #111111;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            flex-shrink: 0;
-        }
-    </style>
-</head>
-<body>
-    <div class="ambient-glow"></div>
-
-    <div class="card">
-        <div class="logo-mark">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2v8"></path>
-                <path d="m4.93 10.93 1.41 1.41"></path>
-                <path d="M2 18h2"></path>
-                <path d="M20 18h2"></path>
-                <path d="m19.07 10.93-1.41 1.41"></path>
-                <path d="M22 22H2"></path>
-                <path d="m8 6 4-4 4 4"></path>
-                <path d="M16 18a4 4 0 0 0-8 0"></path>
-            </svg>
-        </div>
-
-        <h1>Pair this Bridge</h1>
-        <p class="subtitle">
-            Open the GrowAssistant app, generate a pairing code, and enter it
-            below to connect this bridge.
-        </p>
-
-        {% if error %}
-        <div class="alert alert-error">{{ error }}</div>
-        {% endif %}
-
-        <form method="POST" action="{{ url_for('onboarding') }}">
-            <input
-                type="text"
-                name="code"
-                class="code-input"
-                placeholder="CODE"
-                autocomplete="off"
-                autofocus
-                required
-            >
-            <button type="submit" class="btn">Pair Bridge</button>
-        </form>
-
-        <div class="instructions">
-            <h3 class="instructions-title">How to pair</h3>
-            <div class="instruction-item">
-                <span class="instruction-number">1</span>
-                <span>Open the GrowAssistant app</span>
-            </div>
-            <div class="instruction-item">
-                <span class="instruction-number">2</span>
-                <span>Generate a pairing code for a new bridge</span>
-            </div>
-            <div class="instruction-item">
-                <span class="instruction-number">3</span>
-                <span>Enter that code above and press Pair Bridge</span>
-            </div>
-        </div>
+<form method="POST" action="{{ url_for('onboarding') }}" class="flex flex-col gap-4">
+    <div>
+        <label for="code" class="form-label">Pairing code</label>
+        <input type="text" id="code" name="code" class="form-input code-input" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus required>
     </div>
-</body>
-</html>
+    <button type="submit" class="btn btn-primary btn-block">Pair bridge</button>
+</form>
+
+<div class="flex flex-col gap-3 border-t border-line pt-4">
+    <span class="ovl">How to get a code</span>
+    <ol class="m-0 p-0 list-none flex flex-col gap-3">
+        <li class="flex items-start gap-3"><span class="pill">1</span><span>Open GrowAssistant and go to Settings, then Bridges.</span></li>
+        <li class="flex items-start gap-3"><span class="pill">2</span><span>Choose "Pair a new bridge" to get a pairing code.</span></li>
+        <li class="flex items-start gap-3"><span class="pill">3</span><span>Type that code above and press Pair bridge.</span></li>
+    </ol>
+</div>
+{% endblock %}

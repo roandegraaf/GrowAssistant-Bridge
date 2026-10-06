@@ -1,102 +1,17 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ code }} Error - GrowAssistant Bridge</title>
+{% extends "auth_base.html" %}
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+{% block title %}{{ code }}{% endblock %}
 
-    <!-- Tailwind CSS -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.built.css') }}">
-
-    <style>
-        body {
-            font-family: 'Outfit', system-ui, sans-serif;
-            background: #050505;
-            min-height: 100vh;
-        }
-
-        /* Subtle grain texture */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-            opacity: 0.03;
-            pointer-events: none;
-            z-index: 9999;
-        }
-
-        .error-code {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: clamp(6rem, 20vw, 12rem);
-            font-weight: 700;
-            line-height: 1;
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-shadow: 0 0 80px rgba(239, 68, 68, 0.3);
-        }
-
-        .btn-primary {
-            background: #22c55e;
-            transition: all 0.2s ease;
-        }
-
-        .btn-primary:hover {
-            background: #16a34a;
-            box-shadow: 0 0 20px rgba(34, 197, 94, 0.4);
-        }
-    </style>
-</head>
-<body class="flex items-center justify-center p-4">
-    <div class="text-center max-w-lg">
-        <!-- Error Code -->
-        <div class="error-code mb-4">{{ code }}</div>
-
-        <!-- Error Message -->
-        <h1 class="text-2xl font-semibold text-zinc-100 mb-3">
-            {% if code == 404 %}
-            Page Not Found
-            {% elif code == 500 %}
-            Server Error
-            {% else %}
-            Something Went Wrong
-            {% endif %}
-        </h1>
-
-        <p class="text-zinc-400 mb-8 max-w-md mx-auto">
-            {{ error }}
-        </p>
-
-        <!-- Actions -->
-        <div class="flex items-center justify-center gap-4">
-            <a href="/" class="btn-primary px-6 py-3 rounded-lg font-medium text-zinc-900 inline-flex items-center gap-2">
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
-                </svg>
-                Back to Dashboard
-            </a>
-
-            <button onclick="history.back()" class="px-6 py-3 rounded-lg font-medium text-zinc-400 border border-zinc-700 hover:border-zinc-600 hover:text-zinc-200 transition-colors inline-flex items-center gap-2">
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m12 19-7-7 7-7"></path>
-                    <path d="M19 12H5"></path>
-                </svg>
-                Go Back
-            </button>
-        </div>
-
-        <!-- Footer -->
-        <p class="text-zinc-600 text-sm mt-16">
-            &copy; 2025 GrowAssistant Bridge
-        </p>
-    </div>
-</body>
-</html>
+{% block card %}
+<div class="flex flex-col gap-2">
+    <span class="ovl">Error {{ code }}</span>
+    <h1 class="text-title-2 m-0">
+        {% if code == 404 %}This page doesn't exist{% elif code == 500 %}Something went wrong on the bridge{% else %}Something went wrong{% endif %}
+    </h1>
+    <p class="m-0 text-muted">{{ error }}</p>
+</div>
+<div class="flex flex-wrap gap-2">
+    <a href="/" class="btn btn-primary">Back to status</a>
+    <button type="button" onclick="history.back()" class="btn btn-secondary">Go back</button>
+</div>
+{% endblock %}

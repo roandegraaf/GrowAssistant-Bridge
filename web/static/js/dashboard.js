@@ -1,296 +1,239 @@
 /**
- * GrowAssistant Bridge - Dashboard Module
- * Handles all dashboard-specific functionality
+ * GrowAssistant Bridge - status page.
+ * Verdict first, the grower's words in the rows; entity ids only inside Details groups.
  */
 
+const INTEGRATION_LABELS = {
+    esphome: 'ESPHome',
+    mqtt: 'MQTT',
+    gpio: 'GPIO',
+    http: 'HTTP',
+    serial: 'Serial',
+    camera: 'Camera',
+    simulator: 'Simulator',
+};
+
 const Dashboard = {
-    // State
-    deviceTypes: {},
     actuators: [],
     connectionStatus: null,
+    integrations: null,
+    deviceData: null,
+    telemetry: null,
     deviceDataRequestActive: false,
 
-    /**
-     * Initialize the dashboard
-     */
     init() {
-        // Load initial data
         this.loadConnectionStatus().then(status => {
-            // If not ready, redirect to onboarding
-            if (!status || !status.ready) {
-                window.location.href = '/onboarding';
-                return;
-            }
-
-            this.loadQueueInfo();
-            this.loadIntegrations();
-            this.loadDeviceTypes();
-            this.loadActuators();
-            this.loadDeviceData();
-            this.loadTelemetry();
-        }).catch(error => {
-            console.error('Error loading initial connection status:', error);
-            // On error, try loading other data anyway
-            this.loadQueueInfo();
-            this.loadIntegrations();
-            this.loadDeviceTypes();
-            this.loadActuators();
-            this.loadDeviceData();
-            this.loadTelemetry();
+            if (status && status.ready === false && status.status !== 'error') return;
+            this.loadAll();
         });
 
-        // Set up polling
         setInterval(() => this.loadConnectionStatus(), 10000);
         setInterval(() => {
-            if (!this.deviceDataRequestActive) {
-                this.loadDeviceData();
-            }
+            if (!this.deviceDataRequestActive) this.loadDeviceData();
         }, 5000);
         setInterval(() => this.loadTelemetry(), 5000);
 
-        // Bind event listeners
         this.bindEvents();
-
-        // Listen for global refresh events
-        window.addEventListener('app:refresh', () => {
-            this.loadQueueInfo();
-            this.loadIntegrations();
-            this.loadDeviceTypes();
-            this.loadActuators();
-            this.loadDeviceData();
-            this.loadTelemetry();
-        });
     },
 
-    /**
-     * Bind event listeners
-     */
+    loadAll() {
+        this.loadQueueInfo();
+        this.loadIntegrations();
+        this.loadDeviceTypes();
+        this.loadActuators();
+        this.loadDeviceData();
+        this.loadTelemetry();
+    },
+
     bindEvents() {
         const controlForm = document.getElementById('control-form');
-        if (controlForm) {
-            controlForm.addEventListener('submit', (e) => this.sendCommand(e));
-        }
+        if (controlForm) controlForm.addEventListener('submit', (e) => this.sendCommand(e));
 
         const targetSelect = document.getElementById('control-target');
-        if (targetSelect) {
-            targetSelect.addEventListener('change', () => this.updateActionOptions());
-        }
+        if (targetSelect) targetSelect.addEventListener('change', () => this.updateActionOptions());
+
+        const restartBtn = document.getElementById('restart-btn');
+        if (restartBtn) restartBtn.addEventListener('click', () => this.restart());
     },
 
-    /**
-     * Load connection status from API
-     */
+    humanize(id) {
+        const raw = String(id || '');
+        const local = raw.includes('.') ? raw.slice(raw.indexOf('.') + 1) : raw;
+        const words = local.replace(/[_-]+/g, ' ').trim();
+        return words ? words.charAt(0).toUpperCase() + words.slice(1) : raw;
+    },
+
+    integrationLabel(name) {
+        const key = String(name || '').toLowerCase();
+        return INTEGRATION_LABELS[key] || this.humanize(key);
+    },
+
+    formatValue(info) {
+        const value = info.value;
+        if (value === undefined || value === null) return '–';
+        if (typeof value === 'boolean') return value ? 'On' : 'Off';
+        if (typeof value === 'number') {
+            const rounded = Number.isInteger(value) ? String(value) : value.toFixed(1);
+            return info.unit ? `${rounded} ${info.unit}` : rounded;
+        }
+        if (typeof value === 'object') return 'Reporting';
+        const text = String(value);
+        if (/^(on|off)$/i.test(text)) return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+        return info.unit ? `${text} ${info.unit}` : text;
+    },
+
+    setText(id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    },
+
     async loadConnectionStatus() {
         try {
             const data = await API.get('/api/connection-status');
-
             this.connectionStatus = data;
-            this.updateConnectionState();
-
-            // Redirect to onboarding if not ready
             if (!data.ready) {
                 window.location.href = '/onboarding';
                 return data;
             }
-
-            return data;
         } catch (error) {
             console.error('Error fetching connection status:', error);
             this.connectionStatus = { status: 'error', error: error.message };
-            this.updateConnectionState();
-            return this.connectionStatus;
+        }
+        this.renderConnection();
+        this.renderVerdict();
+        return this.connectionStatus;
+    },
+
+    renderConnection() {
+        const status = this.connectionStatus;
+        if (!status) return;
+        const dot = document.getElementById('cloud-dot');
+        const pill = document.getElementById('bridge-pill');
+
+        let text = 'Not connected';
+        let tone = 'critical';
+        let pillText = 'Offline';
+        if (status.status === 'connected') {
+            text = 'Connected';
+            tone = 'ok';
+            pillText = 'Online';
+        } else if (status.status === 'connecting') {
+            text = 'Reconnecting';
+            tone = 'attention';
+            pillText = 'Reconnecting';
+        }
+
+        this.setText('cloud-state', text);
+        if (dot) dot.className = `dot dot-${tone}`;
+        if (pill) {
+            pill.className = `pill pill-${tone}`;
+            pill.textContent = pillText;
         }
     },
 
-    /**
-     * Update UI based on connection state
-     */
-    updateConnectionState() {
-        const stateElement = document.getElementById('connection-state');
-        const stateIcon = document.getElementById('connection-state-icon');
+    renderVerdict() {
+        const section = document.getElementById('bridge-verdict');
+        if (!section) return;
+        const status = this.connectionStatus || {};
 
-        if (!this.connectionStatus || !stateElement) return;
+        const devices = this.deviceData ? Object.values(this.deviceData) : [];
+        const failing = devices.filter(d => d && d.error).length;
+        const integrationCount = Array.isArray(this.integrations) ? this.integrations.length : null;
 
-        let stateText = '';
-        let iconClass = '';
-
-        switch (this.connectionStatus.status) {
-            case 'connected':
-                stateText = 'Connected';
-                iconClass = 'success';
-                break;
-            case 'connecting':
-                stateText = 'Connecting';
-                iconClass = 'info';
-                break;
-            case 'unpaired':
-                stateText = 'Not Paired';
-                iconClass = 'error';
-                break;
-            case 'error':
-                stateText = 'Error';
-                iconClass = 'error';
-                break;
-            default:
-                stateText = this.connectionStatus.status;
-                iconClass = 'info';
+        const facts = [];
+        if (status.status === 'connected') facts.push('Linked to your workspace');
+        if (this.deviceData) facts.push(`${devices.length} ${devices.length === 1 ? 'device' : 'devices'}`);
+        if (integrationCount !== null) {
+            facts.push(`${integrationCount} ${integrationCount === 1 ? 'integration' : 'integrations'}`);
         }
 
-        stateElement.textContent = stateText;
-
-        if (stateIcon) {
-            stateIcon.className = `stat-icon ${iconClass}`;
+        let tone = 'ok';
+        let title = 'Everything is running';
+        if (status.status === 'error') {
+            tone = 'critical';
+            title = "Can't reach the bridge service";
+            facts.splice(0, facts.length, 'Try again in a moment, or restart the bridge');
+        } else if (status.status === 'connecting' || !status.status) {
+            tone = 'attention';
+            title = 'Reconnecting to GrowAssistant';
+            facts.unshift('Readings wait here until the connection is back');
+        } else if (failing) {
+            tone = 'attention';
+            title = failing === 1 ? 'One device is not responding' : `${failing} devices are not responding`;
         }
 
-        this.checkApiStatus();
+        section.className = `verdict verdict-${tone}`;
+        const dot = section.querySelector('.dot');
+        if (dot) dot.className = `dot dot-${tone}`;
+        this.setText('verdict-title', title);
+        this.setText('verdict-detail', facts.join(' · '));
     },
 
-    /**
-     * Check and update API status
-     */
-    checkApiStatus() {
-        const statusElement = document.getElementById('api-status');
-        const statusIcon = document.getElementById('api-status-icon');
-
-        if (!statusElement) return;
-
-        if (this.connectionStatus) {
-            if (this.connectionStatus.ready) {
-                statusElement.textContent = 'Online';
-                if (statusIcon) statusIcon.className = 'stat-icon success';
-            } else if (this.connectionStatus.connected) {
-                statusElement.textContent = 'Connecting';
-                if (statusIcon) statusIcon.className = 'stat-icon warning';
-            } else {
-                statusElement.textContent = 'Offline';
-                if (statusIcon) statusIcon.className = 'stat-icon error';
-            }
-        } else {
-            statusElement.textContent = 'Unknown';
-            if (statusIcon) statusIcon.className = 'stat-icon info';
-        }
-    },
-
-    /**
-     * Load queue information
-     */
     async loadQueueInfo() {
         try {
             const data = await API.get('/api/queue');
-            document.getElementById('queue-size').textContent = data.size;
+            this.setText('queue-size', data.size === 0 ? 'Nothing' : `${data.size} ${data.size === 1 ? 'reading' : 'readings'}`);
         } catch (error) {
             console.error('Error fetching queue info:', error);
-            document.getElementById('queue-size').textContent = '--';
+            this.setText('queue-size', '–');
         }
     },
 
-    /**
-     * Load integrations list
-     */
     async loadIntegrations() {
+        const container = document.getElementById('integrations-container');
         try {
             const data = await API.get('/api/integrations');
-            const container = document.getElementById('integrations-container');
-            const countElement = document.getElementById('integrations-count');
-
-            if (!data || data.length === 0) {
+            if (!Array.isArray(data) || data.length === 0) {
                 container.innerHTML = `
                     <div class="empty-state">
-                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M12 22v-5"></path>
-                            <path d="M9 8V2"></path>
-                            <path d="M15 8V2"></path>
-                            <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path>
-                        </svg>
-                        <p class="empty-state-title">No integrations loaded</p>
-                        <p class="text-sm">Checking again shortly...</p>
+                        <p class="empty-state-title">${Array.isArray(data) ? 'No integrations set up' : 'Integrations are starting'}</p>
+                        <p class="m-0">${Array.isArray(data) ? 'Add one under Settings.' : 'Checking again shortly…'}</p>
                     </div>
                 `;
-                countElement.textContent = '0';
-                setTimeout(() => this.loadIntegrations(), 3000);
+                this.integrations = Array.isArray(data) ? [] : null;
+                this.setText('integrations-count', '');
+                if (!Array.isArray(data)) setTimeout(() => this.loadIntegrations(), 3000);
+                this.renderVerdict();
                 return;
             }
 
-            countElement.textContent = data.length;
-
-            container.innerHTML = `
-                <div class="space-y-2">
-                    ${data.map(integration => `
-                        <div class="flex items-center justify-between p-3 rounded-lg bg-surface-base border border-border-subtle">
-                            <span class="font-medium text-zinc-200">${Utils.escapeHtml(integration.name)}</span>
-                            <span class="badge badge-success">${Utils.escapeHtml(integration.type)}</span>
-                        </div>
-                    `).join('')}
+            this.integrations = data;
+            this.setText('integrations-count', `${data.length} running`);
+            container.innerHTML = data.map(integration => `
+                <div class="li">
+                    <span class="li-label">${Utils.escapeHtml(this.integrationLabel(integration.name))}</span>
+                    <span class="li-v"><span class="pill pill-ok">Running</span></span>
                 </div>
-            `;
+            `).join('');
+            this.renderVerdict();
         } catch (error) {
             console.error('Error fetching integrations:', error);
-            document.getElementById('integrations-container').innerHTML = `
-                <div class="alert alert-error">
-                    <span>Error loading integrations. Retrying...</span>
-                </div>
-            `;
-            document.getElementById('integrations-count').textContent = '--';
+            container.innerHTML = '<div class="card-body"><div class="alert alert-error">Couldn\'t load integrations. Retrying…</div></div>';
+            this.setText('integrations-count', '');
             setTimeout(() => this.loadIntegrations(), 5000);
         }
     },
 
-    /**
-     * Load device types
-     */
     async loadDeviceTypes() {
+        const container = document.getElementById('devices-container');
         try {
             const data = await API.get('/api/device-types');
-            this.deviceTypes = data;
-
-            const container = document.getElementById('devices-container');
-
-            if (Object.keys(data).length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-                            <rect x="9" y="9" width="6" height="6"></rect>
-                        </svg>
-                        <p class="empty-state-title">No device types registered</p>
-                    </div>
-                `;
+            const entries = Object.entries(data || {});
+            if (entries.length === 0) {
+                container.innerHTML = '<p class="m-0">No device types registered.</p>';
                 return;
             }
-
-            // Build device types display
-            let html = '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">';
-
-            for (const [deviceType, actions] of Object.entries(data)) {
-                html += `
-                    <div class="p-4 rounded-lg bg-surface-base border border-border-subtle">
-                        <h4 class="font-medium text-zinc-200 mb-3">${Utils.escapeHtml(deviceType)}</h4>
-                        <div class="flex flex-wrap gap-2">
-                            ${Array.isArray(actions) && actions.length > 0
-                                ? actions.map(action => `
-                                    <span class="px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-400">${Utils.escapeHtml(action)}</span>
-                                `).join('')
-                                : '<span class="text-xs text-zinc-500">No actions</span>'
-                            }
-                        </div>
-                    </div>
-                `;
-            }
-
-            html += '</div>';
-            container.innerHTML = html;
+            container.innerHTML = `<div class="log">${entries.map(([deviceType, actions]) => `
+                <div><span class="log-time">${Utils.escapeHtml(deviceType)}</span>  ${
+                    Array.isArray(actions) && actions.length ? actions.map(a => Utils.escapeHtml(a)).join(', ') : 'read only'
+                }</div>
+            `).join('')}</div>`;
         } catch (error) {
             console.error('Error fetching device types:', error);
-            document.getElementById('devices-container').innerHTML = `
-                <div class="alert alert-error">Error loading device types</div>
-            `;
+            container.innerHTML = '<div class="alert alert-error">Couldn\'t load device types</div>';
         }
     },
 
-    /**
-     * Load actuators for the Manual Control form. Each option's value is the
-     * full entity id (`<domain>.<name>`) — the command targetId.
-     */
     async loadActuators() {
         try {
             const data = await API.get('/api/actuators');
@@ -300,11 +243,11 @@ const Dashboard = {
             const targetSelect = document.getElementById('control-target');
             if (!targetSelect) return;
 
-            targetSelect.innerHTML = '<option value="" selected disabled>Select an actuator</option>';
+            targetSelect.innerHTML = '<option value="" selected disabled>Choose a device</option>';
             data.forEach(actuator => {
                 const option = document.createElement('option');
                 option.value = actuator.entityId;
-                option.textContent = `${actuator.entityId} (${actuator.deviceType})`;
+                option.textContent = this.humanize(actuator.name || actuator.entityId);
                 targetSelect.appendChild(option);
             });
         } catch (error) {
@@ -312,221 +255,155 @@ const Dashboard = {
         }
     },
 
-    /**
-     * Update action options based on the selected actuator's capabilities
-     */
     updateActionOptions() {
         const targetSelect = document.getElementById('control-target');
         const actionSelect = document.getElementById('control-action');
         const payloadContainer = document.getElementById('payload-container');
 
-        actionSelect.innerHTML = '<option value="" selected disabled>Select an action</option>';
+        actionSelect.innerHTML = '<option value="" selected disabled>Choose an action</option>';
         payloadContainer.classList.add('hidden');
 
-        if (targetSelect.value) {
-            const actuator = this.actuators.find(a => a.entityId === targetSelect.value);
-            const actions = actuator ? actuator.actions : [];
-
-            if (Array.isArray(actions)) {
-                actions.forEach(action => {
-                    const option = document.createElement('option');
-                    option.value = action;
-                    option.textContent = action;
-                    actionSelect.appendChild(option);
-                });
-
-                if (actions.length > 0) {
-                    payloadContainer.classList.remove('hidden');
-                }
-            }
-        }
+        if (!targetSelect.value) return;
+        const actuator = this.actuators.find(a => a.entityId === targetSelect.value);
+        const actions = actuator && Array.isArray(actuator.actions) ? actuator.actions : [];
+        actions.forEach(action => {
+            const option = document.createElement('option');
+            option.value = action;
+            option.textContent = this.humanize(action);
+            actionSelect.appendChild(option);
+        });
+        if (actions.length > 0) payloadContainer.classList.remove('hidden');
     },
 
-    /**
-     * Send command to device
-     */
+    showCommandResult(tone, message) {
+        document.getElementById('command-result').innerHTML =
+            `<div class="alert alert-${tone}">${message}</div>`;
+        Modal.show('commandModal');
+    },
+
     async sendCommand(event) {
         event.preventDefault();
 
         const target = document.getElementById('control-target').value;
         const action = document.getElementById('control-action').value;
+        const actuator = this.actuators.find(a => a.entityId === target);
+        const deviceName = this.humanize(actuator ? actuator.name : target);
         let payload = {};
 
         try {
             const payloadText = document.getElementById('control-payload').value;
-            if (payloadText.trim()) {
-                payload = JSON.parse(payloadText);
-            }
+            if (payloadText.trim()) payload = JSON.parse(payloadText);
         } catch (error) {
-            document.getElementById('command-result').innerHTML = `
-                <div class="alert alert-error">Invalid JSON payload</div>
-            `;
-            Modal.show('commandModal');
+            this.showCommandResult('error', 'The command payload isn\'t valid JSON.');
             return;
         }
 
         try {
             const data = await API.post('/api/send-command', { target, action, payload });
-
             if (data.success) {
-                document.getElementById('command-result').innerHTML = `
-                    <div class="alert alert-success">
-                        Command sent successfully: <strong>${Utils.escapeHtml(action)}</strong> on <strong>${Utils.escapeHtml(target)}</strong>
-                    </div>
-                `;
+                this.showCommandResult('success',
+                    `Sent <strong>${Utils.escapeHtml(this.humanize(action))}</strong> to <strong>${Utils.escapeHtml(deviceName)}</strong>.`);
             } else {
-                document.getElementById('command-result').innerHTML = `
-                    <div class="alert alert-error">Error: ${Utils.escapeHtml(data.error)}</div>
-                `;
+                this.showCommandResult('error', `Couldn't send the command: ${Utils.escapeHtml(data.error)}`);
             }
         } catch (error) {
-            document.getElementById('command-result').innerHTML = `
-                <div class="alert alert-error">Error sending command: ${Utils.escapeHtml(error.message)}</div>
-            `;
+            this.showCommandResult('error', `Couldn't send the command: ${Utils.escapeHtml(error.message)}`);
         }
-
-        Modal.show('commandModal');
     },
 
-    /**
-     * Load telemetry health: last published sample per entity + counters
-     */
+    async restart() {
+        if (!confirm('Restart the bridge? Devices stay as they are; readings pause for a moment.')) return;
+        try {
+            const data = await API.post('/api/restart', {});
+            Toast.show({ message: data.message || 'Restarting the bridge…' });
+        } catch (error) {
+            Toast.show({ message: `Couldn't restart: ${error.message}` });
+        }
+    },
+
     async loadTelemetry() {
+        const container = document.getElementById('telemetry-container');
+        if (!container) return;
         try {
             const data = await API.get('/api/telemetry');
-            const container = document.getElementById('telemetry-container');
-            const statsElement = document.getElementById('telemetry-stats');
-            if (!container) return;
-
             if (data.error) {
-                container.innerHTML = `<div class="alert alert-error">Error: ${Utils.escapeHtml(data.error)}</div>`;
+                container.innerHTML = `<div class="alert alert-error">${Utils.escapeHtml(data.error)}</div>`;
+                return;
+            }
+            this.telemetry = data;
+
+            const stats = data.stats || {};
+            const dropped = (stats.dropped_no_entity || 0) + (stats.dropped_no_value || 0);
+            this.setText('telemetry-stats', `${stats.published || 0} sent${dropped ? ` · ${dropped} skipped` : ''}`);
+            this.setText('last-sync', stats.last_publish_ts
+                ? new Date(stats.last_publish_ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                : 'Not yet');
+            if (typeof data.queueSize === 'number') {
+                this.setText('queue-size', data.queueSize === 0 ? 'Nothing' : `${data.queueSize} ${data.queueSize === 1 ? 'reading' : 'readings'}`);
+            }
+
+            const entries = Object.entries(data.entities || {})
+                .sort(([, a], [, b]) => new Date(b.ts || 0) - new Date(a.ts || 0));
+
+            if (entries.length === 0) {
+                container.innerHTML = `<p class="m-0">${data.connected ? 'Nothing sent yet. Waiting for the next cycle…' : 'Not connected to GrowAssistant yet.'}</p>`;
                 return;
             }
 
-            const stats = data.stats || {};
-            if (statsElement) {
-                const dropped = (stats.dropped_no_entity || 0) + (stats.dropped_no_value || 0);
-                const lastPublish = stats.last_publish_ts
-                    ? Utils.formatRelativeTime(stats.last_publish_ts / 1000)
-                    : 'never';
-                statsElement.textContent =
-                    `${stats.published || 0} published · ${dropped} dropped · ` +
-                    `queue ${data.queueSize ?? '--'} · last publish ${lastPublish}`;
+            container.innerHTML = `<div class="log">${entries.map(([entityId, sample]) => {
+                const time = sample.ts
+                    ? new Date(sample.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                    : '--:--:--';
+                return `<div><span class="log-time">${Utils.escapeHtml(time)}</span>  ${Utils.escapeHtml(entityId)} = ${Utils.escapeHtml(String(sample.value))}</div>`;
+            }).join('')}</div>`;
+        } catch (error) {
+            console.error('Error fetching telemetry:', error);
+            container.innerHTML = '<div class="alert alert-error">Couldn\'t load the log</div>';
+        }
+    },
+
+    async loadDeviceData() {
+        this.deviceDataRequestActive = true;
+        const container = document.getElementById('device-data-container');
+
+        try {
+            const data = await API.get('/api/devices');
+            if (data.error) {
+                container.innerHTML = `<div class="card-body"><div class="alert alert-error">${Utils.escapeHtml(data.error)}</div></div>`;
+                return;
             }
 
-            const entities = data.entities || {};
-            const entries = Object.entries(entities).sort(([a], [b]) => a.localeCompare(b));
+            this.deviceData = data;
+            const entries = Object.entries(data).sort(([a], [b]) => this.humanize(a).localeCompare(this.humanize(b)));
+            this.setText('devices-count', entries.length ? `${entries.length} ${entries.length === 1 ? 'device' : 'devices'}` : '');
+            this.renderVerdict();
 
             if (entries.length === 0) {
                 container.innerHTML = `
                     <div class="empty-state">
-                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
-                        </svg>
-                        <p class="empty-state-title">No telemetry published yet</p>
-                        <p class="text-sm">${data.connected ? 'Waiting for the next transmission cycle...' : 'Not connected to the broker.'}</p>
+                        <p class="empty-state-title">No devices yet</p>
+                        <p class="m-0">Waiting for the first readings from your integrations…</p>
                     </div>
                 `;
                 return;
             }
 
-            const rows = entries.map(([entityId, sample]) => {
-                const ts = sample.ts ? Utils.formatRelativeTime(new Date(sample.ts).getTime() / 1000) : '';
+            container.innerHTML = entries.map(([deviceId, info]) => {
+                const name = Utils.escapeHtml(this.humanize(deviceId));
+                if (info.error) {
+                    return `<div class="li"><span class="li-label">${name}</span><span class="li-v"><span class="pill pill-critical">Not responding</span></span></div>`;
+                }
+                const seen = info.timestamp ? Utils.formatRelativeTime(info.timestamp) : '';
                 return `
-                    <tr class="border-b border-border-subtle last:border-0">
-                        <td class="py-2 pr-4 font-mono text-sm text-zinc-300">${Utils.escapeHtml(entityId)}</td>
-                        <td class="py-2 pr-4 text-sm font-medium text-zinc-100">${Utils.escapeHtml(String(sample.value))}</td>
-                        <td class="py-2 text-xs text-zinc-500 text-right">${Utils.escapeHtml(ts)}</td>
-                    </tr>
+                    <div class="li">
+                        <span class="li-label">${name}</span>
+                        <span class="li-v">${seen ? `<span class="cap">${Utils.escapeHtml(seen)}</span>` : ''}<span class="li-strong">${Utils.escapeHtml(this.formatValue(info))}</span></span>
+                    </div>
                 `;
             }).join('');
-
-            container.innerHTML = `
-                <div class="overflow-x-auto">
-                    <table class="w-full">
-                        <thead>
-                            <tr class="text-left text-xs uppercase text-zinc-500 border-b border-border-subtle">
-                                <th class="py-2 pr-4 font-medium">Entity</th>
-                                <th class="py-2 pr-4 font-medium">Last Value</th>
-                                <th class="py-2 font-medium text-right">Published</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            `;
-        } catch (error) {
-            console.error('Error fetching telemetry:', error);
-            const container = document.getElementById('telemetry-container');
-            if (container) {
-                container.innerHTML = '<div class="alert alert-error">Error loading telemetry</div>';
-            }
-        }
-    },
-
-    /**
-     * Load device data
-     */
-    async loadDeviceData() {
-        this.deviceDataRequestActive = true;
-
-        try {
-            const data = await API.get('/api/devices');
-            const container = document.getElementById('device-data-container');
-
-            if (data.error) {
-                container.innerHTML = `<div class="alert alert-error">Error: ${Utils.escapeHtml(data.error)}</div>`;
-                return;
-            }
-
-            if (Object.keys(data).length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
-                        </svg>
-                        <p class="empty-state-title">No device data available</p>
-                        <p class="text-sm">Waiting for data from integrations...</p>
-                    </div>
-                `;
-                return;
-            }
-
-            let html = '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">';
-
-            for (const [deviceName, deviceInfo] of Object.entries(data)) {
-                const hasError = deviceInfo.error;
-                const value = deviceInfo.value !== undefined ? deviceInfo.value : 'N/A';
-                const type = deviceInfo.type || 'unknown';
-                const timestamp = deviceInfo.timestamp ? Utils.formatRelativeTime(deviceInfo.timestamp) : '';
-
-                html += `
-                    <div class="device-card ${hasError ? 'border-red-500/30' : ''}">
-                        <div class="device-name">
-                            <span class="w-2 h-2 rounded-full ${hasError ? 'bg-red-500' : 'bg-green-500'}"></span>
-                            ${Utils.escapeHtml(deviceName)}
-                        </div>
-                        ${hasError
-                            ? `<div class="text-red-400 text-sm">Error: ${Utils.escapeHtml(deviceInfo.error)}</div>`
-                            : `
-                                <div class="device-value">${Utils.escapeHtml(String(value))}</div>
-                                <div class="flex items-center justify-between mt-2">
-                                    <span class="text-xs text-zinc-500">${Utils.escapeHtml(type)}</span>
-                                    ${timestamp ? `<span class="device-timestamp">${timestamp}</span>` : ''}
-                                </div>
-                            `
-                        }
-                    </div>
-                `;
-            }
-
-            html += '</div>';
-            container.innerHTML = html;
         } catch (error) {
             console.error('Error fetching device data:', error);
-            document.getElementById('device-data-container').innerHTML = `
-                <div class="alert alert-error">Error loading device data</div>
-            `;
+            container.innerHTML = '<div class="card-body"><div class="alert alert-error">Couldn\'t load devices</div></div>';
         } finally {
             this.deviceDataRequestActive = false;
         }

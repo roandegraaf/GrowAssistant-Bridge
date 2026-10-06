@@ -128,88 +128,6 @@ const Utils = {
 };
 
 // ============================================
-// Connection Status Management
-// ============================================
-const ConnectionManager = {
-    status: null,
-    listeners: [],
-
-    /**
-     * Add a listener for connection status changes
-     * @param {Function} callback - The callback function
-     */
-    addListener(callback) {
-        this.listeners.push(callback);
-    },
-
-    /**
-     * Update the connection status
-     * @param {object} status - The new status object
-     */
-    updateStatus(status) {
-        this.status = status;
-        this.listeners.forEach(callback => callback(status));
-        this.updateUI(status);
-    },
-
-    /**
-     * Update the UI based on connection status
-     * @param {object} status - The status object
-     */
-    updateUI(status) {
-        const headerBadge = document.getElementById('header-status-badge');
-        const headerStatusText = document.getElementById('header-status-text');
-
-        if (!status) return;
-
-        // Determine connection state
-        const isConnected = status.status === 'ready';
-        const hasError = status.status === 'error';
-
-        // Update header badge
-        if (headerBadge) {
-            const badge = headerBadge.querySelector('.badge');
-            if (badge) {
-                badge.classList.remove('badge-success', 'badge-warning', 'badge-error', 'badge-info');
-                if (isConnected) {
-                    badge.classList.add('badge-success');
-                } else if (hasError) {
-                    badge.classList.add('badge-error');
-                } else {
-                    badge.classList.add('badge-info');
-                }
-            }
-            if (headerStatusText) {
-                if (isConnected) {
-                    headerStatusText.textContent = 'Connected';
-                } else if (hasError) {
-                    headerStatusText.textContent = 'Error';
-                } else {
-                    headerStatusText.textContent = 'Connecting';
-                }
-            }
-            headerBadge.classList.remove('hidden');
-            headerBadge.classList.add('flex');
-        }
-    },
-
-    /**
-     * Fetch the current connection status
-     */
-    async fetch() {
-        try {
-            const data = await API.get('/api/connection-status');
-            this.updateStatus(data);
-            return data;
-        } catch (error) {
-            console.error('Failed to fetch connection status:', error);
-            this.updateStatus({ status: 'error', error: error.message });
-            return null;
-        }
-    }
-};
-
-// ============================================
 // Modal Management
 // ============================================
 const Modal = {
@@ -253,38 +171,30 @@ const Modal = {
      */
     alert({ title, message, type = 'info', onClose }) {
         const id = Utils.generateId();
-        const iconMap = {
-            success: '<svg class="w-6 h-6 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
-            error: '<svg class="w-6 h-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
-            warning: '<svg class="w-6 h-6 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
-            info: '<svg class="w-6 h-6 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
-        };
-
+        const tone = { success: 'success', error: 'error', warning: 'warning' }[type] || 'info';
         const html = `
             <div id="${id}-backdrop" class="modal-backdrop"></div>
-            <div id="${id}" class="modal">
+            <div id="${id}" class="modal" role="dialog" aria-modal="true" aria-labelledby="${id}-title">
                 <div class="modal-header">
-                    <div class="flex items-center gap-3">
-                        ${iconMap[type] || iconMap.info}
-                        <h3 class="modal-title">${Utils.escapeHtml(title)}</h3>
-                    </div>
-                    <button onclick="Modal.hide('${id}'); document.getElementById('${id}').remove(); document.getElementById('${id}-backdrop').remove();" class="btn btn-ghost btn-icon">
-                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                    </button>
+                    <h3 class="modal-title" id="${id}-title">${Utils.escapeHtml(title)}</h3>
                 </div>
                 <div class="modal-body">
-                    <p class="text-zinc-300">${Utils.escapeHtml(message)}</p>
+                    <div class="alert alert-${tone}">${Utils.escapeHtml(message)}</div>
                 </div>
                 <div class="modal-footer">
-                    <button onclick="Modal.hide('${id}'); document.getElementById('${id}').remove(); document.getElementById('${id}-backdrop').remove(); ${onClose ? 'onClose()' : ''}" class="btn btn-primary">
-                        OK
-                    </button>
+                    <button type="button" class="btn btn-primary" data-close>OK</button>
                 </div>
             </div>
         `;
 
         const container = document.getElementById('modals-container') || document.body;
         container.insertAdjacentHTML('beforeend', html);
+        document.getElementById(id).querySelector('[data-close]').addEventListener('click', () => {
+            this.hide(id);
+            document.getElementById(id).remove();
+            document.getElementById(`${id}-backdrop`).remove();
+            if (onClose) onClose();
+        });
         this.show(id);
     }
 };
@@ -295,98 +205,28 @@ const Modal = {
 const Toast = {
     container: null,
 
-    /**
-     * Initialize the toast container
-     */
     init() {
         if (!this.container) {
             this.container = document.createElement('div');
             this.container.id = 'toast-container';
-            this.container.className = 'fixed bottom-4 right-4 z-[9999] flex flex-col gap-2';
+            this.container.setAttribute('role', 'status');
+            this.container.className = 'fixed bottom-4 left-4 right-4 lg:left-auto z-50 flex flex-col items-end gap-2';
             document.body.appendChild(this.container);
         }
     },
 
-    /**
-     * Show a toast notification
-     * @param {object} options - Toast options
-     */
-    show({ message, type = 'info', duration = 3000 }) {
+    show({ message, duration = 3000 }) {
         this.init();
 
-        const id = Utils.generateId();
-        const bgColors = {
-            success: 'bg-green-500/10 border-green-500/20 text-green-400',
-            error: 'bg-red-500/10 border-red-500/20 text-red-400',
-            warning: 'bg-amber-500/10 border-amber-500/20 text-amber-400',
-            info: 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-        };
-
         const toast = document.createElement('div');
-        toast.id = id;
-        toast.className = `px-4 py-3 rounded-lg border ${bgColors[type] || bgColors.info} text-sm font-medium shadow-lg transform translate-x-full opacity-0 transition-all duration-300`;
+        toast.className = 'toast is-hidden';
         toast.textContent = message;
-
         this.container.appendChild(toast);
 
-        // Animate in
-        requestAnimationFrame(() => {
-            toast.classList.remove('translate-x-full', 'opacity-0');
-        });
-
-        // Auto remove
+        requestAnimationFrame(() => toast.classList.remove('is-hidden'));
         setTimeout(() => {
-            toast.classList.add('translate-x-full', 'opacity-0');
+            toast.classList.add('is-hidden');
             setTimeout(() => toast.remove(), 300);
         }, duration);
     }
 };
-
-// ============================================
-// Global Refresh Function
-// ============================================
-let isRefreshing = false;
-
-async function refreshData() {
-    if (isRefreshing) return;
-
-    const btn = document.getElementById('refresh-btn');
-    if (btn) {
-        isRefreshing = true;
-        btn.classList.add('animate-spin');
-    }
-
-    try {
-        await ConnectionManager.fetch();
-
-        // Dispatch custom event for page-specific refresh handlers
-        window.dispatchEvent(new CustomEvent('app:refresh'));
-
-        Toast.show({ message: 'Data refreshed', type: 'success', duration: 2000 });
-    } catch (error) {
-        Toast.show({ message: 'Refresh failed', type: 'error' });
-    } finally {
-        if (btn) {
-            isRefreshing = false;
-            btn.classList.remove('animate-spin');
-        }
-    }
-}
-
-// ============================================
-// Initialize on DOM Ready
-// ============================================
-document.addEventListener('DOMContentLoaded', () => {
-    // Inject mobile menu button
-    const mobileMenuTemplate = document.getElementById('mobile-menu-btn-template');
-    const mobileMenuContainer = document.getElementById('mobile-menu-container');
-    if (mobileMenuTemplate && mobileMenuContainer) {
-        mobileMenuContainer.appendChild(mobileMenuTemplate.content.cloneNode(true));
-    }
-
-    // Initial connection status fetch
-    ConnectionManager.fetch();
-
-    // Set up polling for connection status (every 10 seconds)
-    setInterval(() => ConnectionManager.fetch(), 10000);
-});

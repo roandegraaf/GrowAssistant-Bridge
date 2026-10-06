@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% include 'partials/_head.html' %}
+    <title>{% block title %}{% endblock %} · GrowAssistant Bridge</title>
+</head>
+<body>
+    <main class="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-12">
+        <div class="flex flex-col items-center gap-3 text-center">
+            <span class="logo-tile logo-tile-lg">{% include 'partials/_logo.html' %}</span>
+            <span class="flex flex-col">
+                <span class="font-semibold">GrowAssistant Bridge</span>
+                <span class="cap">Local control on this network</span>
+            </span>
+        </div>
+        <div class="card w-full max-w-md p-6 flex flex-col gap-6">
+            {% block card %}{% endblock %}
+        </div>
+        {% block after %}{% endblock %}
+    </main>
+</body>
+</html>
