@@ -26,6 +26,7 @@ the payload ``value``) so switch state-triggers and ``wait_for_state`` on the
 actuator observe the change.
 """
 
+import asyncio
 import logging
 from typing import Any, Callable, Optional
 
@@ -72,6 +73,7 @@ class ActionExecutor:
         self._integration_for = integration_provider
         self._state_store = state_store
         self._registry = registry
+        self._auto_off: dict[str, asyncio.Task] = {}
 
     async def call(
         self, entity_id: str, service: str, data: Optional[dict[str, Any]] = None
@@ -81,7 +83,8 @@ class ActionExecutor:
         No-ops (returns False) when the entity or its integration is not
         currently available — lazy resolution for devices that appear later.
         """
-        payload = data or {}
+        payload = dict(data or {})
+        auto_off = payload.pop("auto_off", None)
         device = self._registry.get_device(entity_id)
         if device is None:
             logger.info("call: entity '%s' not in registry yet — skipping", entity_id)
@@ -105,7 +108,29 @@ class ActionExecutor:
 
         if ok:
             await self._write_back(entity_id, action, payload)
+            if action == "on" and isinstance(auto_off, (int, float)) and auto_off > 0:
+                self._schedule_auto_off(entity_id, float(auto_off))
+            elif action == "off":
+                self._clear_auto_off(entity_id)
         return bool(ok)
+
+    def _schedule_auto_off(self, entity_id: str, seconds: float) -> None:
+        """Switch the entity off after ``seconds`` even if the rule that turned it on is
+        cancelled meanwhile (a republished rule set cancels in-flight runs)."""
+        self._clear_auto_off(entity_id)
+
+        async def _off() -> None:
+            await asyncio.sleep(seconds)
+            self._auto_off.pop(entity_id, None)
+            logger.info("auto_off: switching '%s' off after %.0fs", entity_id, seconds)
+            await self.call(entity_id, "turn_off")
+
+        self._auto_off[entity_id] = asyncio.get_running_loop().create_task(_off())
+
+    def _clear_auto_off(self, entity_id: str) -> None:
+        task = self._auto_off.pop(entity_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     async def _write_back(self, entity_id: str, action: str, payload: dict[str, Any]) -> None:
         """Optimistically reflect the commanded state in the StateStore."""

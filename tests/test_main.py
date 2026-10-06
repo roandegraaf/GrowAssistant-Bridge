@@ -834,6 +834,28 @@ class TestProcessCommand:
             )
 
     @pytest.mark.asyncio
+    async def test_event_command_fires_engine_event(
+        self, reset_application_singleton, mock_dependencies
+    ):
+        with patch("app.main.signal.signal"):
+            app = Application()
+            app._engine = MagicMock()
+            await app._process_command(
+                {
+                    "id": "cmd-1",
+                    "targetType": "event",
+                    "targetId": "ga.water",
+                    "action": "fire",
+                    "payload": {"data": {"zone": "z1"}},
+                }
+            )
+
+            app._engine.emit_event.assert_called_once_with("ga.water", {"zone": "z1"})
+            mock_dependencies["mqtt_transport"].send_command_result.assert_called_with(
+                "cmd-1", True, "Event fired"
+            )
+
+    @pytest.mark.asyncio
     async def test_unknown_target_type(self, reset_application_singleton, mock_dependencies):
         """Test handling command with unknown target type."""
         with patch("app.main.signal.signal"):
