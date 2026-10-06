@@ -176,6 +176,32 @@ class TestValidate:
         assert "unknown hold metric 'co2'" in msgs
         assert "'ramp' requires a 'to' value" in msgs
 
+    def test_hold_also_readings_validate(self):
+        _register("switch.fan", DeviceCategory.ACTUATOR)
+        _register("sensor.temp", DeviceCategory.SENSOR)
+        _register("sensor.rh", DeviceCategory.SENSOR)
+        mgr = AutomationManager()
+        hold = {
+            "type": "climate_hold",
+            "entity": "switch.fan",
+            "sensor": "sensor.temp",
+            "target": 25,
+            "direction": "lower",
+            "also": [{"sensor": "sensor.rh", "target": 62.5, "direction": "lower"}],
+        }
+        rule = {"id": "a1", "triggers": [{"type": "time", "at": "06:00"}], "actions": [hold]}
+        assert mgr.validate([rule]) == []
+
+        bad = {**hold, "also": [{"sensor": "sensor.gone", "direction": "up"}]}
+        msgs = " ".join(e["message"] for e in mgr.validate([{**rule, "actions": [bad]}]))
+        assert "unknown entity 'sensor.gone'" in msgs
+        assert "numeric target" in msgs
+        assert "raise or lower" in msgs
+
+        sensorless = {"type": "climate_hold", "entity": "switch.fan", "also": hold["also"]}
+        msgs = " ".join(e["message"] for e in mgr.validate([{**rule, "actions": [sensorless]}]))
+        assert "needs a main sensor" in msgs
+
     def test_notification_action_validates(self):
         mgr = AutomationManager()
         rule = {

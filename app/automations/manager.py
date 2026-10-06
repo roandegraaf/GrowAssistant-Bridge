@@ -377,7 +377,9 @@ class AutomationManager:
         self, node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]
     ) -> None:
         """A sensorless hold just keeps the actuator on; with a ``sensor`` or the
-        ``vpd`` metric it needs a numeric target and a direction."""
+        ``vpd`` metric it needs a numeric target and a direction, and so does
+        every extra ``also`` reading."""
+        also = node.get("also")
         metric = node.get("metric")
         if metric is not None and metric != "vpd":
             errors.append({"automationId": rid, "message": f"unknown hold metric '{metric}'"})
@@ -388,7 +390,30 @@ class AutomationManager:
         elif node.get("sensor") is not None:
             self._check_entity(node.get("sensor"), "action", "climate_hold", rid, errors)
         else:
+            if also is not None:
+                errors.append(
+                    {"automationId": rid, "message": "climate_hold 'also' needs a main sensor"}
+                )
             return
+        self._check_hold_setpoint(node, rid, errors)
+        if also is None:
+            return
+        if not isinstance(also, list) or not also:
+            errors.append(
+                {"automationId": rid, "message": "climate_hold 'also' must be a list of readings"}
+            )
+            return
+        for reading in also:
+            if not isinstance(reading, dict):
+                errors.append(
+                    {"automationId": rid, "message": "climate_hold 'also' entries must be objects"}
+                )
+                continue
+            self._check_entity(reading.get("sensor"), "action", "climate_hold", rid, errors)
+            self._check_hold_setpoint(reading, rid, errors)
+
+    @staticmethod
+    def _check_hold_setpoint(node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]) -> None:
         if not isinstance(node.get("target"), (int, float)):
             errors.append(
                 {"automationId": rid, "message": "climate_hold requires a numeric target"}
