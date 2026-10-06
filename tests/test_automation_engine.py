@@ -91,6 +91,14 @@ class TestPureMatchers:
         assert numeric_range_match(15, 10, 20) is True
         assert numeric_range_match("nan-ish", 10, None) is False
 
+    def test_time_trigger_every_n_days(self):
+        trig = {"at": "08:00", "every_days": 3, "starting": "2026-01-01"}
+        fires = [
+            d for d in range(1, 11) if time_trigger_matches(trig, datetime(2026, 1, d, 8, 0, 0))
+        ]
+        assert fires == [1, 4, 7, 10]
+        assert time_trigger_matches(trig, datetime(2025, 12, 29, 8, 0, 0)) is False
+
     def test_time_trigger(self):
         assert time_trigger_matches({"at": "06:30"}, datetime(2026, 1, 1, 6, 30, 0)) is True
         assert time_trigger_matches({"at": "06:30"}, datetime(2026, 1, 1, 6, 30, 5)) is False

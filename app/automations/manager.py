@@ -299,6 +299,8 @@ class AutomationManager:
             self._check_entity(node.get("entity"), label, ntype, rid, errors)
         if ntype == "stage":
             self._check_stage(node, "to", False, rid, errors)
+        elif ntype == "time" and label == "trigger" and "every_days" in node:
+            self._check_day_interval(node, rid, errors)
         elif ntype == "climate_hold":
             self._check_climate_hold(node, rid, errors)
         elif ntype == "ramp":
@@ -309,6 +311,22 @@ class AutomationManager:
         elif ntype == "notification":
             # Only ever reached for an action node ("notification" ∈ ACTION_TYPES only).
             self._check_notification(node, rid, errors)
+
+    def _check_day_interval(
+        self, node: dict[str, Any], rid: Any, errors: list[dict[str, Any]]
+    ) -> None:
+        every = node.get("every_days")
+        if isinstance(every, bool) or not isinstance(every, int) or every < 1:
+            errors.append(
+                {"automationId": rid, "message": "time trigger 'every_days' must be 1 or more"}
+            )
+        starting = node.get("starting")
+        try:
+            datetime.strptime(str(starting), "%Y-%m-%d")
+        except ValueError:
+            errors.append(
+                {"automationId": rid, "message": "time trigger 'starting' must be YYYY-MM-DD"}
+            )
 
     def _check_condition(self, node: Any, rid: Any, errors: list[dict[str, Any]]) -> None:
         if not isinstance(node, dict):

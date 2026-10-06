@@ -158,6 +158,19 @@ def state_equals(value: Any, target: Any) -> bool:
     return _canonical_state(value) == _canonical_state(target)
 
 
+def day_interval_matches(trigger: dict[str, Any], now: datetime) -> bool:
+    """``every_days`` limits a ``time`` trigger to every Nth day counted from ``starting``."""
+    every = trigger.get("every_days")
+    if every is None:
+        return True
+    try:
+        start = datetime.strptime(str(trigger.get("starting")), "%Y-%m-%d").date()
+    except ValueError:
+        start = now.date()
+    elapsed = (now.date() - start).days
+    return elapsed >= 0 and elapsed % int(every) == 0
+
+
 def time_trigger_matches(trigger: dict[str, Any], now: datetime) -> bool:
     """Whether a ``time`` trigger (``at: HH:MM[:SS]``) matches ``now``.
 
@@ -170,6 +183,8 @@ def time_trigger_matches(trigger: dict[str, Any], now: datetime) -> bool:
         return False
     h, m, s = parse_time(at)
     if now.hour != h or now.minute != m:
+        return False
+    if not day_interval_matches(trigger, now):
         return False
     # A literal with explicit seconds must match the second too; otherwise the
     # trigger fires at the top of the minute.

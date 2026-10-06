@@ -81,6 +81,22 @@ class TestValidate:
         assert any("unknown entity 'sensor.temp'" in m for m in msgs)
         assert all(e["automationId"] == "a1" for e in errors)
 
+    def test_every_days_time_trigger_is_validated(self):
+        mgr = AutomationManager()
+
+        def rule(trigger):
+            return {
+                "id": "a1",
+                "triggers": [trigger],
+                "actions": [{"type": "fire_event", "event_type": "x"}],
+            }
+
+        good = {"type": "time", "at": "08:00", "every_days": 2, "starting": "2026-10-01"}
+        assert mgr.validate([rule(good)]) == []
+        bad = mgr.validate([rule({"type": "time", "at": "08:00", "every_days": 0})])
+        msgs = " ".join(e["message"] for e in bad)
+        assert "every_days" in msgs and "starting" in msgs
+
     def test_unknown_trigger_and_action_types(self):
         mgr = AutomationManager()
         errors = mgr.validate(

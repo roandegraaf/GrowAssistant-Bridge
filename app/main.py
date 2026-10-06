@@ -523,6 +523,17 @@ class Application:
             await mqtt_transport.send_command_result(command_id, False, "Missing required fields")
             return
 
+        if target_type == "event":
+            if self._engine is None or action != "fire":
+                await mqtt_transport.send_command_result(
+                    command_id, False, "Events need the automation engine and action 'fire'"
+                )
+                return
+            data = payload.get("data") if isinstance(payload, dict) else None
+            self._engine.emit_event(target_id, data if isinstance(data, dict) else {})
+            await mqtt_transport.send_command_result(command_id, True, "Event fired")
+            return
+
         try:
             # Primary path (§16.1): targetId is the full `<domain>.<name>`
             # entity id — unambiguous across integrations, resolved exactly

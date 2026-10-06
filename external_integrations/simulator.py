@@ -42,6 +42,13 @@ SENSORS = {
 # semantic class rides in metadata instead.
 DEVICE_CLASS_OVERRIDES = {"soil_moisture": "soil_moisture", "co2": "co2"}
 
+PUMP = "watering_pump"
+# While the pump runs, soil wets this many percentage points per second and the tank drains.
+PUMP_SOIL_PER_SECOND = 0.5
+PUMP_TANK_PER_SECOND = 0.1
+# Safety net when nobody waters: the soil is "hand-watered" once it gets this dry.
+HAND_WATER_AT = 20.0
+
 
 @register_integration
 class SimulatorIntegration(Integration):
@@ -57,6 +64,7 @@ class SimulatorIntegration(Integration):
         # takes a matching gulp out of the tank.
         self._soil = 62.0
         self._tank = 88.0
+        self._pump_on = False
         self._last_tick = time.time()
 
     async def connect(self) -> bool:
@@ -71,8 +79,16 @@ class SimulatorIntegration(Integration):
         return None
 
     async def send_data(self, data: dict[str, Any]) -> bool:
-        # Sensors only — nothing to actuate.
         return False
+
+    async def execute_command(self, target_id: str, action: str, payload: dict[str, Any]) -> bool:
+        act = action.lower()
+        if target_id != PUMP or act not in ("on", "off"):
+            return False
+        self._readings()
+        self._pump_on = act == "on"
+        logger.info("Simulated watering pump %s", act)
+        return True
 
     def register_capabilities(self, registry) -> None:
         for name, (device_type, unit) in SENSORS.items():
@@ -84,7 +100,13 @@ class SimulatorIntegration(Integration):
                 integration_name=self.name,
                 metadata={"unit": unit, "device_class": DEVICE_CLASS_OVERRIDES.get(name)},
             )
-        logger.info("Registered %d simulated sensors", len(SENSORS))
+        registry.register_actuator(
+            actuator_name=PUMP,
+            integration_name=self.name,
+            device_type="pump",
+            capabilities=["on", "off"],
+        )
+        logger.info("Registered %d simulated sensors and a watering pump", len(SENSORS))
 
     # ─── Simulation ─────────────────────────────────────────────────
 
@@ -119,9 +141,12 @@ class SimulatorIntegration(Integration):
         hum = (58 if lights else 66) - 3 * wave + self._drift("tent_humidity", 0.15)
         co2 = (650 if lights else 950) + 60 * wave + self._drift("co2", 4.0)
 
-        # Soil dries ~6%/hour under lights, ~2%/hour dark; auto-water at 35%.
+        # Soil dries ~6%/hour under lights, ~2%/hour dark; the pump wets it.
         self._soil -= (0.10 if lights else 0.033) * dt_min
-        if self._soil <= 35.0 and self._tank > 8.0:
+        if self._pump_on and self._tank > 0.0:
+            self._soil = min(80.0, self._soil + PUMP_SOIL_PER_SECOND * dt_min * 60)
+            self._tank -= PUMP_TANK_PER_SECOND * dt_min * 60
+        if self._soil <= HAND_WATER_AT and self._tank > 8.0:
             logger.info("Simulated watering event (soil %.1f%%)", self._soil)
             self._soil = 62.0 + random.uniform(-1.5, 1.5)
             self._tank -= 6.0
@@ -143,6 +168,7 @@ class SimulatorIntegration(Integration):
             # (`simulator.<name>` — the domain derives from the class name,
             # exactly as register_capabilities derives it).
             yield self.telemetry_sample(name, value, type=SENSORS[name][0])
+        yield self.telemetry_sample(PUMP, "on" if self._pump_on else "off")
 
     async def get_device_data(self) -> dict[str, Any]:
         readings = self._readings()

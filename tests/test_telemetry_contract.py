@@ -317,7 +317,20 @@ class TestSimulatorContract:
 
         samples = [s async for s in integration.receive_data()]
         _assert_samples_join(samples, registry)
-        assert len(samples) == 5
+        assert len(samples) == 6
+
+    @pytest.mark.asyncio
+    async def test_watering_pump_wets_the_soil(self):
+        from external_integrations.simulator import SimulatorIntegration
+
+        integration = SimulatorIntegration({"enabled": True})
+        dry = integration._soil
+        assert await integration.execute_command("watering_pump", "on", {}) is True
+        integration._last_tick -= 20
+        integration._readings()
+        assert integration._soil > dry
+        assert await integration.execute_command("watering_pump", "off", {}) is True
+        assert await integration.execute_command("tent_temperature", "on", {}) is False
 
     def test_manifest_carries_device_classes(self, registry):
         from external_integrations.simulator import SimulatorIntegration
@@ -330,6 +343,7 @@ class TestSimulatorContract:
             "simulator.tent_humidity": "humidity",
             "simulator.tent_temperature": "temperature",
             "simulator.water_tank_level": "water_level",
+            "simulator.watering_pump": "pump",
         }
 
 

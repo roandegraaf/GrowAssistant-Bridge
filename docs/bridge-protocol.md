@@ -497,7 +497,7 @@ The app→bridge write path (dashboard widgets). The app publishes a command to
 | Field        | Type   | Notes |
 |--------------|--------|-------|
 | `id`         | string | App-generated; echoed in the ack. |
-| `targetType` | string | Always `"actuator"` — only writable entities are commandable. |
+| `targetType` | string | `"actuator"` for a writable entity, or `"event"` to fire an automation event: `targetId` is then the `event_type`, `action` is `"fire"` and `payload.data` the event data. The ack only confirms the event was emitted; any rule it triggers reports through `…/automations/fired`. |
 | `targetId`   | string | The full `<domain>.<name>` **entityId** of the target (the manifest join key, §13). |
 | `action`     | string | Bridge vocabulary: `"on"` / `"off"` / `"set"`. The app has already translated any HA service to this (there is no service translation on the command path — that seam only exists in the bridge's automations executor). |
 | `payload`    | object | Free-form; a `set` carries `{"value": …}`. Passed verbatim to `integration.execute_command`. |
@@ -579,6 +579,10 @@ The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
 `climate_hold`/`ramp`; `{{ }}` templating). The bridge evaluator (`app/automations/`) implements that full
 vocabulary. The `notification` action publishes back to the app on `…/notify`
 (§10.3).
+
+**Every N days.** A `time` trigger may add `every_days` (int ≥ 1) and
+`starting` (`YYYY-MM-DD`, the bridge's local date): it then fires at `at` only
+on `starting` and every `every_days`-th local day after it.
 
 **Derived conditions.** `{"type": "derived", "metric": "vpd" | "dew_point" |
 "dli", …, "above"?, "below"?}` compares a computed grow metric with the same
