@@ -345,6 +345,7 @@ class ClimateControlIntegration(Integration):
                 integration_name=self.name,
                 domain="climate",
                 device_type=device.get("type"),
+                capabilities=["on", "off"],
             )
         logger.info(f"Registered {len(self.devices)} climate control devices with registry")
 

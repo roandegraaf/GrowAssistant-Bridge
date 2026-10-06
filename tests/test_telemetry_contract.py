@@ -371,6 +371,14 @@ class TestClimateContract:
             "climate.tent_humidifier": "humidifier",
         }
 
+    def test_manifest_announces_on_off_devices_as_switches(self, registry):
+        self._integration().register_capabilities(registry)
+
+        domains = {
+            d["entityId"]: d["entityDomain"] for d in registry.serialize_manifest(1)["devices"]
+        }
+        assert domains == {"climate.tent_heater": "switch", "climate.tent_humidifier": "switch"}
+
     @pytest.mark.asyncio
     async def test_execute_command_rejects_set_instead_of_switching_off(self):
         """A `set` command (numeric slider) must fail, not coerce to off.
