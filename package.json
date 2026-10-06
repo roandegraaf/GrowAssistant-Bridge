@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i ./web/static/css/tailwind.css -o ./web/static/css/tailwind.built.css --minify",
-    "watch:css": "tailwindcss -i ./web/static/css/tailwind.css -o ./web/static/css/tailwind.built.css --watch"
+    "watch:css": "tailwindcss -i ./web/static/css/tailwind.css -o ./web/static/css/tailwind.built.css --watch",
+    "sync:tokens": "cp ../GrowAssistant/lib/tokens/generated/bridge-tokens.css web/static/css/tokens.css"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.0"

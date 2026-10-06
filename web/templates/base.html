@@ -1,52 +1,22 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Dashboard{% endblock %} - GrowAssistant Bridge</title>
-
-    <!-- Fonts: Outfit (headings) + JetBrains Mono (data) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- Tailwind CSS -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.built.css') }}">
-
-    <!-- Custom Styles -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
-
+    {% include 'partials/_head.html' %}
+    <title>{% block title %}Status{% endblock %} · GrowAssistant Bridge</title>
     {% block head %}{% endblock %}
 </head>
-<body class="bg-surface-base text-zinc-100 min-h-screen antialiased">
-    <!-- Mobile Sidebar Overlay -->
-    <div id="sidebar-overlay" class="sidebar-overlay lg:hidden"></div>
+<body>
+    {% include 'partials/_header.html' %}
 
-    <div class="flex min-h-screen">
-        <!-- Sidebar -->
-        {% include 'partials/_sidebar.html' %}
+    <main class="mx-auto max-w-content px-4 pt-6 pb-12 lg:px-8 lg:pt-8 flex flex-col gap-6">
+        {% block content %}{% endblock %}
+    </main>
 
-        <!-- Main Content Area -->
-        <div id="main-content" class="flex-1 lg:ml-[260px] transition-all duration-300">
-            <!-- Header -->
-            {% include 'partials/_header.html' %}
-
-            <!-- Page Content -->
-            <main class="p-4 lg:p-6">
-                {% block content %}{% endblock %}
-            </main>
-        </div>
-    </div>
-
-    <!-- Modals Container -->
     <div id="modals-container">
         {% block modals %}{% endblock %}
     </div>
 
-    <!-- Core Scripts -->
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
-
     {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -120,6 +120,11 @@ If you prefer manual installation or need more control, follow these steps:
    npm run build:css
    ```
 
+   The web UI's colours, type scale and radii come from `web/static/css/tokens.css`, a copy of the
+   app's generated `lib/tokens/generated/bridge-tokens.css`. After running `npm run tokens` in the
+   app, refresh the copy with `npm run sync:tokens` (expects the app checked out next to the bridge);
+   `tests/test_web_design.py` fails while the two differ. Geist is self-hosted in `web/static/fonts`.
+
 ### 3. GPIO Setup (if using GPIO features)
 
 1. Enable GPIO access:

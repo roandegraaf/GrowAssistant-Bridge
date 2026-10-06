@@ -1,198 +1,96 @@
 {% extends "base.html" %}
 
-{% block title %}Configuration{% endblock %}
+{% block title %}Settings{% endblock %}
 
 {% block head %}
-<!-- CodeMirror CSS -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/codemirror.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.3/theme/material-darker.min.css">
-<style>
-    .CodeMirror {
-        height: calc(100vh - 400px);
-        min-height: 400px;
-        background: var(--bg-base) !important;
-        border: 1px solid var(--border-default);
-        border-radius: 8px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 13px;
-    }
-    .CodeMirror-gutters {
-        background: var(--bg-elevated) !important;
-        border-right: 1px solid var(--border-subtle) !important;
-    }
-    .CodeMirror-linenumber {
-        color: var(--text-tertiary) !important;
-    }
-    .CodeMirror-cursor {
-        border-left-color: var(--accent-primary) !important;
-    }
-    .CodeMirror-selected {
-        background: rgba(34, 197, 94, 0.15) !important;
-    }
-    .CodeMirror-focused .CodeMirror-selected {
-        background: rgba(34, 197, 94, 0.2) !important;
-    }
-    .cm-s-material-darker .CodeMirror-activeline-background {
-        background: rgba(255, 255, 255, 0.05) !important;
-    }
-</style>
 {% endblock %}
 
 {% block content %}
-<!-- Breadcrumb -->
-<nav class="mb-6" aria-label="Breadcrumb">
-    <ol class="flex items-center gap-2 text-sm">
-        <li>
-            <a href="/" class="text-zinc-400 hover:text-zinc-100 transition-colors">Dashboard</a>
-        </li>
-        <li class="text-zinc-600">/</li>
-        <li class="text-zinc-100">Configuration</li>
-    </ol>
-</nav>
+<div class="flex flex-col gap-1">
+    <span class="ovl">Settings</span>
+    <h1 class="text-title-1 m-0">Configuration</h1>
+</div>
 
-<!-- Warning Banner -->
-<div class="alert alert-warning mb-6">
-    <div class="flex gap-3">
-        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
-            <path d="M12 9v4"></path>
-            <path d="M12 17h.01"></path>
-        </svg>
-        <div>
-            <strong class="font-semibold">Warning</strong>
-            <p class="text-sm opacity-90 mt-1">Editing the configuration directly can break your system if done incorrectly. Changes require restarting the application to take effect.</p>
-        </div>
+<div class="alert alert-warning">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+    <div>
+        <p class="m-0 font-semibold">Edit with care</p>
+        <p class="m-0 text-label">A mistake here can stop the bridge. Changes apply after a restart.</p>
     </div>
 </div>
 
-<!-- Editor Card -->
-<div class="card mb-6">
-    <div class="card-header">
-        <h2 class="card-title">Edit Configuration</h2>
-        <span class="badge badge-info">YAML</span>
+<section class="card" aria-labelledby="editor-title">
+    <div class="card-hd">
+        <h2 class="card-title" id="editor-title">config.yaml</h2>
+        <span class="cap">YAML</span>
     </div>
-    <div class="card-body p-0">
-        <div id="editor-container">
-            <div class="loading flex items-center justify-center py-16" id="loading-indicator">
-                <div class="spinner mr-3"></div>
-                <span class="text-zinc-400">Loading configuration...</span>
-            </div>
+    <div class="card-body" data-details>
+        <div id="editor-container" class="rounded-control overflow-hidden">
+            <div class="loading" id="loading-indicator"><span class="spinner"></span>Loading the configuration…</div>
             <textarea id="config-editor" class="hidden"></textarea>
         </div>
     </div>
-    <div class="px-5 py-4 border-t border-border-subtle flex flex-wrap items-center gap-3">
-        <button type="button" class="btn btn-primary" id="save-btn">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
-            Save Configuration
-        </button>
-        <button type="button" class="btn btn-secondary" id="reset-btn">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
-                <path d="M3 3v5h5"></path>
-            </svg>
-            Reset Changes
-        </button>
-        <button type="button" class="btn btn-secondary" id="restart-btn" style="border-color: var(--status-warning); color: var(--status-warning);">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
-                <path d="M3 3v5h5"></path>
-                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
-                <path d="M16 16h5v5"></path>
-            </svg>
-            Restart Server
-        </button>
-        <a href="/" class="btn btn-ghost ml-auto">Cancel</a>
+    <div class="flex flex-wrap items-center gap-2 px-4 pb-4">
+        <button type="button" class="btn btn-primary" id="save-btn">Save</button>
+        <button type="button" class="btn btn-secondary" id="reset-btn">Undo changes</button>
+        <button type="button" class="btn btn-secondary" id="restart-btn">Restart bridge</button>
+        <a href="/" class="btn btn-ghost lg:ml-auto">Cancel</a>
     </div>
-</div>
+</section>
 
-<!-- Help Section -->
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Configuration Reference</h2>
-    </div>
-    <div class="card-body">
-        <div class="space-y-4">
-            <!-- General -->
-            <details class="group">
-                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
-                    <span class="font-medium text-zinc-200">General Configuration</span>
-                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </summary>
-                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
-                    <p>The general section contains basic settings for the application.</p>
-                    <ul class="list-disc list-inside space-y-1 ml-2">
-                        <li><code class="text-zinc-300">log_level</code>: Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL)</li>
-                        <li><code class="text-zinc-300">log_file</code>: Path where log files will be stored</li>
-                        <li><code class="text-zinc-300">data_dir</code>: Directory for storing application data</li>
-                    </ul>
-                </div>
-            </details>
-
-            <!-- API -->
-            <details class="group">
-                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
-                    <span class="font-medium text-zinc-200">API Configuration</span>
-                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </summary>
-                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
-                    <p>The API section configures communication with the Spring backend.</p>
-                    <ul class="list-disc list-inside space-y-1 ml-2">
-                        <li><code class="text-zinc-300">url</code>: URL of the Spring API</li>
-                        <li><code class="text-zinc-300">batch_size</code>: Number of data points per batch</li>
-                        <li><code class="text-zinc-300">retry_max_attempts</code>: Maximum retry attempts</li>
-                        <li><code class="text-zinc-300">poll_interval</code>: Command polling interval (seconds)</li>
-                    </ul>
-                </div>
-            </details>
-
-            <!-- Integrations -->
-            <details class="group">
-                <summary class="flex items-center justify-between cursor-pointer p-4 rounded-lg bg-surface-base border border-border-subtle hover:border-border-default transition-colors">
-                    <span class="font-medium text-zinc-200">Integrations Configuration</span>
-                    <svg class="w-5 h-5 text-zinc-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </summary>
-                <div class="mt-2 p-4 text-sm text-zinc-400 space-y-2">
-                    <p>Configure device integrations:</p>
-                    <ul class="list-disc list-inside space-y-1 ml-2">
-                        <li><code class="text-zinc-300">gpio</code>: Raspberry Pi GPIO pins</li>
-                        <li><code class="text-zinc-300">mqtt</code>: MQTT broker connections</li>
-                        <li><code class="text-zinc-300">http</code>: HTTP endpoints</li>
-                        <li><code class="text-zinc-300">serial</code>: Serial port connections</li>
-                    </ul>
-                </div>
-            </details>
+<section class="card" aria-labelledby="reference-title">
+    <div class="card-hd"><h2 class="card-title" id="reference-title">What the sections do</h2></div>
+    <details class="details border-t border-line" data-details>
+        <summary>General</summary>
+        <div class="details-body flex flex-col gap-2">
+            <p class="m-0">Basic settings for the bridge itself.</p>
+            <ul class="m-0 pl-5 flex flex-col gap-1">
+                <li><code>log_level</code>: how much it logs (DEBUG, INFO, WARNING, ERROR, CRITICAL)</li>
+                <li><code>log_file</code>: where log files are stored</li>
+                <li><code>data_dir</code>: where the bridge keeps its data</li>
+            </ul>
         </div>
-    </div>
-</div>
+    </details>
+    <details class="details border-t border-line" data-details>
+        <summary>Connection</summary>
+        <div class="details-body flex flex-col gap-2">
+            <p class="m-0">How the bridge talks to GrowAssistant.</p>
+            <ul class="m-0 pl-5 flex flex-col gap-1">
+                <li><code>url</code>: the GrowAssistant address</li>
+                <li><code>batch_size</code>: readings sent per batch</li>
+                <li><code>retry_max_attempts</code>: how often a failed send is retried</li>
+                <li><code>poll_interval</code>: seconds between command checks</li>
+            </ul>
+        </div>
+    </details>
+    <details class="details border-t border-line" data-details>
+        <summary>Integrations</summary>
+        <div class="details-body flex flex-col gap-2">
+            <p class="m-0">The hardware the bridge reads and switches:</p>
+            <ul class="m-0 pl-5 flex flex-col gap-1">
+                <li><code>gpio</code>: Raspberry Pi pins</li>
+                <li><code>mqtt</code>: MQTT broker connections</li>
+                <li><code>http</code>: HTTP endpoints</li>
+                <li><code>serial</code>: serial ports</li>
+            </ul>
+        </div>
+    </details>
+</section>
 {% endblock %}
 
 {% block modals %}
-<!-- Result Modal -->
 <div id="resultModal-backdrop" class="modal-backdrop"></div>
-<div id="resultModal" class="modal">
+<div id="resultModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="resultModal-title">
     <div class="modal-header">
-        <h3 class="modal-title">Operation Result</h3>
-        <button onclick="Modal.hide('resultModal')" class="btn btn-ghost btn-icon">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
+        <h3 class="modal-title" id="resultModal-title">Configuration</h3>
+        <button type="button" onclick="Modal.hide('resultModal')" class="btn btn-ghost btn-icon" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
     </div>
-    <div class="modal-body" id="result-message">
-    </div>
+    <div class="modal-body" id="result-message"></div>
     <div class="modal-footer">
-        <button onclick="Modal.hide('resultModal')" class="btn btn-secondary">Close</button>
+        <button type="button" onclick="Modal.hide('resultModal')" class="btn btn-secondary">Close</button>
     </div>
 </div>
 {% endblock %}
@@ -212,9 +110,7 @@
         if (typeof jsyaml === 'undefined') {
             console.error('js-yaml library is not loaded properly');
             document.getElementById('loading-indicator').innerHTML = `
-                <div class="alert alert-error">
-                    Error: Required YAML library not available. Please refresh the page.
-                </div>
+                <div class="alert alert-error">The editor couldn't load. Refresh the page to try again.</div>
             `;
             return;
         }
@@ -256,8 +152,7 @@
 
             editor = CodeMirror.fromTextArea(textArea, {
                 mode: 'yaml',
-                theme: 'material-darker',
-                lineNumbers: true,
+                                lineNumbers: true,
                 indentUnit: 2,
                 tabSize: 2,
                 lineWrapping: true,
@@ -269,9 +164,7 @@
         } catch (error) {
             console.error('Error loading configuration:', error);
             document.getElementById('loading-indicator').innerHTML = `
-                <div class="alert alert-error m-4">
-                    Error loading configuration: ${Utils.escapeHtml(error.message)}
-                </div>
+                <div class="alert alert-error">Couldn't load the configuration: ${Utils.escapeHtml(error.message)}</div>
             `;
         }
     }
@@ -322,7 +215,7 @@
             }
             const yamlText = await response.text();
             editor.setValue(yamlText);
-            Toast.show({ message: 'Configuration reset to last saved state', type: 'info' });
+            Toast.show({ message: 'Back to the last saved version' });
         } catch (error) {
             console.error('Error resetting configuration:', error);
             showResult(`Error resetting configuration: ${error.message}`, 'error');
@@ -330,7 +223,7 @@
     }
 
     async function restartServer() {
-        if (!confirm('Are you sure you want to restart the server? This will temporarily interrupt the service.')) {
+        if (!confirm('Restart the bridge? Devices stay as they are; readings pause for a moment.')) {
             return;
         }
 

@@ -1,213 +1,118 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard{% endblock %}
-
-{% block head %}
-<style>
-    /* Page-specific animations */
-    @keyframes slideUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .animate-slide-up {
-        animation: slideUp 0.4s ease-out forwards;
-    }
-    .delay-1 { animation-delay: 50ms; }
-    .delay-2 { animation-delay: 100ms; }
-    .delay-3 { animation-delay: 150ms; }
-    .delay-4 { animation-delay: 200ms; }
-    .delay-5 { animation-delay: 250ms; }
-</style>
-{% endblock %}
+{% block title %}Status{% endblock %}
 
 {% block content %}
-<!-- Stats Grid -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-    <!-- Queue Size -->
-    <div class="stat-widget animate-slide-up delay-1">
-        <div class="stat-icon info">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
-            </svg>
-        </div>
-        <p class="stat-label">Queue Size</p>
-        <p class="stat-value" id="queue-size">--</p>
+<div class="flex flex-wrap items-end justify-between gap-4">
+    <div class="flex flex-col gap-1">
+        <span class="ovl">Bridge</span>
+        <span class="flex flex-wrap items-center gap-3">
+            <h1 class="text-title-1 m-0">This bridge</h1>
+            <span id="bridge-pill" class="pill">Checking…</span>
+        </span>
     </div>
-
-    <!-- API Status -->
-    <div class="stat-widget animate-slide-up delay-2">
-        <div class="stat-icon success" id="api-status-icon">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                <polyline points="22 4 12 14.01 9 11.01"></polyline>
-            </svg>
-        </div>
-        <p class="stat-label">API Connection</p>
-        <p class="stat-value text-lg" id="api-status">Checking...</p>
-    </div>
-
-    <!-- Connection State -->
-    <div class="stat-widget animate-slide-up delay-3">
-        <div class="stat-icon warning" id="connection-state-icon">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
-                <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
-                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
-                <line x1="12" y1="20" x2="12.01" y2="20"></line>
-            </svg>
-        </div>
-        <p class="stat-label">Connection State</p>
-        <p class="stat-value text-lg" id="connection-state">Initializing</p>
-    </div>
-
-    <!-- Integrations Count -->
-    <div class="stat-widget animate-slide-up delay-4">
-        <div class="stat-icon success">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 22v-5"></path>
-                <path d="M9 8V2"></path>
-                <path d="M15 8V2"></path>
-                <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path>
-            </svg>
-        </div>
-        <p class="stat-label">Active Integrations</p>
-        <p class="stat-value" id="integrations-count">--</p>
+    <div class="flex gap-2">
+        <button type="button" id="restart-btn" class="btn btn-secondary">Restart bridge</button>
     </div>
 </div>
 
-<!-- Device Data Section -->
-<section id="devices" class="mb-6 animate-slide-up delay-5">
-    <div class="card">
-        <div class="card-header">
-            <h2 class="card-title">Device Data</h2>
-            <span class="badge badge-success">
-                <span class="badge-dot pulse"></span>
-                Live
-            </span>
-        </div>
-        <div class="card-body" id="device-data-container">
-            <div class="flex items-center justify-center py-12">
-                <div class="spinner mr-3"></div>
-                <span class="text-zinc-400">Loading device data...</span>
-            </div>
-        </div>
-    </div>
+<section id="bridge-verdict" class="verdict" aria-live="polite" aria-label="Status">
+    <span class="dot"></span>
+    <span class="flex flex-col min-w-0">
+        <span class="verdict-title" id="verdict-title">Checking the bridge…</span>
+        <span class="text-label" id="verdict-detail"></span>
+    </span>
 </section>
 
-<!-- Live Telemetry Section -->
-<section id="telemetry" class="mb-6 animate-slide-up">
-    <div class="card">
-        <div class="card-header">
-            <h2 class="card-title">Live Telemetry</h2>
-            <span class="text-xs text-zinc-500" id="telemetry-stats"></span>
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 items-start">
+    <section class="card" aria-labelledby="connection-title">
+        <div class="card-hd"><h2 class="card-title" id="connection-title">Connection</h2></div>
+        <div id="connection-container">
+            <div class="li">GrowAssistant cloud<span class="li-v"><span class="dot" id="cloud-dot"></span><span id="cloud-state">Checking…</span></span></div>
+            <div class="li">Waiting to send<span class="li-v" id="queue-size">–</span></div>
+            <div class="li">Last sync<span class="li-v" id="last-sync">–</span></div>
+            <div class="li">Readings sent<span class="li-v" id="telemetry-stats">–</span></div>
         </div>
-        <div class="card-body" id="telemetry-container">
-            <div class="flex items-center justify-center py-8">
-                <div class="spinner mr-3"></div>
-                <span class="text-zinc-400">Loading telemetry...</span>
-            </div>
-        </div>
-    </div>
-</section>
+    </section>
 
-<!-- Two Column Layout: Integrations + Control -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-    <!-- Integrations -->
-    <section id="integrations" class="animate-slide-up">
-        <div class="card h-full">
-            <div class="card-header">
-                <h2 class="card-title">Integrations</h2>
+    <section id="integrations" class="card" aria-labelledby="integrations-title">
+        <div class="card-hd"><h2 class="card-title" id="integrations-title">Integrations</h2><span class="cap" id="integrations-count"></span></div>
+        <div id="integrations-container">
+            <div class="loading"><span class="spinner"></span>Loading integrations…</div>
+        </div>
+    </section>
+
+    <section id="devices" class="card" aria-labelledby="devices-title">
+        <div class="card-hd"><h2 class="card-title" id="devices-title">Devices</h2><span class="cap" id="devices-count"></span></div>
+        <div id="device-data-container">
+            <div class="loading"><span class="spinner"></span>Loading devices…</div>
+        </div>
+    </section>
+
+    <section id="control" class="card" aria-labelledby="control-title">
+        <div class="card-hd"><h2 class="card-title" id="control-title">Switch a device</h2><span class="cap">Sent straight to the device</span></div>
+        <form id="control-form" class="card-body flex flex-col gap-4">
+            <div>
+                <label for="control-target" class="form-label">Device</label>
+                <select class="form-select" id="control-target" required>
+                    <option value="" selected disabled>Choose a device</option>
+                </select>
             </div>
-            <div class="card-body" id="integrations-container">
-                <div class="flex items-center justify-center py-8">
-                    <div class="spinner mr-3"></div>
-                    <span class="text-zinc-400">Loading integrations...</span>
+            <div>
+                <label for="control-action" class="form-label">Action</label>
+                <select class="form-select" id="control-action" required>
+                    <option value="" selected disabled>Choose an action</option>
+                </select>
+            </div>
+            <details id="payload-container" class="details hidden rounded-control bg-inset" data-details>
+                <summary class="text-label">Advanced: command payload</summary>
+                <div class="details-body">
+                    <label for="control-payload" class="sr-only">Payload (JSON)</label>
+                    <textarea class="form-textarea font-mono" id="control-payload" rows="3" placeholder="{}">{}</textarea>
                 </div>
-            </div>
-        </div>
+            </details>
+            <button type="submit" class="btn btn-primary btn-block">Send</button>
+        </form>
     </section>
 
-    <!-- Manual Control -->
-    <section id="control" class="animate-slide-up">
-        <div class="card h-full">
-            <div class="card-header">
-                <h2 class="card-title">Manual Control</h2>
-            </div>
-            <div class="card-body">
-                <form id="control-form" class="space-y-4">
-                    <div>
-                        <label for="control-target" class="form-label">Target Device</label>
-                        <select class="form-select" id="control-target" required>
-                            <option value="" selected disabled>Select an actuator</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="control-action" class="form-label">Action</label>
-                        <select class="form-select" id="control-action" required>
-                            <option value="" selected disabled>Select an action</option>
-                        </select>
-                    </div>
-                    <div id="payload-container" class="hidden">
-                        <label for="control-payload" class="form-label">Payload (JSON)</label>
-                        <textarea class="form-textarea font-mono text-sm" id="control-payload" rows="3" placeholder="{}">{}</textarea>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-full">
-                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                        Send Command
-                    </button>
-                </form>
-            </div>
+    <details class="card details lg:col-span-2" data-details>
+        <summary><span class="flex flex-col"><span>Recent readings</span><span class="cap font-normal">Technical log</span></span></summary>
+        <div class="details-body" id="telemetry-container">
+            <div class="loading"><span class="spinner"></span>Loading…</div>
         </div>
-    </section>
+    </details>
+
+    <details class="card details lg:col-span-2" data-details>
+        <summary><span class="flex flex-col"><span>Device types</span><span class="cap font-normal">What each kind of device can do</span></span></summary>
+        <div class="details-body" id="devices-container">
+            <div class="loading"><span class="spinner"></span>Loading…</div>
+        </div>
+    </details>
 </div>
 
-<!-- Device Types Section -->
-<section class="mb-6 animate-slide-up">
-    <div class="card">
-        <div class="card-header">
-            <h2 class="card-title">Device Types</h2>
-        </div>
-        <div class="card-body" id="devices-container">
-            <div class="flex items-center justify-center py-8">
-                <div class="spinner mr-3"></div>
-                <span class="text-zinc-400">Loading device types...</span>
-            </div>
-        </div>
-    </div>
-</section>
+<p class="cap m-0">This page is only reachable on your local network. Readings are calibrated here before they're sent.</p>
 {% endblock %}
 
 {% block modals %}
-<!-- Command Result Modal -->
 <div id="commandModal-backdrop" class="modal-backdrop"></div>
-<div id="commandModal" class="modal">
+<div id="commandModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="commandModal-title">
     <div class="modal-header">
-        <h3 class="modal-title">Command Result</h3>
-        <button onclick="Modal.hide('commandModal')" class="btn btn-ghost btn-icon">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
+        <h3 class="modal-title" id="commandModal-title">Command</h3>
+        <button type="button" onclick="Modal.hide('commandModal')" class="btn btn-ghost btn-icon" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
     </div>
-    <div class="modal-body" id="command-result">
-        <!-- Command result will be inserted here -->
-    </div>
+    <div class="modal-body" id="command-result"></div>
     <div class="modal-footer">
-        <button onclick="Modal.hide('commandModal')" class="btn btn-secondary">Close</button>
+        <button type="button" onclick="Modal.hide('commandModal')" class="btn btn-secondary">Close</button>
     </div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 <script>
-    // Initialize dashboard when DOM is ready
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', function () {
         Dashboard.init();
     });
 </script>
