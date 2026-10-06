@@ -580,6 +580,12 @@ The full trigger/condition/action vocabulary is in `lib/automations/schema.ts`
 vocabulary. The `notification` action publishes back to the app on `…/notify`
 (§10.3).
 
+**Auto off.** A `call` with service `turn_on` may carry `data.auto_off`
+(seconds). The executor strips it from the payload and switches the entity off
+after that long on its own timer, which survives the rule being cancelled by a
+republished rule set. An explicit `turn_off` cancels the timer. The app sets it
+on every watering run so a pump never stays on.
+
 **Every N days.** A `time` trigger may add `every_days` (int ≥ 1) and
 `starting` (`YYYY-MM-DD`, the bridge's local date): it then fires at `at` only
 on `starting` and every `every_days`-th local day after it.

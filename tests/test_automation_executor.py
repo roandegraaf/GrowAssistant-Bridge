@@ -6,6 +6,8 @@ The make-or-break trace (Phase-4 decision 9): a rule's ``call`` on entity
 translated action — not the entity id, not the HA service name.
 """
 
+import asyncio
+
 import pytest
 
 from app.automations.executor import ActionExecutor, translate_service
@@ -94,6 +96,28 @@ class TestCall:
         ok = await _executor(fake, store).call("switch.fan", "turn_on", {})
         assert ok is False
         assert store.get("switch.fan") is None
+
+
+class TestAutoOff:
+    async def test_turns_off_even_when_the_run_that_switched_it_on_is_gone(self):
+        fake = FakeIntegration()
+        _register("switch.pump")
+        executor = _executor(fake)
+
+        await executor.call("switch.pump", "turn_on", {"auto_off": 0.05})
+        assert fake.calls == [("pump", "on", {})]
+        await asyncio.sleep(0.1)
+        assert fake.calls[-1] == ("pump", "off", {})
+
+    async def test_an_explicit_off_cancels_the_timer(self):
+        fake = FakeIntegration()
+        _register("switch.pump")
+        executor = _executor(fake)
+
+        await executor.call("switch.pump", "turn_on", {"auto_off": 0.05})
+        await executor.call("switch.pump", "turn_off", {})
+        await asyncio.sleep(0.1)
+        assert [action for _, action, _ in fake.calls] == ["on", "off"]
 
 
 class TestWriteBack:
