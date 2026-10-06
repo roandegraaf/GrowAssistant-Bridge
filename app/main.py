@@ -24,6 +24,7 @@ from app.automations import (
     StateStore,
 )
 from app.calibration import calibrate
+from app.commands import run_command
 from app.config import config, init_logging
 from app.config_store import config_store
 from app.integrations import (
@@ -513,80 +514,11 @@ class Application:
             logger.error("Command is missing ID")
             return
 
-        target_type = command.get("targetType")
-        target_id = command.get("targetId")
-        action = command.get("action")
-        payload = command.get("payload", {})
-
-        if not all([target_type, target_id, action]):
-            logger.error(f"Command missing required fields: {command}")
-            await mqtt_transport.send_command_result(command_id, False, "Missing required fields")
-            return
-
-        if target_type == "event":
-            if self._engine is None or action != "fire":
-                await mqtt_transport.send_command_result(
-                    command_id, False, "Events need the automation engine and action 'fire'"
-                )
-                return
-            data = payload.get("data") if isinstance(payload, dict) else None
-            self._engine.emit_event(target_id, data if isinstance(data, dict) else {})
-            await mqtt_transport.send_command_result(command_id, True, "Event fired")
-            return
-
-        try:
-            # Primary path (§16.1): targetId is the full `<domain>.<name>`
-            # entity id — unambiguous across integrations, resolved exactly
-            # like the automations executor resolves rule targets. The bare
-            # device name remains accepted for backward compatibility with
-            # older app versions (legacy name-indexed lookup).
-            local_name = target_id
-            if "." in target_id:
-                device = registry.get_device(target_id)
-                if device is None:
-                    logger.error(f"Unknown entity id in command: {target_id}")
-                    await mqtt_transport.send_command_result(
-                        command_id, False, f"Unknown entity: {target_id}"
-                    )
-                    return
-                integration_name = device.integration_name
-                local_name = device.name
-            elif target_type == "sensor":
-                integration_name = registry.get_sensor_integration(target_id)
-            elif target_type == "actuator":
-                integration_name = registry.get_actuator_integration(target_id)
-            else:
-                logger.error(f"Unknown target type: {target_type}")
-                await mqtt_transport.send_command_result(
-                    command_id, False, f"Unknown target type: {target_type}"
-                )
-                return
-
-            if not integration_name or integration_name not in self._integrations:
-                logger.error(f"No integration found for {target_type} {target_id}")
-                await mqtt_transport.send_command_result(
-                    command_id, False, f"No integration for {target_type} {target_id}"
-                )
-                return
-
-            integration = self._integrations[integration_name]
-            success = await integration.execute_command(local_name, action, payload)
-
-            # Seed a real lifecycle event so rules can react to app-issued
-            # commands (fresh chain — a rule reacting to this is depth-guarded).
-            if self._engine is not None:
-                self._engine.emit_event(
-                    "command_executed",
-                    {"targetId": target_id, "action": action, "success": bool(success)},
-                )
-
-            result_msg = "Command executed successfully" if success else "Command execution failed"
-            await mqtt_transport.send_command_result(command_id, success, result_msg)
-            logger.info(f"Command {command_id}: success={success}")
-
-        except Exception as e:
-            logger.error(f"Error processing command: {e}")
-            await mqtt_transport.send_command_result(command_id, False, f"Error: {e}")
+        success, message = await run_command(
+            command, registry=registry, integrations=self._integrations, engine=self._engine
+        )
+        await mqtt_transport.send_command_result(command_id, success, message)
+        logger.info(f"Command {command_id}: success={success}")
 
 
 async def main():
