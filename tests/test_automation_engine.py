@@ -1366,6 +1366,45 @@ class TestClimateHold:
             await engine.stop()
         assert [c[1] for c in fake.calls] == ["on", "off"]
 
+    async def test_also_readings_each_switch_on_and_release_independently(self):
+        _register("switch.fan")
+        clock = Clock()
+        temps = [24, 24, 24, 24, 28, 28, 24]
+        rhs = [66, 64, 61, 59, 59, 59, 59]
+
+        async def feed(n):
+            if n < len(temps):
+                await store.set("sensor.temp", temps[n])
+                await store.set("sensor.rh", rhs[n])
+
+        sleep, _ticks = _scripted(clock, feed)
+        engine, store, _bus, fake = _build(now=clock, sleep=sleep)
+        await store.set("sensor.temp", temps[0])
+        await store.set("sensor.rh", rhs[0])
+        action = {
+            "type": "climate_hold",
+            "entity": "switch.fan",
+            "sensor": "sensor.temp",
+            "target": 25,
+            "hysteresis": 2,
+            "direction": "lower",
+            "also": [
+                {"sensor": "sensor.rh", "target": 62.5, "hysteresis": 2.5, "direction": "lower"}
+            ],
+            "min_cycle": 0,
+            "seconds": len(temps) * HOLD_TICK_SECONDS,
+        }
+        engine.apply_rules([_hold_rule(action)])
+        engine.start()
+        try:
+            engine.emit_event("go")
+            await engine.join()
+        finally:
+            await engine.stop()
+        # Humidity switches it on at 66 % and off at 59 % although the temperature sits
+        # inside its own band the whole time; then heat switches it on by itself.
+        assert [c[1] for c in fake.calls] == ["on", "off", "on", "off"]
+
     async def test_hold_ends_and_switches_off_when_conditions_fail(self):
         _register("light.lamp")
         clock = Clock()

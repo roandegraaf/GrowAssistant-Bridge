@@ -808,6 +808,12 @@ class AutomationEngine:
         min_cycle = to_float(action.get("min_cycle"))
         min_cycle = DEFAULT_MIN_CYCLE_SECONDS if min_cycle is None else min_cycle
         sensorless = action.get("sensor") is None and action.get("metric") is None
+        also = [] if sensorless else list(action.get("also") or [])
+        # With extra readings each keeps its own latch, so one reading inside
+        # its band can't hold the actuator on after the reading that switched
+        # it on has recovered.
+        readings = [action, *also]
+        demands = [False] * len(readings)
         last_switch: Optional[datetime] = None
         failure: Optional[str] = None
         try:
@@ -818,13 +824,13 @@ class AutomationEngine:
                 if not self._evaluate_conditions(rule.get("conditions") or [], now):
                     break
                 is_on = state_equals(self._store.get(entity), "on")
-                want = sensorless or hold_wants_on(
-                    action.get("direction"),
-                    self._hold_reading(action),
-                    to_float(action.get("target")) or 0.0,
-                    to_float(action.get("hysteresis")) or 0.0,
-                    is_on,
-                )
+                if sensorless:
+                    want = True
+                elif not also:
+                    want = self._hold_demand(action, is_on)
+                else:
+                    demands = [self._hold_demand(r, d) for r, d in zip(readings, demands)]
+                    want = any(demands)
                 cooled = last_switch is None or (now - last_switch).total_seconds() >= min_cycle
                 if want != is_on and cooled:
                     service = "turn_on" if want else "turn_off"
@@ -837,6 +843,15 @@ class AutomationEngine:
             if state_equals(self._store.get(entity), "on"):
                 await self._executor.call(entity, "turn_off", {})
         return failure
+
+    def _hold_demand(self, reading: dict[str, Any], latched: bool) -> bool:
+        return hold_wants_on(
+            reading.get("direction"),
+            self._hold_reading(reading),
+            to_float(reading.get("target")) or 0.0,
+            to_float(reading.get("hysteresis")) or 0.0,
+            latched,
+        )
 
     def _hold_reading(self, action: dict[str, Any]) -> Optional[float]:
         if action.get("metric") == "vpd":

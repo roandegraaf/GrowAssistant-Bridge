@@ -636,7 +636,11 @@ change).
 `target - hysteresis`, `raise` (heater, humidifier) the reverse, and inside the
 band the state is kept. Never switches twice within `min_cycle`. A missing
 reading means off. Without `sensor`/`metric` the entity is simply held on (a
-light schedule). The hold runs until its duration elapses, the rule's
+light schedule). An optional `"also": [{"sensor", "target", "hysteresis"?,
+"direction"}]` adds readings that can each switch the entity on too (an exhaust
+fan that cools and dries): every reading keeps its own on/off latch with the
+same band rules, and the entity is on while any of them wants it on. `also`
+needs a main `sensor` or `metric`. The hold runs until its duration elapses, the rule's
 conditions stop passing (checked every tick), or the run is cancelled; on every
 exit the entity is switched off. The fired echo is sent when the hold ends.
 
