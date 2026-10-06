@@ -361,6 +361,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
         domain: Optional[str] = None,
         device_type: Optional[str] = None,
         capabilities: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         """Register an actuator. Convenience wrapper for register_device()."""
         return self.register_device(
@@ -370,6 +371,7 @@ class DeviceRegistry(metaclass=SingletonMeta):
             category=DeviceCategory.ACTUATOR,
             integration_name=integration_name,
             capabilities=capabilities,
+            metadata=metadata,
         )
 
     def register_device_type_actions(self, device_type: str, actions: list[str]) -> None:

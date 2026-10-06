@@ -371,32 +371,46 @@ class TestClimateContract:
             "climate.tent_humidifier": "humidifier",
         }
 
-    def test_manifest_announces_on_off_devices_as_switches(self, registry):
+    def test_manifest_announces_variable_devices_with_a_range(self, registry):
         self._integration().register_capabilities(registry)
 
-        domains = {
-            d["entityId"]: d["entityDomain"] for d in registry.serialize_manifest(1)["devices"]
+        devices = {d["entityId"]: d for d in registry.serialize_manifest(1)["devices"]}
+        heater, humidifier = devices["climate.tent_heater"], devices["climate.tent_humidifier"]
+        assert heater["entityDomain"] == "number"
+        assert heater["unit"] == "%"
+        assert {k: heater["metadata"][k] for k in ("min", "max", "step")} == {
+            "min": 0,
+            "max": 100,
+            "step": 5,
         }
-        assert domains == {"climate.tent_heater": "switch", "climate.tent_humidifier": "switch"}
+        assert humidifier["entityDomain"] == "switch"
 
     @pytest.mark.asyncio
-    async def test_execute_command_rejects_set_instead_of_switching_off(self):
-        """A `set` command (numeric slider) must fail, not coerce to off.
-
-        Regression: `on = action == "on"` made "set" turn the device OFF and
-        still return success — so a dashboard slider dragged to 30% switched the
-        heater off. An unsupported action must return False and leave state
-        untouched.
-        """
+    async def test_variable_device_takes_a_level_and_resumes_it(self):
         integration = self._integration()
 
+        assert await integration.execute_command("tent_heater", "set", {"value": 42}) is True
+        assert integration.levels["heater"] == 42
+        assert await integration.execute_command("tent_heater", "off", {}) is True
+        assert integration.heater_on is False
         assert await integration.execute_command("tent_heater", "on", {}) is True
-        assert integration.heater_on is True
+        assert integration.levels["heater"] == 42
+        assert await integration.execute_command("tent_heater", "set", {"value": 250}) is True
+        assert integration.levels["heater"] == 100
+        assert await integration.execute_command("tent_heater", "set", {}) is False
 
-        result = await integration.execute_command("tent_heater", "set", {"value": 30})
+        samples = {s["entity_id"]: s["value"] async for s in integration.receive_data()}
+        assert samples["climate.tent_heater"] == 100
+        assert samples["climate.tent_humidifier"] == "off"
 
-        assert result is False  # command reported as failed
-        assert integration.heater_on is True  # NOT switched off
+    @pytest.mark.asyncio
+    async def test_switch_rejects_set_instead_of_switching_off(self):
+        """A `set` on an on/off device must fail, not coerce to off (it used to ack success)."""
+        integration = self._integration()
+
+        assert await integration.execute_command("tent_humidifier", "on", {}) is True
+        assert await integration.execute_command("tent_humidifier", "set", {"value": 30}) is False
+        assert integration.humidifier_on is True
 
     @pytest.mark.asyncio
     async def test_on_telemetry_feeds_control_loop(self):

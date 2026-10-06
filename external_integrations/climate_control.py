@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+LEVEL_TYPES = frozenset({"heater", "fan"})
+LEVEL_RANGE = {"unit": "%", "min": 0, "max": 100, "step": 5}
+FULL_LEVEL = 100
+
 
 @register_integration
 class ClimateControlIntegration(Integration):
@@ -54,9 +58,10 @@ class ClimateControlIntegration(Integration):
         self.temperature_entity: Optional[str] = config.get("temperature_entity")
         self.humidity_entity: Optional[str] = config.get("humidity_entity")
 
-        # Actuator states
-        self.heater_on: bool = False
-        self.fan_on: bool = False
+        # Actuator states. Heater and fan are variable (0-100 %); the
+        # humidifier and dehumidifier are plain on/off.
+        self.levels: dict[str, int] = {"heater": 0, "fan": 0}
+        self._resume_levels: dict[str, int] = {"heater": FULL_LEVEL, "fan": FULL_LEVEL}
         self.humidifier_on: bool = False
         self.dehumidifier_on: bool = False
 
@@ -220,14 +225,27 @@ class ClimateControlIntegration(Integration):
             except (TypeError, ValueError):
                 logger.warning(f"Ignoring non-numeric humidity reading: {value!r}")
 
-    async def _set_heater(self, on: bool):
-        """Control heater hardware."""
-        self.heater_on = on
-        # Update device value in devices dict
-        for name, device in self.devices.items():
-            if device.get("type") == "heater":
-                device["value"] = "on" if on else "off"
+    @property
+    def heater_on(self) -> bool:
+        return self.levels["heater"] > 0
+
+    @property
+    def fan_on(self) -> bool:
+        return self.levels["fan"] > 0
+
+    def _set_level(self, device_type: str, level: float) -> None:
+        clamped = int(max(0, min(FULL_LEVEL, round(level))))
+        self.levels[device_type] = clamped
+        if clamped > 0:
+            self._resume_levels[device_type] = clamped
+        for device in self.devices.values():
+            if device.get("type") == device_type:
+                device["value"] = clamped
                 device["last_updated"] = time.time()
+
+    async def _set_heater(self, on: bool):
+        """Switch the heater, resuming its last non-zero level when turned on."""
+        self._set_level("heater", self._resume_levels["heater"] if on else 0)
 
     async def _set_humidifier(self, on: bool):
         """Control humidifier hardware."""
@@ -246,12 +264,8 @@ class ClimateControlIntegration(Integration):
                 device["last_updated"] = time.time()
 
     async def _set_fan(self, on: bool):
-        """Control fan hardware."""
-        self.fan_on = on
-        for name, device in self.devices.items():
-            if device.get("type") == "fan":
-                device["value"] = "on" if on else "off"
-                device["last_updated"] = time.time()
+        """Switch the fan, resuming its last non-zero level when turned on."""
+        self._set_level("fan", self._resume_levels["fan"] if on else 0)
 
     def set_sensor_readings(
         self, temperature: Optional[float] = None, humidity: Optional[int] = None
@@ -285,7 +299,7 @@ class ClimateControlIntegration(Integration):
         return False
 
     async def receive_data(self):
-        """Yield each actuator's current on/off state.
+        """Yield each actuator's current state: a 0-100 level for variable devices, on/off otherwise.
 
         The data-collection loop is the only path from an integration to app
         telemetry AND the automation engine's state store, so actuator states
@@ -295,27 +309,22 @@ class ClimateControlIntegration(Integration):
         class-name derivation would produce ``climatecontrol.<name>`` and the
         samples would never join their manifest entity.
         """
-        states = {
-            "heater": self.heater_on,
-            "fan": self.fan_on,
-            "humidifier": self.humidifier_on,
-            "dehumidifier": self.dehumidifier_on,
-        }
+        switches = {"humidifier": self.humidifier_on, "dehumidifier": self.dehumidifier_on}
         for name, device in self.devices.items():
-            on = states.get(device.get("type"))
-            if on is None:
-                continue
-            yield self.telemetry_sample(name, "on" if on else "off", domain="climate")
+            device_type = device.get("type")
+            if device_type in LEVEL_TYPES:
+                yield self.telemetry_sample(name, self.levels[device_type], domain="climate")
+            elif device_type in switches:
+                on = switches[device_type]
+                yield self.telemetry_sample(name, "on" if on else "off", domain="climate")
 
     async def get_device_data(self) -> dict[str, Any]:
         """Get current state of all devices."""
         # Update device values based on current states
         for name, device in self.devices.items():
             device_type = device.get("type")
-            if device_type == "heater":
-                device["value"] = "on" if self.heater_on else "off"
-            elif device_type == "fan":
-                device["value"] = "on" if self.fan_on else "off"
+            if device_type in LEVEL_TYPES:
+                device["value"] = self.levels[device_type]
             elif device_type == "humidifier":
                 device["value"] = "on" if self.humidifier_on else "off"
             elif device_type == "dehumidifier":
@@ -340,12 +349,14 @@ class ClimateControlIntegration(Integration):
     def register_capabilities(self, registry: "DeviceRegistry") -> None:
         """Register this integration's capabilities with the device registry."""
         for name, device in self.devices.items():
+            variable = device.get("type") in LEVEL_TYPES
             registry.register_actuator(
                 actuator_name=name,
                 integration_name=self.name,
                 domain="climate",
                 device_type=device.get("type"),
-                capabilities=["on", "off"],
+                capabilities=["on", "off", "set"] if variable else ["on", "off"],
+                metadata=dict(LEVEL_RANGE) if variable else None,
             )
         logger.info(f"Registered {len(self.devices)} climate control devices with registry")
 
@@ -364,19 +375,20 @@ class ClimateControlIntegration(Integration):
 
         device_type = device.get("type")
 
-        # This integration models on/off actuators only. Reject any other action
-        # (notably the app's `set` with a numeric value) instead of coercing it
-        # to a boolean: `action == "on"` is False for "set", which would
-        # silently switch the device OFF and still ack success — so a dashboard
-        # slider dragged to 30% would turn the heater off. Failing the command
-        # is the safe behaviour until per-level `set` is actually implemented.
         act = action.lower()
+        if device_type in LEVEL_TYPES and act in ("set", "speed", "temperature"):
+            try:
+                level = float(payload["value"])
+            except (KeyError, TypeError, ValueError):
+                logger.warning("'%s' on %s needs a numeric payload.value", action, target_id)
+                return False
+            self._set_level(device_type, level)
+            logger.info(f"Executed command: {target_id} -> {action} {self.levels[device_type]}%")
+            return True
+        # A `set` must never be coerced to a boolean: `action == "on"` is False for
+        # "set", which would switch an on/off device off and still ack success.
         if act not in ("on", "off"):
-            logger.warning(
-                "Unsupported action '%s' for %s; this integration only supports on/off",
-                action,
-                target_id,
-            )
+            logger.warning("Unsupported action '%s' for %s", action, target_id)
             return False
         on = act == "on"
 

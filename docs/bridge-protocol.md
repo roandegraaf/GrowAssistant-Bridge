@@ -296,7 +296,7 @@ Each device entry:
 | `category`        | string   | yes      | **Uppercase** `SENSOR` or `ACTUATOR`. |
 | `integrationName` | string   | yes      | Integration class name (`GPIOIntegration`). |
 | `capabilities`    | string[] | yes (sorted) | Action verbs the device supports (`["on","off"]`). |
-| `metadata`        | object   | **no**   | Free-form; defaults to `{}`. Excluded from the hash. |
+| `metadata`        | object   | **no**   | Free-form; defaults to `{}`. Excluded from the hash. A `number` entity may carry its settable range as numeric `min`, `max` and `step`; the app clamps sliders to it (default 0–100, step 1). |
 | `entityDomain`    | string   | **no**   | HA entity domain the app stores: `sensor`/`switch`/`number`/`light`/`camera`. |
 | `writable`        | bool     | **no**   | True for actuators — whether the app may command it. |
 | `unit`            | string?  | **no**   | Unit of measurement, or null. |
