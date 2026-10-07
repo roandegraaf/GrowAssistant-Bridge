@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -23,6 +24,25 @@ from app.utils.singleton import SingletonMeta
 logger = logging.getLogger(__name__)
 
 # Credential keys persisted to data/credentials.json.
+BROKER_SCHEMES: dict[str, tuple[str, bool, int]] = {
+    "mqtt": ("tcp", False, 1883),
+    "tcp": ("tcp", False, 1883),
+    "mqtts": ("tcp", True, 8883),
+    "ssl": ("tcp", True, 8883),
+    "ws": ("websockets", False, 80),
+    "wss": ("websockets", True, 443),
+}
+
+
+@dataclass(frozen=True)
+class BrokerEndpoint:
+    host: str
+    port: int
+    transport: str
+    tls: bool
+    path: str
+
+
 CREDENTIAL_KEYS = ("bridgeId", "tenantId", "bridgeSecret", "token", "brokerUrl")
 
 # Refresh the MQTT token once this fraction of its lifetime remains ahead of us
@@ -454,18 +474,25 @@ class AuthManager(metaclass=SingletonMeta):
         """Return the bridge secret used for token rotation."""
         return self._credentials.get("bridgeSecret") if self._credentials else None
 
-    def get_broker_host_port(self, default_port: int = 1883) -> tuple[Optional[str], int]:
-        """Parse host/port from the stored broker URL.
-
-        Returns ``(host, port)``; host is None when no broker URL is stored.
-        """
+    def get_broker_endpoint(self) -> Optional[BrokerEndpoint]:
+        """Parse the stored broker URL into how to reach it, or None when unpaired."""
         broker_url = self.get_broker_url()
         if not broker_url:
-            return None, default_port
+            return None
         parsed = urlparse(broker_url)
-        host = parsed.hostname
-        port = parsed.port or default_port
-        return host, port
+        if not parsed.hostname:
+            return None
+        scheme = (parsed.scheme or "mqtt").lower()
+        if scheme not in BROKER_SCHEMES:
+            raise ValueError(f"Unsupported broker URL scheme: {scheme}")
+        transport, tls, default_port = BROKER_SCHEMES[scheme]
+        return BrokerEndpoint(
+            host=parsed.hostname,
+            port=parsed.port or default_port,
+            transport=transport,
+            tls=tls,
+            path=(parsed.path or "/mqtt") if transport == "websockets" else "",
+        )
 
 
 # Create a global instance for easy imports

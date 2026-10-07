@@ -168,15 +168,30 @@ class TestAuthManagerGetters:
         assert auth_manager.get_broker_url() is None
         assert auth_manager.get_bridge_secret() is None
 
-    def test_broker_host_port_parsing(self, auth_manager):
-        auth_manager._credentials = {"brokerUrl": "mqtt://broker.local:8883"}
-        assert auth_manager.get_broker_host_port() == ("broker.local", 8883)
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            ("mqtt://broker.local:8883", ("broker.local", 8883, "tcp", False, "")),
+            ("mqtt://broker.local", ("broker.local", 1883, "tcp", False, "")),
+            ("mqtts://broker.local", ("broker.local", 8883, "tcp", True, "")),
+            ("ws://broker.local:9001", ("broker.local", 9001, "websockets", False, "/mqtt")),
+            ("wss://mqtt.example.com", ("mqtt.example.com", 443, "websockets", True, "/mqtt")),
+            ("wss://mqtt.example.com/ws", ("mqtt.example.com", 443, "websockets", True, "/ws")),
+        ],
+    )
+    def test_broker_endpoint_parsing(self, auth_manager, url, expected):
+        auth_manager._credentials = {"brokerUrl": url}
+        e = auth_manager.get_broker_endpoint()
+        assert (e.host, e.port, e.transport, e.tls, e.path) == expected
 
-        auth_manager._credentials = {"brokerUrl": "mqtt://broker.local"}
-        assert auth_manager.get_broker_host_port(1883) == ("broker.local", 1883)
-
+    def test_broker_endpoint_unpaired(self, auth_manager):
         auth_manager._credentials = None
-        assert auth_manager.get_broker_host_port() == (None, 1883)
+        assert auth_manager.get_broker_endpoint() is None
+
+    def test_broker_endpoint_rejects_unknown_scheme(self, auth_manager):
+        auth_manager._credentials = {"brokerUrl": "http://broker.local"}
+        with pytest.raises(ValueError):
+            auth_manager.get_broker_endpoint()
 
 
 class TestAuthManagerPairing:
