@@ -33,7 +33,6 @@ from app.utils.singleton import SingletonMeta
 logger = logging.getLogger(__name__)
 
 DEFAULT_MQTT_KEEPALIVE = 60
-DEFAULT_MQTT_PORT = 1883
 # Interval (s) for the maintainer task that connects once creds appear.
 MAINTAINER_INTERVAL = 5.0
 
@@ -195,8 +194,8 @@ class MqttTransport(metaclass=SingletonMeta):
         paho's ``connect()`` does blocking DNS+TCP, so we run it in an executor
         to avoid stalling the asyncio loop.
         """
-        host, port = auth_manager.get_broker_host_port(DEFAULT_MQTT_PORT)
-        if not host:
+        endpoint = auth_manager.get_broker_endpoint()
+        if endpoint is None:
             logger.warning("No broker URL available; cannot connect")
             return
 
@@ -212,7 +211,12 @@ class MqttTransport(metaclass=SingletonMeta):
             client_id=bridge_id,
             protocol=mqtt.MQTTv311,
             reconnect_on_failure=False,
+            transport=endpoint.transport,
         )
+        if endpoint.transport == "websockets":
+            client.ws_set_options(path=endpoint.path)
+        if endpoint.tls:
+            client.tls_set()
         client.username_pw_set(username=bridge_id, password=token)
 
         # LWT must be set before connect — broker drops it as offline on death.
@@ -226,10 +230,15 @@ class MqttTransport(metaclass=SingletonMeta):
 
         self._client = client
 
-        logger.info(f"Connecting to MQTT broker {host}:{port} as {bridge_id}")
+        logger.info(
+            f"Connecting to MQTT broker {endpoint.host}:{endpoint.port} "
+            f"({endpoint.transport}{', tls' if endpoint.tls else ''}) as {bridge_id}"
+        )
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, client.connect, host, port, self._keepalive)
+            await loop.run_in_executor(
+                None, client.connect, endpoint.host, endpoint.port, self._keepalive
+            )
         except Exception:
             self._client = None
             raise
