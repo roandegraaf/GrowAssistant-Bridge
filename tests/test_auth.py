@@ -240,6 +240,22 @@ class TestAuthManagerPairing:
         auth_manager._client.post.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_pair_tells_a_bad_code_from_an_unreachable_app(self, auth_manager):
+        """``pair`` reports why it failed, so the installer can say what to fix."""
+        from app.auth import PairResult
+
+        auth_manager._client = MagicMock()
+        auth_manager._client.post = AsyncMock(return_value=_response(404, {"error": "bad code"}))
+        assert await auth_manager.pair("BADCODE") is PairResult.INVALID_CODE
+
+        auth_manager._client.post = AsyncMock(return_value=_response(500, {"error": "boom"}))
+        assert await auth_manager.pair("ABC12") is PairResult.FAILED
+
+        auth_manager._client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+        assert await auth_manager.pair("ABC12") is PairResult.UNREACHABLE
+        assert auth_manager.is_authenticated() is False
+
+    @pytest.mark.asyncio
     async def test_pair_with_code_transport_error(self, auth_manager):
         """A transport error returns False."""
         auth_manager._client = MagicMock()

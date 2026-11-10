@@ -45,13 +45,28 @@ A bridge application to connect various sensors and controllers for cannabis gro
 
 ## Quick Start (Recommended)
 
-Install GrowAssistant Bridge with a single command:
+In the GrowAssistant app, add a bridge (onboarding, or Settings → Bridges). It
+shows one install line and a short pairing code. Run the line on your Pi:
+
+```bash
+curl -fsSL https://<your GrowAssistant app>/pi | bash
+```
+
+The installer asks only for the pairing code, installs everything with
+sensible defaults (systemd service, web interface on port 5000, no demo
+data), pairs the bridge and starts it. The app switches to "Bridge paired" on
+its own. The web interface login is generated and printed once at the end.
+
+### Full interactive setup
+
+To choose integrations, ports and the web login yourself, run the installer
+without an app:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/roandegraaf/GrowAssistant-Bridge/main/install.sh | bash
 ```
 
-This will automatically install system packages, clone the repository to `~/GrowAssistant-Bridge`, and launch the interactive setup.
+This will automatically install system packages, clone the repository to `~/GrowAssistant-Bridge`, and launch the interactive setup. Pair it afterwards by entering the app's code in the bridge's web interface, or with `venv/bin/python -m app.pair <CODE>`.
 
 The setup script will guide you through:
 - Installing Python dependencies

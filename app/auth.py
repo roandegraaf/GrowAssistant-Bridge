@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -32,6 +33,15 @@ BROKER_SCHEMES: dict[str, tuple[str, bool, int]] = {
     "ws": ("websockets", False, 80),
     "wss": ("websockets", True, 443),
 }
+
+
+class PairResult(Enum):
+    """Outcome of claiming a pairing code."""
+
+    PAIRED = "paired"
+    INVALID_CODE = "invalid_code"  # unknown or already-used code
+    UNREACHABLE = "unreachable"  # the app could not be reached at api.url
+    FAILED = "failed"  # any other error response
 
 
 @dataclass(frozen=True)
@@ -162,20 +172,24 @@ class AuthManager(metaclass=SingletonMeta):
     # ─── Pairing & token rotation ───────────────────────────────────
 
     async def pair_with_code(self, code: str, name: Optional[str] = None) -> bool:
+        """Claim an app-issued pairing code; True when paired. See ``pair``."""
+        return await self.pair(code, name) is PairResult.PAIRED
+
+    async def pair(self, code: str, name: Optional[str] = None) -> "PairResult":
         """Claim an app-issued pairing code over the HTTPS bootstrap.
 
         POSTs ``/api/bridge/pair`` with the code and this host's name. On
         success persists ``{bridgeId, tenantId, bridgeSecret, token,
-        brokerUrl}`` and returns True. Returns False on bad/used codes
-        (404/400) or transport errors.
+        brokerUrl}``. The result tells a bad/used code (404/400) apart from an
+        app that could not be reached, so the installer can say which.
         """
         if not self._client:
             logger.error("Authentication manager not started")
-            return False
+            return PairResult.FAILED
 
         if not code:
             logger.warning("pair_with_code called with empty code")
-            return False
+            return PairResult.INVALID_CODE
 
         hostname = name or self._hostname()
         url = f"{self._base_url}/api/bridge/pair"
@@ -184,7 +198,7 @@ class AuthManager(metaclass=SingletonMeta):
             response = await self._client.post(url, json={"code": code, "name": hostname})
         except httpx.HTTPError as e:
             logger.error(f"Error pairing with code: {e}")
-            return False
+            return PairResult.UNREACHABLE
 
         if response.status_code != 200:
             try:
@@ -192,7 +206,9 @@ class AuthManager(metaclass=SingletonMeta):
             except ValueError:
                 err = response.text
             logger.warning(f"Pairing failed ({response.status_code}): {err}")
-            return False
+            if response.status_code in (400, 404):
+                return PairResult.INVALID_CODE
+            return PairResult.FAILED
 
         data = response.json()
         self._credentials = {
@@ -205,7 +221,7 @@ class AuthManager(metaclass=SingletonMeta):
         self._token_expires_in = self._parse_expires_in(data)
         self._save_credentials()
         logger.info(f"Paired successfully as bridge {self._credentials.get('bridgeId')}")
-        return True
+        return PairResult.PAIRED
 
     async def refresh_token(self) -> bool:
         """Rotate the JWT, coalescing concurrent callers.

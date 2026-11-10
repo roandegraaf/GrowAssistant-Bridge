@@ -3,7 +3,16 @@
 # GrowAssistant Bridge - One-Line Installer
 #
 # Usage:
+#   curl -fsSL https://<your GrowAssistant app>/pi | bash
+#       The app's "pair a bridge" screen shows this line. It sets GA_SERVER to
+#       that app, so setup only asks for the pairing code shown next to it and
+#       installs without further questions.
+#
 #   curl -fsSL https://raw.githubusercontent.com/roandegraaf/GrowAssistant-Bridge/main/install.sh | bash
+#       Plain install with the full interactive setup (GA_SERVER unset).
+#
+# When piped into bash, stdin is the script itself, so every prompt below reads
+# from the terminal (/dev/tty) instead.
 #
 
 set -e
@@ -109,7 +118,7 @@ else
     print_warning "Could not detect package manager. Please ensure these are installed:"
     print_info "  python3, python3-pip, python3-venv, git, nodejs, npm"
     echo ""
-    read -p "Continue anyway? [y/N]: " CONTINUE
+    read -p "Continue anyway? [y/N]: " CONTINUE </dev/tty
     case $CONTINUE in
         [Yy]*) ;;
         *) echo "Aborted."; exit 1 ;;
@@ -137,10 +146,18 @@ else
     print_success "Repository cloned to $INSTALL_DIR"
 fi
 
-# Run setup script
+# Run setup script (GA_SERVER, when set, is inherited and switches it to the
+# pair-and-go mode)
 echo ""
-print_info "Launching interactive setup..."
+if [ -n "${GA_SERVER:-}" ]; then
+    print_info "Setting up and pairing with ${GA_SERVER}..."
+else
+    print_info "Launching interactive setup..."
+fi
 echo ""
 cd "$INSTALL_DIR"
 chmod +x setup.sh
-exec ./setup.sh
+if [ -t 0 ] || [ ! -r /dev/tty ]; then
+    exec ./setup.sh
+fi
+exec ./setup.sh </dev/tty

@@ -21,6 +21,15 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 DEFAULT_PORT=5000
 DEFAULT_USERNAME="admin"
 
+# Pair-and-go mode. The app's `curl -fsSL <app>/pi | bash` line sets GA_SERVER
+# (see install.sh): setup then only asks for the pairing code shown in the app,
+# picks sensible defaults for everything else and pairs during the install.
+GA_SERVER="${GA_SERVER:-}"
+QUICK_MODE="no"
+[ -n "$GA_SERVER" ] && QUICK_MODE="yes"
+PAIRED="no"
+NEW_CONFIG="yes"
+
 # ============================================================================
 # Colors and Formatting
 # ============================================================================
@@ -322,6 +331,141 @@ What would you like to do?" 14 60 3 \
 }
 
 # ============================================================================
+# Pair-and-go Functions (QUICK_MODE)
+# ============================================================================
+
+valid_server_url() {
+    [[ "$GA_SERVER" =~ ^https?://[A-Za-z0-9.:_~%/-]+$ ]]
+}
+
+read_pairing_code() {
+    while true; do
+        read -r -p "  Pairing code: " PAIR_CODE
+        PAIR_CODE=$(echo "$PAIR_CODE" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')
+        [ -n "$PAIR_CODE" ] && return
+        print_error "Enter the code the app shows next to the install line."
+    done
+}
+
+ask_pairing_code() {
+    print_step "1/2" "Pairing code"
+    echo ""
+    echo "  The GrowAssistant app shows a short code under the install line."
+    read_pairing_code
+    echo ""
+    print_success "Got it. Installing, this takes a few minutes..."
+    echo ""
+}
+
+pair_bridge() {
+    print_step "2/2" "Pairing with $GA_SERVER"
+
+    local attempt output status
+    for attempt in 1 2 3; do
+        status=0
+        output=$("$VENV_DIR/bin/python" -m app.pair "$PAIR_CODE") || status=$?
+        if [ "$status" -eq 0 ]; then
+            print_success "$output"
+            PAIRED="yes"
+            echo ""
+            return
+        fi
+        print_error "$output"
+        [ "$attempt" -eq 3 ] && break
+        if [ "$status" -eq 1 ]; then
+            read_pairing_code
+        else
+            read -r -p "  Press Enter to try again... " _
+        fi
+    done
+
+    print_warning "Not paired yet. The bridge still starts; enter a code from the app"
+    print_warning "in its web interface (address below) to pair it later."
+    echo ""
+}
+
+set_api_url() {
+    python3 - "$CONFIG_FILE" "$GA_SERVER" << 'EOF'
+import sys
+
+import yaml
+
+path, url = sys.argv[1:]
+with open(path) as f:
+    config = yaml.safe_load(f) or {}
+config.setdefault("api", {})["url"] = url
+with open(path, "w") as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+EOF
+}
+
+show_quick_banner() {
+    get_network_info
+
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
+    if [ "$PAIRED" = "yes" ]; then
+        echo -e "${GREEN}  ✓ GrowAssistant Bridge is installed and paired${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ GrowAssistant Bridge is installed, but not paired yet${NC}"
+    fi
+    echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    if [ "$PAIRED" = "yes" ]; then
+        echo -e "  Head back to the app: it shows this bridge now."
+        echo ""
+    fi
+    echo -e "  ${BOLD}Bridge web interface${NC} (status, logs, devices):"
+    echo -e "    ${CYAN}• http://${HOSTNAME}.local:${WEB_PORT}${NC}"
+    echo -e "    ${CYAN}• http://${IP_ADDRESS}:${WEB_PORT}${NC}"
+    if [ "$NEW_CONFIG" = "yes" ]; then
+        echo -e "    Username: ${YELLOW}${WEB_USERNAME}${NC}"
+        echo -e "    Password: ${YELLOW}${WEB_PASSWORD}${NC}  (shown once, note it down)"
+    else
+        echo -e "    Login: unchanged (existing config.yaml kept)"
+    fi
+    echo ""
+    echo -e "  ${BOLD}Logs:${NC} ${CYAN}journalctl -u $SERVICE_NAME -f${NC}"
+    echo ""
+}
+
+main_quick() {
+    if ! valid_server_url; then
+        print_error "GA_SERVER is not a plain http(s) URL: $GA_SERVER"
+        exit 1
+    fi
+
+    print_header
+    echo "  Installing GrowAssistant Bridge and pairing it with:"
+    echo -e "    ${CYAN}${GA_SERVER}${NC}"
+    echo ""
+
+    ask_pairing_code
+    check_prerequisites
+
+    # Defaults for everything the interactive setup would ask. Devices are
+    # added afterwards; the demo "sample" integration stays off so no fake
+    # sensors show up in a real account.
+    INTEGRATIONS=""
+    WEB_USERNAME="$DEFAULT_USERNAME"
+    WEB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(9))")
+    WEB_PORT="$DEFAULT_PORT"
+    WEB_EXTERNAL="yes"
+    INSTALL_SERVICE="yes"
+
+    setup_virtual_environment
+    install_dependencies
+    build_frontend
+    generate_config
+    pair_bridge
+    setup_mdns
+    configure_firewall
+    install_systemd_service
+    start_application
+    show_quick_banner
+}
+
+# ============================================================================
 # Installation Functions
 # ============================================================================
 
@@ -463,6 +607,16 @@ generate_secret_key() {
 generate_config() {
     print_step "Generating" "Configuration"
 
+    # Re-running the pair-and-go line on an installed bridge keeps its config
+    # and only points it at the app the line came from.
+    if [ "$QUICK_MODE" = "yes" ] && [ -f "$CONFIG_FILE" ]; then
+        set_api_url
+        NEW_CONFIG="no"
+        print_info "Keeping existing configuration (app: $GA_SERVER)"
+        echo ""
+        return
+    fi
+
     # Handle existing config
     if [ -f "$CONFIG_FILE" ]; then
         show_config_exists_prompt
@@ -503,6 +657,10 @@ import yaml
 
 with open('$CONFIG_FILE', 'r') as f:
     config = yaml.safe_load(f)
+
+# App the bridge pairs with (pair-and-go mode)
+if '$GA_SERVER':
+    config['api']['url'] = '$GA_SERVER'
 
 # Web settings
 config['web']['username'] = '$WEB_USERNAME'
@@ -687,7 +845,8 @@ get_network_info() {
 start_application() {
     if [ "$INSTALL_SERVICE" = "yes" ]; then
         print_step "Starting" "GrowAssistant Bridge (via systemd)"
-        sudo systemctl start "$SERVICE_NAME"
+        # restart, not start: a re-run must pick up new config and credentials
+        sudo systemctl restart "$SERVICE_NAME"
         sleep 3
 
         if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -792,6 +951,11 @@ show_manual_start_instructions() {
 
 main() {
     cd "$SCRIPT_DIR"
+
+    if [ "$QUICK_MODE" = "yes" ]; then
+        main_quick
+        return
+    fi
 
     # Show welcome message
     show_welcome

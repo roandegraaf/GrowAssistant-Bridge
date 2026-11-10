@@ -84,8 +84,10 @@ Everything else (`manifestVersion`, automations `version`, command `id`,
 ## 2. Identity & pairing (HTTPS bootstrap)
 
 MQTT credentials are bootstrapped over HTTPS — the only non-MQTT channel. The
-pairing direction is app-issued: the app shows the operator a pairing code, the
-operator enters it into the bridge's web UI, and the bridge claims it.
+pairing direction is app-issued: the app shows the operator a pairing code and
+the bridge claims it. The operator types the code either into the installer
+(`curl -fsSL <app>/pi | bash` → `python -m app.pair <CODE>`) or into the
+bridge's web UI.
 
 All three endpoints are POSTs to `api.url` (the app base URL).
 
