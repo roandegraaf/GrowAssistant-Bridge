@@ -384,6 +384,11 @@ pair_bridge() {
     echo ""
 }
 
+config_is_repo_copy() {
+    git -C "$SCRIPT_DIR" ls-files --error-unmatch config.yaml >/dev/null 2>&1 &&
+        git -C "$SCRIPT_DIR" diff --quiet HEAD -- config.yaml
+}
+
 set_api_url() {
     python3 - "$CONFIG_FILE" "$GA_SERVER" << 'EOF'
 import sys
@@ -608,8 +613,10 @@ generate_config() {
     print_step "Generating" "Configuration"
 
     # Re-running the pair-and-go line on an installed bridge keeps its config
-    # and only points it at the app the line came from.
-    if [ "$QUICK_MODE" = "yes" ] && [ -f "$CONFIG_FILE" ]; then
+    # and only points it at the app the line came from. A config.yaml that is
+    # still the untouched copy from the repo is not a real install's config:
+    # it gets generated like on a clean checkout.
+    if [ "$QUICK_MODE" = "yes" ] && [ -f "$CONFIG_FILE" ] && ! config_is_repo_copy; then
         set_api_url
         NEW_CONFIG="no"
         print_info "Keeping existing configuration (app: $GA_SERVER)"
@@ -617,8 +624,8 @@ generate_config() {
         return
     fi
 
-    # Handle existing config
-    if [ -f "$CONFIG_FILE" ]; then
+    # Handle existing config (pair-and-go mode never asks)
+    if [ -f "$CONFIG_FILE" ] && [ "$QUICK_MODE" != "yes" ]; then
         show_config_exists_prompt
         case $CHOICE in
             "keep")
