@@ -402,3 +402,33 @@ def test_is_not_authorized_detection():
     ok_rc.__int__ = lambda self: 0
     ok_rc.getName = lambda: "Success"
     assert MqttTransport._is_not_authorized(ok_rc) is False
+
+
+def test_state_heartbeat_republishes_retained_state(transport, monkeypatch):
+    """A device-less bridge sends no telemetry, so the state is re-published to
+    keep it inside the app's 90 s online window."""
+    import app.mqtt_transport as mod
+
+    monkeypatch.setattr(mod.config_store, "get_manifest_hash", lambda: "h1")
+    monkeypatch.setattr(mod.config_store, "get_manifest_version", lambda: 3)
+    clock = [1000.0]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: clock[0])
+
+    transport._state_heartbeat()
+    topic, payload = transport._client.publish.call_args.args[:2]
+    assert topic == "ga/tenantX/bridge/bridgeY/state"
+    assert json.loads(payload) == {"online": True, "manifestHash": "h1", "manifestVersion": 3}
+    assert transport._client.publish.call_args.kwargs == {"qos": 1, "retain": True}
+
+    clock[0] += mod.STATE_HEARTBEAT_INTERVAL - 1
+    transport._state_heartbeat()
+    assert transport._client.publish.call_count == 1
+
+    clock[0] += 1
+    transport._state_heartbeat()
+    assert transport._client.publish.call_count == 2
+
+    transport._connected = False
+    clock[0] += mod.STATE_HEARTBEAT_INTERVAL
+    transport._state_heartbeat()
+    assert transport._client.publish.call_count == 2

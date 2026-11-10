@@ -18,6 +18,7 @@ SQLite-backed ``config_store`` directly from paho's thread.
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -35,6 +36,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MQTT_KEEPALIVE = 60
 # Interval (s) for the maintainer task that connects once creds appear.
 MAINTAINER_INTERVAL = 5.0
+# How often (s) the retained ``…/state`` is re-published while connected. The
+# app counts a bridge online only while it heard from it in the last 90 s
+# (``ONLINE_WINDOW_MS``); telemetry normally keeps that fresh, but a bridge with
+# no devices yet sends none, so without this heartbeat it showed "offline"
+# right after pairing.
+STATE_HEARTBEAT_INTERVAL = 30.0
 
 
 class MqttTransport(metaclass=SingletonMeta):
@@ -60,6 +67,7 @@ class MqttTransport(metaclass=SingletonMeta):
         self._automations_callback: Optional[Callable] = None
         self._webrtc_callback: Optional[Callable] = None
         self._keepalive = config.get("api.mqtt_keepalive", DEFAULT_MQTT_KEEPALIVE)
+        self._last_state_publish: float = 0.0
 
         # Telemetry observability (consumed by the bridge web dashboard):
         # last published sample per entity + running counters for the samples
@@ -183,6 +191,7 @@ class MqttTransport(metaclass=SingletonMeta):
                         await self._connect()
                     except Exception as e:
                         logger.error(f"MQTT connect attempt failed: {e}")
+                self._state_heartbeat()
                 await asyncio.sleep(MAINTAINER_INTERVAL)
         except asyncio.CancelledError:
             logger.info("MQTT maintainer task cancelled")
@@ -434,8 +443,27 @@ class MqttTransport(metaclass=SingletonMeta):
                 logger.exception(f"Error publishing manifest: {e}")
                 return False, f"Publish error: {e}"
 
+    def _state_heartbeat(self) -> None:
+        """Re-publish the retained state every ``STATE_HEARTBEAT_INTERVAL`` s."""
+        if not self._connected or not self._client:
+            return
+        if time.monotonic() - self._last_state_publish < STATE_HEARTBEAT_INTERVAL:
+            return
+        state_topic = self._topic("state")
+        if not state_topic:
+            return
+        try:
+            self._publish_state(
+                state_topic,
+                config_store.get_manifest_hash() or "",
+                config_store.get_manifest_version(),
+            )
+        except Exception:
+            logger.debug("State heartbeat publish failed", exc_info=True)
+
     def _publish_state(self, state_topic: str, manifest_hash: str, manifest_version: int) -> None:
         """Publish the retained liveness/state message."""
+        self._last_state_publish = time.monotonic()
         self._client.publish(
             state_topic,
             json.dumps(
